@@ -2,7 +2,7 @@ import axios from "axios";
 
 import { audioMimeType, normalizeAudioFormatValue, normalizeAudioSpeedValue, normalizeAudioVoiceValue } from "@/lib/audio-generation";
 import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
-import { buildApiUrl, type AiConfig } from "@/stores/use-config-store";
+import { buildApiUrl, isNewApiConfig, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
 function aiApiUrl(config: AiConfig, path: string) {
@@ -11,15 +11,28 @@ function aiApiUrl(config: AiConfig, path: string) {
 
 function aiHeaders(config: AiConfig) {
     const token = useUserStore.getState().token;
-    return config.channelMode === "remote"
-        ? {
-              ...(token ? { Authorization: `Bearer ${token}` } : {}),
-              "Content-Type": "application/json",
-          }
-        : {
-              Authorization: `Bearer ${config.apiKey}`,
-              "Content-Type": "application/json",
-          };
+    if (config.channelMode === "remote") {
+        return {
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            "Content-Type": "application/json",
+        };
+    }
+    if (isNewApiConfig(config)) {
+        return {
+            "Content-Type": "application/json",
+        };
+    }
+    return {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+    };
+}
+
+function aiRequestConfig(config: AiConfig) {
+    return {
+        headers: aiHeaders(config),
+        ...(isNewApiConfig(config) ? { params: { group: config.newApiGroup.trim() }, withCredentials: true } : {}),
+    };
 }
 
 function refreshRemoteUser(config: AiConfig) {
@@ -43,7 +56,7 @@ export async function requestAudioGeneration(config: AiConfig, prompt: string): 
                 speed: Number(normalizeAudioSpeedValue(config.audioSpeed)),
                 ...(instructions ? { instructions } : {}),
             },
-            { headers: aiHeaders(config), responseType: "blob" },
+            { ...aiRequestConfig(config), responseType: "blob" },
         );
         await assertAudioBlob(response.data);
         refreshRemoteUser(config);
@@ -60,6 +73,8 @@ export async function storeGeneratedAudio(blob: Blob, format = "mp3"): Promise<U
 
 function assertAudioConfig(config: AiConfig, model: string) {
     if (!model) throw new Error("请先配置音频模型");
+    if (isNewApiConfig(config) && !config.baseUrl.trim()) throw new Error("请先配置 New API Base URL");
+    if (isNewApiConfig(config) && !config.newApiGroup.trim()) throw new Error("请先选择 New API 分组");
     if (config.channelMode === "local" && !config.baseUrl.trim()) throw new Error("请先配置 Base URL");
     if (config.channelMode === "local" && !config.apiKey.trim()) throw new Error("请先配置 API Key");
 }
@@ -85,7 +100,7 @@ function readAxiosError(error: unknown, fallback: string) {
 }
 
 function statusMessage(status: number | undefined, fallback: string) {
-    if (status === 401 || status === 403) return "鉴权失败，请检查 API Key、套餐权限或模型权限";
+    if (status === 401 || status === 403) return "鉴权失败，请检查登录状态、分组、API Key 或模型权限";
     if (status === 429) return "请求被限流或额度不足，请稍后重试";
     return status ? `${fallback}（${status}）` : fallback;
 }

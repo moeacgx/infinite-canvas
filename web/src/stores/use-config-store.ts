@@ -8,9 +8,10 @@ import { apiGet } from "@/services/api/request";
 import type { AdminPublicSettings } from "@/services/api/admin";
 
 export type AiConfig = {
-    channelMode: "remote" | "local";
+    channelMode: "remote" | "local" | "newapi";
     baseUrl: string;
     apiKey: string;
+    newApiGroup: string;
     model: string;
     imageModel: string;
     videoModel: string;
@@ -43,6 +44,7 @@ export const defaultConfig: AiConfig = {
     channelMode: "local",
     baseUrl: "https://api.openai.com",
     apiKey: "",
+    newApiGroup: "",
     model: "gpt-image-2",
     imageModel: "gpt-image-2",
     videoModel: "grok-imagine-video",
@@ -83,8 +85,8 @@ type ConfigStore = {
 };
 
 function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSettings["modelChannel"] | null) {
-    const channelMode = modelChannel?.allowCustomChannel ? config.channelMode : "remote";
-    if (channelMode === "local" || !modelChannel) return { ...config, channelMode };
+    const channelMode = config.channelMode === "newapi" ? "newapi" : modelChannel?.allowCustomChannel ? config.channelMode : "remote";
+    if (channelMode === "local" || channelMode === "newapi" || !modelChannel) return { ...config, channelMode };
     const models = modelChannel.availableModels;
     const textModels = filterModelsByCapability(models, "text");
     const imageModels = filterModelsByCapability(models, "image");
@@ -127,7 +129,20 @@ function isVideoModelName(model: string) {
 
 function isImageModelName(model: string) {
     const value = model.toLowerCase();
-    return !isVideoModelName(model) && !isAudioModelName(model) && (value.includes("seedream") || value.includes("gpt-image") || value.includes("image") || value.includes("dall-e") || value.includes("dalle") || value.includes("imagen") || value.includes("flux") || value.includes("sdxl") || value.includes("stable-diffusion") || value.includes("midjourney"));
+    return (
+        !isVideoModelName(model) &&
+        !isAudioModelName(model) &&
+        (value.includes("seedream") ||
+            value.includes("gpt-image") ||
+            value.includes("image") ||
+            value.includes("dall-e") ||
+            value.includes("dalle") ||
+            value.includes("imagen") ||
+            value.includes("flux") ||
+            value.includes("sdxl") ||
+            value.includes("stable-diffusion") ||
+            value.includes("midjourney"))
+    );
 }
 
 function isAudioModelName(model: string) {
@@ -161,7 +176,14 @@ function modelListKey(capability: ModelCapability) {
 }
 
 function isAiConfigReady(config: AiConfig, model: string) {
-    return Boolean(model.trim()) && (config.channelMode === "remote" || Boolean(config.baseUrl.trim() && config.apiKey.trim()));
+    if (!model.trim()) return false;
+    if (config.channelMode === "remote") return true;
+    if (config.channelMode === "newapi") return Boolean(config.baseUrl.trim() && config.newApiGroup.trim());
+    return Boolean(config.baseUrl.trim() && config.apiKey.trim());
+}
+
+export function isNewApiConfig(config: AiConfig) {
+    return config.channelMode === "newapi";
 }
 
 export const useConfigStore = create<ConfigStore>()(
@@ -204,6 +226,7 @@ export const useConfigStore = create<ConfigStore>()(
                     config: {
                         ...config,
                         channelMode: config.channelMode || "remote",
+                        newApiGroup: config.newApiGroup || "",
                         imageModel: config.imageModel || config.model,
                         videoModel: config.videoModel || "grok-imagine-video",
                         textModel: config.textModel || config.model,

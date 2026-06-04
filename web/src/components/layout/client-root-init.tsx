@@ -30,16 +30,28 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     useEffect(() => {
         if (handledConfigParams.current) return;
         const searchParams = new URLSearchParams(window.location.search);
+        const mode = (searchParams.get("mode") || "").trim().toLowerCase();
         const baseUrl = searchParams.get("baseUrl") || searchParams.get("baseurl");
         const apiKey = searchParams.get("apiKey") || searchParams.get("apikey");
-        if (!baseUrl && !apiKey) return;
-        if (!publicSettings) return;
+        const newApiGroup = searchParams.get("group") || "";
+        if (mode !== "newapi" && !baseUrl && !apiKey) return;
+        if (mode === "newapi" && (!baseUrl || !newApiGroup)) return;
+        if (mode !== "newapi" && !publicSettings) return;
         handledConfigParams.current = true;
+        searchParams.delete("mode");
+        searchParams.delete("group");
         searchParams.delete("baseUrl");
         searchParams.delete("baseurl");
         searchParams.delete("apiKey");
         searchParams.delete("apikey");
         window.history.replaceState(null, "", `${window.location.pathname}${searchParams.size ? `?${searchParams}` : ""}${window.location.hash}`);
+        if (mode === "newapi") {
+            updateConfig("channelMode", "newapi");
+            updateConfig("baseUrl", baseUrl || "");
+            updateConfig("newApiGroup", newApiGroup);
+            return;
+        }
+        if (!publicSettings) return;
         if (!publicSettings.modelChannel.allowCustomChannel) {
             openConfigDialog(false);
             message.error("后台未允许用户自定义渠道，请联系管理员进行配置");

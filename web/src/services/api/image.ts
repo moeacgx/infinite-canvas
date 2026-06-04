@@ -1,6 +1,6 @@
 import axios from "axios";
 
-import { buildApiUrl, type AiConfig } from "@/stores/use-config-store";
+import { buildApiUrl, isNewApiConfig, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
@@ -144,7 +144,7 @@ function readAxiosError(error: unknown, fallback: string) {
 }
 
 function readStatusError(status: number | undefined, fallback: string) {
-    if (status === 401 || status === 403) return "鉴权失败，请检查 API Key、套餐权限或模型权限";
+    if (status === 401 || status === 403) return "鉴权失败，请检查登录状态、分组、API Key 或模型权限";
     if (status === 429) return "请求被限流或额度不足，请稍后重试";
     return status ? `${fallback}：${status}` : fallback;
 }
@@ -174,15 +174,31 @@ function aiApiUrl(config: AiConfig, path: string) {
 
 function aiHeaders(config: AiConfig, contentType?: string) {
     const token = useUserStore.getState().token;
-    return config.channelMode === "remote"
-        ? {
-              ...(token ? { Authorization: `Bearer ${token}` } : {}),
-              ...(contentType ? { "Content-Type": contentType } : {}),
-          }
-        : {
-              Authorization: `Bearer ${config.apiKey}`,
-              ...(contentType ? { "Content-Type": contentType } : {}),
-          };
+    if (config.channelMode === "remote") {
+        return {
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            ...(contentType ? { "Content-Type": contentType } : {}),
+        };
+    }
+    if (isNewApiConfig(config)) {
+        return {
+            ...(contentType ? { "Content-Type": contentType } : {}),
+        };
+    }
+    return {
+        Authorization: `Bearer ${config.apiKey}`,
+        ...(contentType ? { "Content-Type": contentType } : {}),
+    };
+}
+
+function aiRequestConfig(config: AiConfig, contentType?: string, params?: Record<string, string>) {
+    const nextParams = { ...(params || {}) };
+    if (isNewApiConfig(config)) nextParams.group = config.newApiGroup.trim();
+    return {
+        headers: aiHeaders(config, contentType),
+        ...(Object.keys(nextParams).length ? { params: nextParams } : {}),
+        ...(isNewApiConfig(config) ? { withCredentials: true } : {}),
+    };
 }
 
 function refreshRemoteUser(config: AiConfig) {
@@ -211,7 +227,7 @@ export async function requestGeneration(config: AiConfig, prompt: string) {
                 output_format: IMAGE_OUTPUT_FORMAT,
             },
             {
-                headers: aiHeaders(config, "application/json"),
+                ...aiRequestConfig(config, "application/json"),
             },
         );
         const images = parseImagePayload(response.data);
@@ -244,7 +260,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     if (mask) formData.set("mask", dataUrlToFile(mask));
 
     try {
-        const response = await axios.post<ImageApiResponse>(aiApiUrl(config, "/images/edits"), formData, { headers: aiHeaders(config) });
+        const response = await axios.post<ImageApiResponse>(aiApiUrl(config, "/images/edits"), formData, aiRequestConfig(config));
         const images = parseImagePayload(response.data);
         refreshRemoteUser(config);
         return images;
@@ -267,9 +283,7 @@ export async function requestImageQuestion(config: AiConfig, messages: ChatCompl
                 stream: true,
             },
             {
-                headers: {
-                    ...aiHeaders(config, "application/json"),
-                } as Record<string, string>,
+                ...aiRequestConfig(config, "application/json"),
                 responseType: "text",
                 onDownloadProgress: (event) => {
                     const responseText = String(event.event?.target?.responseText || "");
@@ -318,11 +332,7 @@ export async function requestImageQuestion(config: AiConfig, messages: ChatCompl
 export async function fetchImageModels(config: AiConfig) {
     if (config.channelMode === "remote") return config.models;
     try {
-        const response = await axios.get<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(buildApiUrl(config.baseUrl, "/models"), {
-            headers: {
-                Authorization: `Bearer ${config.apiKey}`,
-            },
-        });
+        const response = await axios.get<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(buildApiUrl(config.baseUrl, "/models"), aiRequestConfig(config));
         return (response.data.data || [])
             .map((model) => model.id)
             .filter((id): id is string => Boolean(id))

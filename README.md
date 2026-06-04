@@ -64,13 +64,13 @@ docker compose -f docker-compose.local.yml up -d --build
 
 ## New API 自动配置
 
-如果使用 New API，可在 `系统设置 -> 聊天方式 -> 添加聊天设置` 中填入：
+如果使用 New API，可通过登录态免 Key 方式打开画布：
 
 ```text
-https://infinite-canvas-cpco.onrender.com?apiKey={key}&baseUrl={address}
+https://infinite-canvas-cpco.onrender.com?mode=newapi&baseUrl={address}/canvas&group={group}
 ```
 
-跳转后会自动打开配置弹窗并填入 API Key 和 Base URL。
+跳转后会自动写入 New API Base URL 和分组，画布请求会携带当前 New API 登录态 Cookie，不再需要识别或传递 API Key。
 如果自己部署了，可以把 `https://infinite-canvas-cpco.onrender.com` 替换成你部署的地址。
 
 ## 效果展示

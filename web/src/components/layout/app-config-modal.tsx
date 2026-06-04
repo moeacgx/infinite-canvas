@@ -6,7 +6,7 @@ import { useState } from "react";
 import { ModelPicker } from "@/components/model-picker";
 import { fetchImageModels } from "@/services/api/image";
 import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from "@/lib/audio-generation";
-import { filterModelsByCapability, useConfigStore, useEffectiveConfig, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import { filterModelsByCapability, isNewApiConfig, useConfigStore, useEffectiveConfig, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 
 type ModelGroup = {
     capability: ModelCapability;
@@ -36,23 +36,24 @@ export function AppConfigModal() {
     const effectiveConfig = useEffectiveConfig();
     const modelChannel = publicSettings?.modelChannel;
     const allowCustomChannel = modelChannel?.allowCustomChannel === true;
-    const effectiveMode = allowCustomChannel ? config.channelMode : "remote";
+    const effectiveMode = isNewApiConfig(config) ? "newapi" : allowCustomChannel ? config.channelMode : "remote";
     const modelConfig = effectiveMode === "remote" ? effectiveConfig : config;
     const modelOptions = config.models.map((model) => ({ label: model, value: model }));
 
     const finishConfig = () => {
         setConfigDialogOpen(false);
         if (effectiveMode === "local" && (!config.baseUrl.trim() || !config.apiKey.trim())) return;
+        if (effectiveMode === "newapi" && (!config.baseUrl.trim() || !config.newApiGroup.trim())) return;
         if (!modelConfig.imageModel.trim() || !modelConfig.videoModel.trim() || !modelConfig.textModel.trim()) return;
-        if (!allowCustomChannel && config.channelMode !== "remote") updateConfig("channelMode", "remote");
+        if (!allowCustomChannel && config.channelMode === "local") updateConfig("channelMode", "remote");
         message.success(shouldPromptContinue ? "配置已保存，请继续刚才的请求" : "配置已保存");
         clearPromptContinue();
     };
 
     const refreshModels = async () => {
         if (effectiveMode === "remote") return;
-        if (!config.baseUrl.trim() || !config.apiKey.trim()) {
-            message.error("请先填写 Base URL 和 API Key");
+        if (!isModelFetchConfigReady(config)) {
+            message.error(isNewApiConfig(config) ? "请先填写 Base URL 和分组" : "请先填写 Base URL 和 API Key");
             return;
         }
         setLoadingModels(true);
@@ -119,20 +120,27 @@ export function AppConfigModal() {
                                 onChange={(value) => updateConfig("channelMode", value as AiConfig["channelMode"])}
                                 options={[
                                     { label: "本地直连", value: "local" },
+                                    { label: "New API 免 Key", value: "newapi" },
                                     { label: "云端渠道", value: "remote" },
                                 ]}
                             />
                         </Form.Item>
                     ) : null}
-                    {effectiveMode === "local" ? (
+                    {effectiveMode === "local" || effectiveMode === "newapi" ? (
                         <>
                             <div className="grid gap-4 md:grid-cols-2">
                                 <Form.Item label="Base URL" className="mb-4">
                                     <Input value={config.baseUrl} onChange={(event) => updateConfig("baseUrl", event.target.value)} />
                                 </Form.Item>
-                                <Form.Item label="API Key" className="mb-4">
-                                    <Input.Password value={config.apiKey} onChange={(event) => updateConfig("apiKey", event.target.value)} />
-                                </Form.Item>
+                                {effectiveMode === "newapi" ? (
+                                    <Form.Item label="New API 分组" className="mb-4">
+                                        <Input value={config.newApiGroup} onChange={(event) => updateConfig("newApiGroup", event.target.value)} />
+                                    </Form.Item>
+                                ) : (
+                                    <Form.Item label="API Key" className="mb-4">
+                                        <Input.Password value={config.apiKey} onChange={(event) => updateConfig("apiKey", event.target.value)} />
+                                    </Form.Item>
+                                )}
                             </div>
                             <div className="mb-5 flex items-center justify-between gap-3 rounded-lg border border-stone-200 px-3 py-2 dark:border-stone-800">
                                 <div className="min-w-0">
@@ -150,10 +158,10 @@ export function AppConfigModal() {
                             <div className="mt-1">由系统后台渠道转发请求，当前可用 {modelChannel?.availableModels.length || 0} 个模型。</div>
                         </div>
                     )}
-                    {effectiveMode === "local" ? (
+                    {effectiveMode === "local" || effectiveMode === "newapi" ? (
                         <section className="mb-5 rounded-lg border border-stone-200 p-3 dark:border-stone-800">
                             <div className="mb-3">
-                                <div className="text-sm font-semibold">本地模型可选项</div>
+                                <div className="text-sm font-semibold">模型可选项</div>
                                 <div className="mt-1 text-xs text-stone-500">从已拉取模型中选择哪些模型可进入各类下拉。</div>
                             </div>
                             <div className="grid gap-4 md:grid-cols-2">
@@ -226,6 +234,12 @@ export function AppConfigModal() {
 
 function normalizeImageCount(value: string) {
     return String(Math.max(1, Math.min(15, Math.floor(Math.abs(Number(value)) || 3))));
+}
+
+function isModelFetchConfigReady(config: AiConfig) {
+    if (!config.baseUrl.trim()) return false;
+    if (isNewApiConfig(config)) return Boolean(config.newApiGroup.trim());
+    return Boolean(config.apiKey.trim());
 }
 
 function resolveNextCapabilityModels(current: string[], suggested: string[], allModels: string[]) {
