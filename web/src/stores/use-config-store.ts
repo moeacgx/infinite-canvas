@@ -86,7 +86,8 @@ type ConfigStore = {
 
 function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSettings["modelChannel"] | null) {
     const channelMode = config.channelMode === "newapi" ? "newapi" : modelChannel?.allowCustomChannel ? config.channelMode : "remote";
-    if (channelMode === "local" || channelMode === "newapi" || !modelChannel) return { ...config, channelMode };
+    if (channelMode === "newapi") return applyFetchedModelsToConfig({ ...config, channelMode }, config.models);
+    if (channelMode === "local" || !modelChannel) return { ...config, channelMode };
     const models = modelChannel.availableModels;
     const textModels = filterModelsByCapability(models, "text");
     const imageModels = filterModelsByCapability(models, "image");
@@ -111,6 +112,28 @@ function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSetti
         textModel: textModels.includes(config.textModel) ? config.textModel : fallbackTextModel || fallbackModel,
         audioModel: audioModels.includes(config.audioModel) ? config.audioModel : fallbackAudioModel,
         systemPrompt: modelChannel.systemPrompt,
+    };
+}
+
+export function applyFetchedModelsToConfig(config: AiConfig, fetchedModels: string[]): AiConfig {
+    const models = normalizeModelList(fetchedModels);
+    const imageModels = resolveNextCapabilityModels(config.imageModels, filterModelsByCapability(models, "image"), models);
+    const videoModels = resolveNextCapabilityModels(config.videoModels, filterModelsByCapability(models, "video"), models);
+    const textModels = resolveNextCapabilityModels(config.textModels, filterModelsByCapability(models, "text"), models);
+    const audioModels = resolveNextCapabilityModels(config.audioModels, filterModelsByCapability(models, "audio"), models);
+
+    return {
+        ...config,
+        models,
+        imageModels,
+        videoModels,
+        textModels,
+        audioModels,
+        model: validDefault(config.model, textModels) || textModels[0] || models[0] || "",
+        imageModel: validDefault(config.imageModel, imageModels) || imageModels[0] || models[0] || "",
+        videoModel: validDefault(config.videoModel, videoModels) || videoModels[0] || models[0] || "",
+        textModel: validDefault(config.textModel, textModels) || textModels[0] || models[0] || "",
+        audioModel: validDefault(config.audioModel, audioModels) || audioModels[0] || models[0] || "",
     };
 }
 
@@ -253,6 +276,12 @@ export const useConfigStore = create<ConfigStore>()(
 
 function normalizeModelList(models: string[]) {
     return Array.from(new Set((models || []).map((model) => model.trim()).filter(Boolean)));
+}
+
+function resolveNextCapabilityModels(current: string[], suggested: string[], allModels: string[]) {
+    const available = new Set(allModels);
+    const kept = normalizeModelList(current).filter((model) => available.has(model));
+    return kept.length ? kept : suggested;
 }
 
 export function useEffectiveConfig() {

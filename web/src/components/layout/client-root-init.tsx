@@ -5,7 +5,8 @@ import { useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
 import { App } from "antd";
 
-import { useConfigStore } from "@/stores/use-config-store";
+import { fetchImageModels } from "@/services/api/image";
+import { applyFetchedModelsToConfig, type AiConfig, useConfigStore } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
 export function ClientRootInit({ children }: { children: ReactNode }) {
@@ -49,6 +50,7 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
             updateConfig("channelMode", "newapi");
             updateConfig("baseUrl", baseUrl || "");
             updateConfig("newApiGroup", newApiGroup);
+            void hydrateNewApiModels({ baseUrl: baseUrl || "", newApiGroup, updateConfig, message, openConfigDialog });
             return;
         }
         if (!publicSettings) return;
@@ -64,4 +66,31 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     }, [message, openConfigDialog, publicSettings, updateConfig]);
 
     return <>{children}</>;
+}
+
+async function hydrateNewApiModels({
+    baseUrl,
+    newApiGroup,
+    updateConfig,
+    message,
+    openConfigDialog,
+}: {
+    baseUrl: string;
+    newApiGroup: string;
+    updateConfig: <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
+    message: ReturnType<typeof App.useApp>["message"];
+    openConfigDialog: (shouldPromptContinue?: boolean) => void;
+}) {
+    const config = useConfigStore.getState().config;
+    const newApiConfig: AiConfig = { ...config, channelMode: "newapi", baseUrl, newApiGroup };
+    try {
+        const models = await fetchImageModels(newApiConfig);
+        const nextConfig = applyFetchedModelsToConfig(newApiConfig, models);
+        (Object.keys(nextConfig) as Array<keyof AiConfig>).forEach((key) => {
+            if (newApiConfig[key] !== nextConfig[key]) updateConfig(key, nextConfig[key]);
+        });
+    } catch (error) {
+        openConfigDialog(false);
+        message.error(error instanceof Error ? error.message : "读取模型失败");
+    }
 }

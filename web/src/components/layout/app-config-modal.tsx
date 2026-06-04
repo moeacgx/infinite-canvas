@@ -6,7 +6,7 @@ import { useState } from "react";
 import { ModelPicker } from "@/components/model-picker";
 import { fetchImageModels } from "@/services/api/image";
 import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from "@/lib/audio-generation";
-import { filterModelsByCapability, isNewApiConfig, useConfigStore, useEffectiveConfig, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import { applyFetchedModelsToConfig, isNewApiConfig, useConfigStore, useEffectiveConfig, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 
 type ModelGroup = {
     capability: ModelCapability;
@@ -15,6 +15,8 @@ type ModelGroup = {
     defaultLabel: string;
     optionsLabel: string;
 };
+
+type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
 
 const modelGroups: ModelGroup[] = [
     { capability: "image", modelKey: "imageModel", modelsKey: "imageModels", defaultLabel: "默认生图模型", optionsLabel: "生图模型可选项" },
@@ -59,23 +61,8 @@ export function AppConfigModal() {
         setLoadingModels(true);
         try {
             const models = await fetchImageModels(config);
-            const imageModels = filterModelsByCapability(models, "image");
-            const videoModels = filterModelsByCapability(models, "video");
-            const textModels = filterModelsByCapability(models, "text");
-            const audioModels = filterModelsByCapability(models, "audio");
-            const nextImageModels = resolveNextCapabilityModels(config.imageModels, imageModels, models);
-            const nextVideoModels = resolveNextCapabilityModels(config.videoModels, videoModels, models);
-            const nextTextModels = resolveNextCapabilityModels(config.textModels, textModels, models);
-            const nextAudioModels = resolveNextCapabilityModels(config.audioModels, audioModels, models);
-            updateConfig("models", models);
-            updateConfig("imageModels", nextImageModels);
-            updateConfig("videoModels", nextVideoModels);
-            updateConfig("textModels", nextTextModels);
-            updateConfig("audioModels", nextAudioModels);
-            if (nextImageModels.length && !nextImageModels.includes(config.imageModel)) updateConfig("imageModel", nextImageModels[0]);
-            if (nextVideoModels.length && !nextVideoModels.includes(config.videoModel)) updateConfig("videoModel", nextVideoModels[0]);
-            if (nextTextModels.length && !nextTextModels.includes(config.textModel)) updateConfig("textModel", nextTextModels[0]);
-            if (nextAudioModels.length && !nextAudioModels.includes(config.audioModel)) updateConfig("audioModel", nextAudioModels[0]);
+            const nextConfig = applyFetchedModelsToConfig(config, models);
+            applyConfigPatch(updateConfig, config, nextConfig);
             message.success("模型列表已更新");
         } catch (error) {
             message.error(error instanceof Error ? error.message : "读取模型失败");
@@ -236,16 +223,16 @@ function normalizeImageCount(value: string) {
     return String(Math.max(1, Math.min(15, Math.floor(Math.abs(Number(value)) || 3))));
 }
 
+function applyConfigPatch(updateConfig: UpdateAiConfig, current: AiConfig, next: AiConfig) {
+    (Object.keys(next) as Array<keyof AiConfig>).forEach((key) => {
+        if (current[key] !== next[key]) updateConfig(key, next[key]);
+    });
+}
+
 function isModelFetchConfigReady(config: AiConfig) {
     if (!config.baseUrl.trim()) return false;
     if (isNewApiConfig(config)) return Boolean(config.newApiGroup.trim());
     return Boolean(config.apiKey.trim());
-}
-
-function resolveNextCapabilityModels(current: string[], suggested: string[], allModels: string[]) {
-    const available = new Set(allModels);
-    const kept = uniqueModels(current).filter((model) => available.has(model));
-    return kept.length ? kept : suggested;
 }
 
 function uniqueModels(models: string[]) {
