@@ -12,6 +12,10 @@ export type AiConfig = {
     baseUrl: string;
     apiKey: string;
     newApiGroup: string;
+    newApiTextGroup: string;
+    newApiImageGroup: string;
+    newApiVideoGroup: string;
+    newApiAudioGroup: string;
     model: string;
     imageModel: string;
     videoModel: string;
@@ -39,12 +43,23 @@ export type AiConfig = {
 
 export const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
 export type ModelCapability = "image" | "video" | "text" | "audio";
+export type FetchedModelLists = {
+    models: string[];
+    imageModels?: string[];
+    videoModels?: string[];
+    textModels?: string[];
+    audioModels?: string[];
+};
 
 export const defaultConfig: AiConfig = {
     channelMode: "local",
     baseUrl: "https://api.openai.com",
     apiKey: "",
     newApiGroup: "",
+    newApiTextGroup: "",
+    newApiImageGroup: "",
+    newApiVideoGroup: "",
+    newApiAudioGroup: "",
     model: "gpt-image-2",
     imageModel: "gpt-image-2",
     videoModel: "grok-imagine-video",
@@ -86,7 +101,18 @@ type ConfigStore = {
 
 function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSettings["modelChannel"] | null) {
     const channelMode = config.channelMode === "newapi" ? "newapi" : modelChannel?.allowCustomChannel ? config.channelMode : "remote";
-    if (channelMode === "newapi") return applyFetchedModelsToConfig({ ...config, channelMode }, config.models);
+    if (channelMode === "newapi") {
+        return applyFetchedModelsToConfig(
+            { ...config, channelMode },
+            {
+                models: config.models,
+                imageModels: config.imageModels,
+                videoModels: config.videoModels,
+                textModels: config.textModels,
+                audioModels: config.audioModels,
+            },
+        );
+    }
     if (channelMode === "local" || !modelChannel) return { ...config, channelMode };
     const models = modelChannel.availableModels;
     const textModels = filterModelsByCapability(models, "text");
@@ -115,12 +141,17 @@ function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSetti
     };
 }
 
-export function applyFetchedModelsToConfig(config: AiConfig, fetchedModels: string[]): AiConfig {
-    const models = normalizeModelList(fetchedModels);
-    const imageModels = resolveNextCapabilityModels(config.imageModels, filterModelsByCapability(models, "image"), models);
-    const videoModels = resolveNextCapabilityModels(config.videoModels, filterModelsByCapability(models, "video"), models);
-    const textModels = resolveNextCapabilityModels(config.textModels, filterModelsByCapability(models, "text"), models);
-    const audioModels = resolveNextCapabilityModels(config.audioModels, filterModelsByCapability(models, "audio"), models);
+export function applyFetchedModelsToConfig(config: AiConfig, fetchedModels: string[] | FetchedModelLists): AiConfig {
+    const fetched = Array.isArray(fetchedModels) ? { models: fetchedModels } : fetchedModels;
+    const models = normalizeModelList(fetched.models);
+    const suggestedImageModels = normalizeCapabilityModelList(fetched.imageModels, models, "image");
+    const suggestedVideoModels = normalizeCapabilityModelList(fetched.videoModels, models, "video");
+    const suggestedTextModels = normalizeCapabilityModelList(fetched.textModels, models, "text");
+    const suggestedAudioModels = normalizeCapabilityModelList(fetched.audioModels, models, "audio");
+    const imageModels = resolveNextCapabilityModels(config.imageModels, suggestedImageModels, suggestedImageModels);
+    const videoModels = resolveNextCapabilityModels(config.videoModels, suggestedVideoModels, suggestedVideoModels);
+    const textModels = resolveNextCapabilityModels(config.textModels, suggestedTextModels, suggestedTextModels);
+    const audioModels = resolveNextCapabilityModels(config.audioModels, suggestedAudioModels, suggestedAudioModels);
 
     return {
         ...config,
@@ -129,11 +160,11 @@ export function applyFetchedModelsToConfig(config: AiConfig, fetchedModels: stri
         videoModels,
         textModels,
         audioModels,
-        model: validDefault(config.model, textModels) || textModels[0] || models[0] || "",
-        imageModel: validDefault(config.imageModel, imageModels) || imageModels[0] || models[0] || "",
-        videoModel: validDefault(config.videoModel, videoModels) || videoModels[0] || models[0] || "",
-        textModel: validDefault(config.textModel, textModels) || textModels[0] || models[0] || "",
-        audioModel: validDefault(config.audioModel, audioModels) || audioModels[0] || models[0] || "",
+        model: validDefault(config.model, textModels) || textModels[0] || "",
+        imageModel: validDefault(config.imageModel, imageModels) || imageModels[0] || "",
+        videoModel: validDefault(config.videoModel, videoModels) || videoModels[0] || "",
+        textModel: validDefault(config.textModel, textModels) || textModels[0] || "",
+        audioModel: validDefault(config.audioModel, audioModels) || audioModels[0] || "",
     };
 }
 
@@ -209,6 +240,14 @@ export function isNewApiConfig(config: AiConfig) {
     return config.channelMode === "newapi";
 }
 
+export function resolveNewApiGroup(config: AiConfig, capability?: ModelCapability) {
+    if (capability === "text") return config.newApiTextGroup.trim() || config.newApiGroup.trim();
+    if (capability === "image") return config.newApiImageGroup.trim() || config.newApiGroup.trim();
+    if (capability === "video") return config.newApiVideoGroup.trim() || config.newApiGroup.trim();
+    if (capability === "audio") return config.newApiAudioGroup.trim() || config.newApiGroup.trim();
+    return config.newApiGroup.trim();
+}
+
 export const useConfigStore = create<ConfigStore>()(
     persist(
         (set, get) => ({
@@ -250,6 +289,10 @@ export const useConfigStore = create<ConfigStore>()(
                         ...config,
                         channelMode: config.channelMode || "remote",
                         newApiGroup: config.newApiGroup || "",
+                        newApiTextGroup: config.newApiTextGroup || "",
+                        newApiImageGroup: config.newApiImageGroup || "",
+                        newApiVideoGroup: config.newApiVideoGroup || "",
+                        newApiAudioGroup: config.newApiAudioGroup || "",
                         imageModel: config.imageModel || config.model,
                         videoModel: config.videoModel || "grok-imagine-video",
                         textModel: config.textModel || config.model,
@@ -276,6 +319,10 @@ export const useConfigStore = create<ConfigStore>()(
 
 function normalizeModelList(models: string[]) {
     return Array.from(new Set((models || []).map((model) => model.trim()).filter(Boolean)));
+}
+
+function normalizeCapabilityModelList(models: string[] | undefined, allModels: string[], capability: ModelCapability) {
+    return Array.isArray(models) ? normalizeModelList(models) : filterModelsByCapability(allModels, capability);
 }
 
 function resolveNextCapabilityModels(current: string[], suggested: string[], allModels: string[]) {

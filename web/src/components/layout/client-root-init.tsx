@@ -35,12 +35,20 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
         const baseUrl = searchParams.get("baseUrl") || searchParams.get("baseurl");
         const apiKey = searchParams.get("apiKey") || searchParams.get("apikey");
         const newApiGroup = searchParams.get("group") || "";
+        const newApiTextGroup = searchParams.get("textGroup") || "";
+        const newApiImageGroup = searchParams.get("imageGroup") || "";
+        const newApiAudioGroup = searchParams.get("audioGroup") || "";
+        const newApiVideoGroup = searchParams.get("videoGroup") || "";
         if (mode !== "newapi" && !baseUrl && !apiKey) return;
         if (mode === "newapi" && (!baseUrl || !newApiGroup)) return;
         if (mode !== "newapi" && !publicSettings) return;
         handledConfigParams.current = true;
         searchParams.delete("mode");
         searchParams.delete("group");
+        searchParams.delete("textGroup");
+        searchParams.delete("imageGroup");
+        searchParams.delete("audioGroup");
+        searchParams.delete("videoGroup");
         searchParams.delete("baseUrl");
         searchParams.delete("baseurl");
         searchParams.delete("apiKey");
@@ -50,7 +58,21 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
             updateConfig("channelMode", "newapi");
             updateConfig("baseUrl", baseUrl || "");
             updateConfig("newApiGroup", newApiGroup);
-            void hydrateNewApiModels({ baseUrl: baseUrl || "", newApiGroup, updateConfig, message, openConfigDialog });
+            updateConfig("newApiTextGroup", newApiTextGroup);
+            updateConfig("newApiImageGroup", newApiImageGroup);
+            updateConfig("newApiAudioGroup", newApiAudioGroup);
+            updateConfig("newApiVideoGroup", newApiVideoGroup);
+            void hydrateNewApiModels({
+                baseUrl: baseUrl || "",
+                newApiGroup,
+                newApiTextGroup,
+                newApiImageGroup,
+                newApiAudioGroup,
+                newApiVideoGroup,
+                updateConfig,
+                message,
+                openConfigDialog,
+            });
             return;
         }
         if (!publicSettings) return;
@@ -71,18 +93,26 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
 async function hydrateNewApiModels({
     baseUrl,
     newApiGroup,
+    newApiTextGroup,
+    newApiImageGroup,
+    newApiAudioGroup,
+    newApiVideoGroup,
     updateConfig,
     message,
     openConfigDialog,
 }: {
     baseUrl: string;
     newApiGroup: string;
+    newApiTextGroup: string;
+    newApiImageGroup: string;
+    newApiAudioGroup: string;
+    newApiVideoGroup: string;
     updateConfig: <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
     message: ReturnType<typeof App.useApp>["message"];
     openConfigDialog: (shouldPromptContinue?: boolean) => void;
 }) {
     const config = useConfigStore.getState().config;
-    const newApiConfig: AiConfig = { ...config, channelMode: "newapi", baseUrl, newApiGroup };
+    const newApiConfig: AiConfig = { ...config, channelMode: "newapi", baseUrl, newApiGroup, newApiTextGroup, newApiImageGroup, newApiAudioGroup, newApiVideoGroup };
     try {
         const models = await fetchImageModels(newApiConfig);
         const nextConfig = applyFetchedModelsToConfig(newApiConfig, models);

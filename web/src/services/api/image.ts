@@ -1,6 +1,6 @@
 import axios from "axios";
 
-import { buildApiUrl, isNewApiConfig, type AiConfig } from "@/stores/use-config-store";
+import { buildApiUrl, isNewApiConfig, resolveNewApiGroup, type AiConfig, type FetchedModelLists, type ModelCapability } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
@@ -191,9 +191,9 @@ function aiHeaders(config: AiConfig, contentType?: string) {
     };
 }
 
-function aiRequestConfig(config: AiConfig, contentType?: string, params?: Record<string, string>) {
+function aiRequestConfig(config: AiConfig, contentType?: string, params?: Record<string, string>, capability?: ModelCapability) {
     const nextParams = { ...(params || {}) };
-    if (isNewApiConfig(config)) nextParams.group = config.newApiGroup.trim();
+    if (isNewApiConfig(config)) nextParams.group = resolveNewApiGroup(config, capability);
     return {
         headers: aiHeaders(config, contentType),
         ...(Object.keys(nextParams).length ? { params: nextParams } : {}),
@@ -228,7 +228,7 @@ export async function requestGeneration(config: AiConfig, prompt: string) {
                 output_format: IMAGE_OUTPUT_FORMAT,
             },
             {
-                ...aiRequestConfig(config, "application/json"),
+                ...aiRequestConfig(config, "application/json", undefined, "image"),
             },
         );
         const images = parseImagePayload(response.data);
@@ -262,7 +262,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     if (mask) formData.set("mask", dataUrlToFile(mask));
 
     try {
-        const response = await axios.post<ImageApiResponse>(aiApiUrl(config, "/images/edits"), formData, aiRequestConfig(config));
+        const response = await axios.post<ImageApiResponse>(aiApiUrl(config, "/images/edits"), formData, aiRequestConfig(config, undefined, undefined, "image"));
         const images = parseImagePayload(response.data);
         refreshRemoteUser(config);
         return images;
@@ -286,7 +286,7 @@ export async function requestImageQuestion(config: AiConfig, messages: ChatCompl
                 stream: true,
             },
             {
-                ...aiRequestConfig(config, "application/json"),
+                ...aiRequestConfig(config, "application/json", undefined, "text"),
                 responseType: "text",
                 onDownloadProgress: (event) => {
                     const responseText = String(event.event?.target?.responseText || "");
@@ -335,14 +335,38 @@ export async function requestImageQuestion(config: AiConfig, messages: ChatCompl
 export async function fetchImageModels(config: AiConfig) {
     if (config.channelMode === "remote") return config.models;
     try {
-        const response = await axios.get<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(buildApiUrl(config.baseUrl, "/models"), aiRequestConfig(config));
-        return (response.data.data || [])
-            .map((model) => model.id)
-            .filter((id): id is string => Boolean(id))
-            .sort((a, b) => a.localeCompare(b));
+        if (!isNewApiConfig(config)) return await fetchModelsForGroup(config);
+        const groupModels = await fetchNewApiGroupModels(config);
+        const defaultModels = groupModels.get(resolveNewApiGroup(config)) || [];
+        const textModels = groupModels.get(resolveNewApiGroup(config, "text")) || [];
+        const imageModels = groupModels.get(resolveNewApiGroup(config, "image")) || [];
+        const videoModels = groupModels.get(resolveNewApiGroup(config, "video")) || [];
+        const audioModels = groupModels.get(resolveNewApiGroup(config, "audio")) || [];
+        return {
+            models: uniqueSortedModels([...defaultModels, ...textModels, ...imageModels, ...videoModels, ...audioModels]),
+            textModels,
+            imageModels,
+            videoModels,
+            audioModels,
+        } satisfies FetchedModelLists;
     } catch (error) {
         throw new Error(readAxiosError(error, "读取模型失败"));
     }
+}
+
+async function fetchNewApiGroupModels(config: AiConfig) {
+    const groups = uniqueSortedModels([resolveNewApiGroup(config), resolveNewApiGroup(config, "text"), resolveNewApiGroup(config, "image"), resolveNewApiGroup(config, "video"), resolveNewApiGroup(config, "audio")]);
+    const entries = await Promise.all(groups.map(async (group) => [group, await fetchModelsForGroup({ ...config, newApiGroup: group })] as const));
+    return new Map(entries);
+}
+
+async function fetchModelsForGroup(config: AiConfig) {
+    const response = await axios.get<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(buildApiUrl(config.baseUrl, "/models"), aiRequestConfig(config));
+    return uniqueSortedModels((response.data.data || []).map((model) => model.id).filter((id): id is string => Boolean(id)));
+}
+
+function uniqueSortedModels(models: string[]) {
+    return Array.from(new Set(models.filter(Boolean))).sort((a, b) => a.localeCompare(b));
 }
 
 function assertImageModel(model: string) {

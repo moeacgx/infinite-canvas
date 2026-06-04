@@ -4,7 +4,7 @@ import { dataUrlToFile } from "@/lib/image-utils";
 import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
 import { boolConfig, buildSeedancePromptText, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceVideoReferenceError, SEEDANCE_REFERENCE_LIMITS } from "@/lib/seedance-video";
-import { buildApiUrl, isNewApiConfig, type AiConfig } from "@/stores/use-config-store";
+import { buildApiUrl, isNewApiConfig, resolveNewApiGroup, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
@@ -54,9 +54,9 @@ function aiHeaders(config: AiConfig, contentType?: string) {
     };
 }
 
-function aiRequestConfig(config: AiConfig, contentType?: string, params?: Record<string, string>) {
+function aiRequestConfig(config: AiConfig, contentType?: string, params?: Record<string, string>, capability?: ModelCapability) {
     const nextParams = { ...(params || {}) };
-    if (isNewApiConfig(config)) nextParams.group = config.newApiGroup.trim();
+    if (isNewApiConfig(config)) nextParams.group = resolveNewApiGroup(config, capability);
     return {
         headers: aiHeaders(config, contentType),
         ...(Object.keys(nextParams).length ? { params: nextParams } : {}),
@@ -97,7 +97,7 @@ async function requestOpenAIVideoGeneration(config: AiConfig, model: string, pro
     const files = await Promise.all(references.slice(0, 7).map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
     files.forEach((file) => body.append("input_reference[]", file));
     try {
-        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), body, aiRequestConfig(config))).data);
+        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), body, aiRequestConfig(config, undefined, undefined, "video"))).data);
         if (!created.id) throw new Error("视频接口没有返回任务 ID");
         return await waitForOpenAIVideoContent(config, model, created.id, "视频生成失败", "视频生成超时，请稍后重试");
     } catch (error) {
@@ -128,10 +128,12 @@ async function requestSeedanceGeneration(config: AiConfig, model: string, prompt
     }
 
     try {
-        const created = unwrapSeedanceTask((await axios.post<ApiEnvelope<SeedanceTask>>(seedanceApiUrl(config), payload, aiRequestConfig(config, "application/json"))).data);
+        const created = unwrapSeedanceTask((await axios.post<ApiEnvelope<SeedanceTask>>(seedanceApiUrl(config), payload, aiRequestConfig(config, "application/json", undefined, "video"))).data);
         if (!created.id) throw new Error("Seedance 接口没有返回任务 ID");
         for (let attempt = 0; attempt < 120; attempt += 1) {
-            const task = unwrapSeedanceTask((await axios.get<ApiEnvelope<SeedanceTask>>(seedanceApiUrl(config, created.id), aiRequestConfig(config, undefined, config.channelMode === "remote" || isNewApiConfig(config) ? { model } : undefined))).data);
+            const task = unwrapSeedanceTask(
+                (await axios.get<ApiEnvelope<SeedanceTask>>(seedanceApiUrl(config, created.id), aiRequestConfig(config, undefined, config.channelMode === "remote" || isNewApiConfig(config) ? { model } : undefined, "video"))).data,
+            );
             if (task.status === "succeeded") {
                 const url = task.content?.video_url;
                 if (!url) throw new Error("Seedance 任务成功但没有返回视频 URL");
@@ -165,7 +167,7 @@ async function requestNewApiSeedanceGeneration(config: AiConfig, model: string, 
     };
 
     try {
-        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), body, aiRequestConfig(config, "application/json"))).data);
+        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), body, aiRequestConfig(config, "application/json", undefined, "video"))).data);
         if (!created.id) throw new Error("Seedance 接口没有返回任务 ID");
         return await waitForOpenAIVideoContent(config, model, created.id, "Seedance 视频生成失败", "Seedance 视频生成超时，请稍后重试");
     } catch (error) {
@@ -176,13 +178,13 @@ async function requestNewApiSeedanceGeneration(config: AiConfig, model: string, 
 async function waitForOpenAIVideoContent(config: AiConfig, model: string, taskId: string, failedMessage: string, timeoutMessage: string) {
     const params = config.channelMode === "remote" || isNewApiConfig(config) ? { model } : undefined;
     for (let attempt = 0; attempt < 120; attempt += 1) {
-        const video = unwrapVideoResponse((await axios.get<ApiVideoResponse>(aiApiUrl(config, `/videos/${taskId}`), aiRequestConfig(config, undefined, params))).data);
+        const video = unwrapVideoResponse((await axios.get<ApiVideoResponse>(aiApiUrl(config, `/videos/${taskId}`), aiRequestConfig(config, undefined, params, "video"))).data);
         if (video.status === "completed") break;
         if (video.status === "failed" || video.status === "cancelled") throw new Error(video.error?.message || failedMessage);
         if (attempt === 119) throw new Error(timeoutMessage);
         await delay(2500);
     }
-    const content = await axios.get<Blob>(aiApiUrl(config, `/videos/${taskId}/content`), { ...aiRequestConfig(config, undefined, params), responseType: "blob" });
+    const content = await axios.get<Blob>(aiApiUrl(config, `/videos/${taskId}/content`), { ...aiRequestConfig(config, undefined, params, "video"), responseType: "blob" });
     await assertVideoBlob(content.data);
     refreshRemoteUser(config);
     return { blob: content.data };
@@ -287,7 +289,7 @@ async function videoResultFromUrl(url: string): Promise<VideoGenerationResult> {
 function assertVideoConfig(config: AiConfig, model: string) {
     if (!model) throw new Error("请先配置视频模型");
     if (isNewApiConfig(config) && !config.baseUrl.trim()) throw new Error("请先配置 New API Base URL");
-    if (isNewApiConfig(config) && !config.newApiGroup.trim()) throw new Error("请先选择 New API 分组");
+    if (isNewApiConfig(config) && !resolveNewApiGroup(config, "video")) throw new Error("请先选择 New API 分组");
     if (config.channelMode === "local" && !config.baseUrl.trim()) throw new Error("请先配置 Base URL");
     if (config.channelMode === "local" && !config.apiKey.trim()) throw new Error("请先配置 API Key");
 }

@@ -120,7 +120,7 @@ export function AppConfigModal() {
                                     <Input value={config.baseUrl} onChange={(event) => updateConfig("baseUrl", event.target.value)} />
                                 </Form.Item>
                                 {effectiveMode === "newapi" ? (
-                                    <Form.Item label="New API 分组" className="mb-4">
+                                    <Form.Item label="New API 默认分组" extra="未单独配置能力分组时使用。" className="mb-4">
                                         <Input value={config.newApiGroup} onChange={(event) => updateConfig("newApiGroup", event.target.value)} />
                                     </Form.Item>
                                 ) : (
@@ -129,6 +129,22 @@ export function AppConfigModal() {
                                     </Form.Item>
                                 )}
                             </div>
+                            {effectiveMode === "newapi" ? (
+                                <div className="grid gap-4 md:grid-cols-4">
+                                    <Form.Item label="文本分组" className="mb-4">
+                                        <Input placeholder="默认分组" value={config.newApiTextGroup} onChange={(event) => updateConfig("newApiTextGroup", event.target.value)} />
+                                    </Form.Item>
+                                    <Form.Item label="生图分组" className="mb-4">
+                                        <Input placeholder="默认分组" value={config.newApiImageGroup} onChange={(event) => updateConfig("newApiImageGroup", event.target.value)} />
+                                    </Form.Item>
+                                    <Form.Item label="音频分组" className="mb-4">
+                                        <Input placeholder="默认分组" value={config.newApiAudioGroup} onChange={(event) => updateConfig("newApiAudioGroup", event.target.value)} />
+                                    </Form.Item>
+                                    <Form.Item label="视频分组" className="mb-4">
+                                        <Input placeholder="默认分组" value={config.newApiVideoGroup} onChange={(event) => updateConfig("newApiVideoGroup", event.target.value)} />
+                                    </Form.Item>
+                                </div>
+                            ) : null}
                             <div className="mb-5 flex items-center justify-between gap-3 rounded-lg border border-stone-200 px-3 py-2 dark:border-stone-800">
                                 <div className="min-w-0">
                                     <div className="text-sm font-medium">模型列表</div>

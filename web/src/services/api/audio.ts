@@ -2,7 +2,7 @@ import axios from "axios";
 
 import { audioMimeType, normalizeAudioFormatValue, normalizeAudioSpeedValue, normalizeAudioVoiceValue } from "@/lib/audio-generation";
 import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
-import { buildApiUrl, isNewApiConfig, type AiConfig } from "@/stores/use-config-store";
+import { buildApiUrl, isNewApiConfig, resolveNewApiGroup, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
 function aiApiUrl(config: AiConfig, path: string) {
@@ -31,7 +31,7 @@ function aiHeaders(config: AiConfig) {
 function aiRequestConfig(config: AiConfig) {
     return {
         headers: aiHeaders(config),
-        ...(isNewApiConfig(config) ? { params: { group: config.newApiGroup.trim() }, withCredentials: true } : {}),
+        ...(isNewApiConfig(config) ? { params: { group: resolveNewApiGroup(config, "audio") }, withCredentials: true } : {}),
     };
 }
 
@@ -74,7 +74,7 @@ export async function storeGeneratedAudio(blob: Blob, format = "mp3"): Promise<U
 function assertAudioConfig(config: AiConfig, model: string) {
     if (!model) throw new Error("请先配置音频模型");
     if (isNewApiConfig(config) && !config.baseUrl.trim()) throw new Error("请先配置 New API Base URL");
-    if (isNewApiConfig(config) && !config.newApiGroup.trim()) throw new Error("请先选择 New API 分组");
+    if (isNewApiConfig(config) && !resolveNewApiGroup(config, "audio")) throw new Error("请先选择 New API 分组");
     if (config.channelMode === "local" && !config.baseUrl.trim()) throw new Error("请先配置 Base URL");
     if (config.channelMode === "local" && !config.apiKey.trim()) throw new Error("请先配置 API Key");
 }
