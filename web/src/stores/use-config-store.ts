@@ -242,8 +242,21 @@ export function selectableModelsByCapability(config: AiConfig, capability?: Mode
     return config[modelListKey(capability)];
 }
 
+export function resolveCapabilityModel(config: AiConfig, capability: ModelCapability, preferred?: string) {
+    const selected = (preferred || "").trim();
+    const models = selectableModelsByCapability(config, capability);
+    if (selected && (!models.length || models.includes(selected))) return selected;
+    const fallback = config[defaultModelKey(capability)].trim();
+    if (fallback && (!models.length || models.includes(fallback))) return fallback;
+    return models[0] || (capability === "audio" ? defaultConfig.audioModel : config.model || defaultConfig.model);
+}
+
 function modelListKey(capability: ModelCapability) {
     return `${capability}Models` as "imageModels" | "videoModels" | "textModels" | "audioModels";
+}
+
+function defaultModelKey(capability: ModelCapability) {
+    return `${capability}Model` as "imageModel" | "videoModel" | "textModel" | "audioModel";
 }
 
 function isAiConfigReady(config: AiConfig, model: string) {

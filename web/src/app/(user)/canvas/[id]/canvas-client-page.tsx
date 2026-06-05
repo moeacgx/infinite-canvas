@@ -10,7 +10,7 @@ import { requestEdit, requestGeneration, requestImageQuestion } from "@/services
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
 import { DOCS_URL } from "@/constant/env";
-import { defaultConfig, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
+import { defaultConfig, resolveCapabilityModel, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { resolveImageUrl, uploadImage, type UploadedImage } from "@/services/image-storage";
 import { resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
@@ -2062,13 +2062,7 @@ function InfiniteCanvasPage() {
             const hasSavedImageMetadata = Boolean(savedImageMetadata?.generationType);
             const generationConfig =
                 hasSavedImageMetadata && savedImageMetadata
-                    ? {
-                          ...effectiveConfig,
-                          model: savedImageMetadata.model || effectiveConfig.imageModel || effectiveConfig.model,
-                          quality: savedImageMetadata.quality || effectiveConfig.quality,
-                          size: savedImageMetadata.size || effectiveConfig.size,
-                          count: "1",
-                      }
+                    ? buildSavedImageGenerationConfig(effectiveConfig, savedImageMetadata)
                     : { ...buildGenerationConfig(effectiveConfig, sourceNode, node.type === CanvasNodeType.Text ? "text" : node.type === CanvasNodeType.Video ? "video" : node.type === CanvasNodeType.Audio ? "audio" : "image"), count: "1" };
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
                 openConfigDialog(true);
@@ -2915,10 +2909,12 @@ function getInputSummary(inputs: NodeGenerationInput[]) {
 }
 
 function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefined, mode: CanvasNodeGenerationMode): AiConfig {
-    const defaultModel = mode === "image" ? config.imageModel : mode === "video" ? config.videoModel : mode === "audio" ? config.audioModel : config.textModel;
+    const preferredModel = preferredNodeModel(node, mode);
+    const model = resolveCapabilityModel(config, mode, preferredModel);
     return {
         ...config,
-        model: node?.metadata?.model || defaultModel || (mode === "audio" ? defaultConfig.audioModel : config.model || defaultConfig.model),
+        model,
+        ...capabilityModelPatch(mode, model),
         quality: node?.metadata?.quality || config.quality || defaultConfig.quality,
         size: node?.metadata?.size || config.size || defaultConfig.size,
         videoSeconds: node?.metadata?.seconds || config.videoSeconds || defaultConfig.videoSeconds,
@@ -2931,6 +2927,32 @@ function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefine
         audioInstructions: node?.metadata?.audioInstructions || config.audioInstructions || defaultConfig.audioInstructions,
         count: String(node?.metadata?.count || (mode === "image" ? config.canvasImageCount || config.count : config.count) || defaultConfig.count),
     };
+}
+
+function buildSavedImageGenerationConfig(config: AiConfig, metadata: CanvasNodeMetadata): AiConfig {
+    const model = resolveCapabilityModel(config, "image", metadata.model);
+    return {
+        ...config,
+        model,
+        imageModel: model,
+        quality: metadata.quality || config.quality,
+        size: metadata.size || config.size,
+        count: "1",
+    };
+}
+
+function preferredNodeModel(node: CanvasNodeData | undefined, mode: CanvasNodeGenerationMode) {
+    if (!node?.metadata?.model) return undefined;
+    if (node.metadata.modelOverride || node.type === CanvasNodeType.Config) return node.metadata.model;
+    if (mode !== "image" && node.type !== CanvasNodeType.Image) return node.metadata.model;
+    return undefined;
+}
+
+function capabilityModelPatch(mode: CanvasNodeGenerationMode, model: string): Partial<AiConfig> {
+    if (mode === "image") return { imageModel: model };
+    if (mode === "video") return { videoModel: model };
+    if (mode === "audio") return { audioModel: model };
+    return { textModel: model };
 }
 
 function resetInterruptedGeneration(nodes: CanvasNodeData[]) {

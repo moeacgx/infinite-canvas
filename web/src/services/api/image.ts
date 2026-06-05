@@ -1,6 +1,6 @@
 import axios from "axios";
 
-import { buildApiUrl, isNewApiConfig, resolveNewApiGroup, type AiConfig, type FetchedModelLists, type ModelCapability } from "@/stores/use-config-store";
+import { buildApiUrl, isNewApiConfig, resolveCapabilityModel, resolveNewApiGroup, type AiConfig, type FetchedModelLists, type ModelCapability } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
@@ -238,12 +238,13 @@ function withSystemMessage(config: AiConfig, messages: ChatCompletionMessage[]) 
 }
 
 export async function requestGeneration(config: AiConfig, prompt: string) {
-    assertImageModel(config.model);
+    const model = resolveCapabilityModel(config, "image", config.model);
+    assertImageModel(model);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const quality = normalizeQuality(config.quality);
     const requestSize = resolveRequestSize(quality, config.size);
     const payload = {
-        model: config.model,
+        model,
         prompt: withSystemPrompt(config, prompt),
         n,
         ...(quality ? { quality } : {}),
@@ -302,13 +303,14 @@ function delay(ms: number) {
 }
 
 export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], mask?: ReferenceImage) {
-    assertImageModel(config.model);
+    const model = resolveCapabilityModel(config, "image", config.model);
+    assertImageModel(model);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const quality = normalizeQuality(config.quality);
     const requestSize = resolveRequestSize(quality, config.size);
     const requestPrompt = buildImageReferencePromptText(prompt, references);
     const formData = new FormData();
-    formData.set("model", config.model);
+    formData.set("model", model);
     formData.set("prompt", withSystemPrompt(config, requestPrompt));
     formData.set("n", String(n));
     formData.set("response_format", "b64_json");

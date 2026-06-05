@@ -96,9 +96,36 @@ test("New API model refresh keeps capability model lists tied to capability grou
 test("image and chat requests reject empty models before calling New API", () => {
     assert.match(imageSource, /function assertImageModel/);
     assert.match(imageSource, /if \(!model\.trim\(\)\) throw new Error\("请先选择模型"\)/);
-    assert.match(imageSource, /requestGeneration[\s\S]*assertImageModel\(config\.model\)/);
-    assert.match(imageSource, /requestEdit[\s\S]*assertImageModel\(config\.model\)/);
+    assert.match(imageSource, /requestGeneration[\s\S]*assertImageModel\(model\)/);
+    assert.match(imageSource, /requestEdit[\s\S]*assertImageModel\(model\)/);
     assert.match(imageSource, /requestImageQuestion[\s\S]*assertImageModel\(config\.model\)/);
+});
+
+test("image generation and edits use the selected image model instead of stale generic model", () => {
+    assert.match(source, /export function resolveCapabilityModel/);
+    assert.match(imageSource, /resolveCapabilityModel/);
+    assert.match(imageSource, /requestGeneration[\s\S]*const model = resolveCapabilityModel\(config,\s*"image",\s*config\.model\)[\s\S]*assertImageModel\(model\)[\s\S]*model,/);
+    assert.match(imageSource, /requestEdit[\s\S]*const model = resolveCapabilityModel\(config,\s*"image",\s*config\.model\)[\s\S]*assertImageModel\(model\)[\s\S]*formData\.set\("model",\s*model\)/);
+    assert.doesNotMatch(imageSource, /requestGeneration[\s\S]{0,500}model:\s*config\.model/);
+    assert.doesNotMatch(imageSource, /requestEdit[\s\S]{0,500}formData\.set\("model",\s*config\.model\)/);
+});
+
+test("canvas image nodes ignore stale unavailable saved models", () => {
+    const canvasClientSource = readFileSync(resolve(root, "../app/(user)/canvas/[id]/canvas-client-page.tsx"), "utf8");
+    assert.match(canvasClientSource, /resolveCapabilityModel/);
+    assert.match(canvasClientSource, /function preferredNodeModel/);
+    assert.match(canvasClientSource, /node\.metadata\.modelOverride \|\| node\.type === CanvasNodeType\.Config/);
+    assert.match(canvasClientSource, /mode !== "image" && node\.type !== CanvasNodeType\.Image/);
+    assert.match(canvasClientSource, /buildGenerationConfig[\s\S]*resolveCapabilityModel\(config,\s*mode,\s*preferredModel\)/);
+    assert.match(canvasClientSource, /function buildSavedImageGenerationConfig/);
+    assert.match(canvasClientSource, /buildSavedImageGenerationConfig[\s\S]*resolveCapabilityModel\(config,\s*"image",\s*metadata\.model\)[\s\S]*imageModel:\s*model/);
+    assert.doesNotMatch(canvasClientSource, /model:\s*savedImageMetadata\.model \|\| effectiveConfig\.imageModel/);
+    assert.match(nodePromptPanelSource, /resolveCapabilityModel/);
+    assert.match(nodePromptPanelSource, /modelOverride/);
+    assert.match(nodePromptPanelSource, /buildNodeConfig[\s\S]*resolveCapabilityModel\(globalConfig,\s*mode,\s*preferredModel\)/);
+    assert.match(configNodePanelSource, /resolveCapabilityModel/);
+    assert.match(configNodePanelSource, /modelOverride/);
+    assert.match(configNodePanelSource, /buildNodeConfig[\s\S]*resolveCapabilityModel\(globalConfig,\s*mode,\s*node\.metadata\?\.modelOverride \? node\.metadata\?\.model : undefined\)/);
 });
 
 test("New API image generation submits async task and polls result", () => {
