@@ -234,7 +234,7 @@ export async function requestGeneration(config: AiConfig, prompt: string) {
         output_format: IMAGE_OUTPUT_FORMAT,
     };
     if (isNewApiConfig(config)) {
-        return requestNewApiImageGeneration(config, payload);
+        return requestNewApiImageTask(config, payload);
     }
     try {
         const response = await axios.post<ImageApiResponse>(aiApiUrl(config, "/images/generations"), payload, {
@@ -248,9 +248,9 @@ export async function requestGeneration(config: AiConfig, prompt: string) {
     }
 }
 
-async function requestNewApiImageGeneration(config: AiConfig, payload: Record<string, unknown>) {
+async function requestNewApiImageTask(config: AiConfig, payload: Record<string, unknown> | FormData, params?: Record<string, string>) {
     try {
-        const created = (await axios.post<ImageTaskResponse>(aiApiUrl(config, "/images/tasks"), payload, aiRequestConfig(config, "application/json", undefined, "image"))).data;
+        const created = (await axios.post<ImageTaskResponse>(aiApiUrl(config, "/images/tasks"), payload, aiRequestConfig(config, payload instanceof FormData ? undefined : "application/json", params, "image"))).data;
         const taskId = created.task_id;
         if (!taskId) throw new Error("图片任务没有返回任务 ID");
         const task = await waitForNewApiImageTask(config, taskId);
@@ -304,6 +304,10 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
     files.forEach((file) => formData.append("image", file));
     if (mask) formData.set("mask", dataUrlToFile(mask));
+
+    if (isNewApiConfig(config)) {
+        return requestNewApiImageTask(config, formData, { action: "edits" });
+    }
 
     try {
         const response = await axios.post<ImageApiResponse>(aiApiUrl(config, "/images/edits"), formData, aiRequestConfig(config, undefined, undefined, "image"));

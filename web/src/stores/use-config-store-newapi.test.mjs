@@ -103,12 +103,18 @@ test("image and chat requests reject empty models before calling New API", () =>
 
 test("New API image generation submits async task and polls result", () => {
     assert.match(imageSource, /type ImageTaskResponse/);
-    assert.match(imageSource, /requestNewApiImageGeneration/);
+    assert.match(imageSource, /requestNewApiImageTask/);
     assert.match(imageSource, /aiApiUrl\(config,\s*"\/images\/tasks"\)/);
+    assert.match(imageSource, /requestGeneration[\s\S]*isNewApiConfig\(config\)[\s\S]*requestNewApiImageTask\(config,\s*payload\)/);
     assert.match(imageSource, /waitForNewApiImageTask/);
     assert.match(imageSource, /\/images\/tasks\/\$\{encodeURIComponent\(taskId\)\}/);
     assert.match(imageSource, /task\.status === "succeeded"/);
     assert.match(imageSource, /parseImagePayload\(task\.result\)/);
+});
+
+test("New API image edits submit async task and polls result", () => {
+    assert.match(imageSource, /requestNewApiImageTask/);
+    assert.match(imageSource, /requestEdit[\s\S]*isNewApiConfig\(config\)[\s\S]*requestNewApiImageTask\(config,\s*formData,\s*\{ action:\s*"edits" \}\)/);
 });
 
 test("Admin public UI switches hide login entry and credit balance displays", () => {
