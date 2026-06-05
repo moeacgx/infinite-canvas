@@ -40,6 +40,7 @@ const emptySettings: AdminSettings = {
             allowRemoteChannel: true,
         },
         auth: { allowRegister: true, linuxDo: { enabled: false } },
+        ui: { showLoginEntry: false, showCreditBalance: false },
     },
     private: { channels: [], promptSync: { enabled: true, cron: "*/5 * * * *" }, auth: { linuxDo: { clientId: "", clientSecret: "" } } },
 };
@@ -461,8 +462,18 @@ export default function AdminSettingsPage() {
                                             <Switch />
                                         </Form.Item>
                                     </Col>
-                                    <Col span={24}>
+                                    <Col xs={24} md={8}>
                                         <Form.Item name={["public", "auth", "allowRegister"]} label="是否允许用户注册" extra="关闭后隐藏注册入口，注册接口也会拒绝新用户创建" valuePropName="checked">
+                                            <Switch />
+                                        </Form.Item>
+                                    </Col>
+                                    <Col xs={24} md={8}>
+                                        <Form.Item name={["public", "ui", "showLoginEntry"]} label="显示前台登录入口" extra="关闭后隐藏右上角登录文字；后台仍可通过 /admin 访问" valuePropName="checked">
+                                            <Switch />
+                                        </Form.Item>
+                                    </Col>
+                                    <Col xs={24} md={8}>
+                                        <Form.Item name={["public", "ui", "showCreditBalance"]} label="显示算力点余额" extra="关闭后隐藏前台余额、发送按钮和画布生成按钮中的算力点额度" valuePropName="checked">
                                             <Switch />
                                         </Form.Item>
                                     </Col>
@@ -857,6 +868,10 @@ function normalizePublicSetting(setting: Partial<AdminSettings["public"]> = {}):
             linuxDo: {
                 enabled: setting.auth?.linuxDo?.enabled === true,
             },
+        },
+        ui: {
+            showLoginEntry: setting.ui?.showLoginEntry === true,
+            showCreditBalance: setting.ui?.showCreditBalance === true,
         },
     };
 }

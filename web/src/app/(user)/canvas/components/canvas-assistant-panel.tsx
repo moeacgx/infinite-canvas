@@ -45,6 +45,7 @@ export function CanvasAssistantPanel({ nodes, selectedNodeIds, sessions, activeS
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const effectiveConfig = useEffectiveConfig();
     const modelCosts = useConfigStore((state) => state.publicSettings?.modelChannel.modelCosts);
+    const showCreditBalance = useConfigStore((state) => state.publicSettings?.ui?.showCreditBalance === true);
     const cleanupImages = useAssetStore((state) => state.cleanupImages);
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
@@ -141,7 +142,11 @@ export function CanvasAssistantPanel({ nodes, selectedNodeIds, sessions, activeS
     };
 
     const sendMessage = async (text: string, nextMode: AssistantMode, history: CanvasAssistantMessage[], savedReferences?: CanvasAssistantReference[]) => {
-        const requestConfig = { ...effectiveConfig, count: nextMode === "image" ? effectiveConfig.canvasImageCount || effectiveConfig.count : effectiveConfig.count, model: nextMode === "image" ? effectiveConfig.imageModel || effectiveConfig.model : effectiveConfig.textModel || effectiveConfig.model };
+        const requestConfig = {
+            ...effectiveConfig,
+            count: nextMode === "image" ? effectiveConfig.canvasImageCount || effectiveConfig.count : effectiveConfig.count,
+            model: nextMode === "image" ? effectiveConfig.imageModel || effectiveConfig.model : effectiveConfig.textModel || effectiveConfig.model,
+        };
         if (!isAiConfigReady(requestConfig, requestConfig.model)) {
             openConfigDialog(true);
             return;
@@ -332,6 +337,7 @@ export function CanvasAssistantPanel({ nodes, selectedNodeIds, sessions, activeS
                         }}
                         onPasteImage={onPasteImage}
                         modelCosts={modelCosts}
+                        showCreditBalance={showCreditBalance}
                     />
                 ) : null}
 
@@ -377,6 +383,7 @@ function AssistantComposer({
     onRemoveReference,
     onPasteImage,
     modelCosts,
+    showCreditBalance,
 }: {
     mode: AssistantMode;
     prompt: string;
@@ -391,6 +398,7 @@ function AssistantComposer({
     onRemoveReference: (id: string) => void;
     onPasteImage: (file: File) => void;
     modelCosts?: { model: string; credits: number }[];
+    showCreditBalance: boolean;
 }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const activeModel = mode === "image" ? config.imageModel || config.model : config.textModel || config.model;
@@ -431,24 +439,27 @@ function AssistantComposer({
                         {mode === "image" ? (
                             <>
                                 <ModelPicker className="h-8 shrink-0" config={config} value={config.imageModel || config.model} onChange={(model) => onConfigChange("imageModel", model)} capability="image" onMissingConfig={onMissingConfig} />
-                                <CanvasImageSettingsPopover config={config} placement="topRight" getPopupContainer={() => document.body} buttonClassName="canvas-composer-settings canvas-composer-icon !h-8 !min-w-8 !rounded-full !px-2" onConfigChange={onConfigChange} onMissingConfig={onMissingConfig} />
+                                <CanvasImageSettingsPopover
+                                    config={config}
+                                    placement="topRight"
+                                    getPopupContainer={() => document.body}
+                                    buttonClassName="canvas-composer-settings canvas-composer-icon !h-8 !min-w-8 !rounded-full !px-2"
+                                    onConfigChange={onConfigChange}
+                                    onMissingConfig={onMissingConfig}
+                                />
                             </>
                         ) : (
                             <ModelPicker className="h-8 shrink-0" config={config} value={config.textModel || config.model} onChange={(model) => onConfigChange("textModel", model)} capability="text" onMissingConfig={onMissingConfig} />
                         )}
                     </div>
-                    <Button
-                        type="primary"
-                        className="!h-10 !min-w-16 shrink-0 !rounded-full !px-3"
-                        disabled={isRunning || !prompt.trim()}
-                        onClick={() => void onSubmit()}
-                        aria-label="发送"
-                    >
+                    <Button type="primary" className="!h-10 !min-w-16 shrink-0 !rounded-full !px-3" disabled={isRunning || !prompt.trim()} onClick={() => void onSubmit()} aria-label="发送">
                         <span className="flex items-center gap-1.5">
-                            <span className="inline-flex items-center gap-1 text-xs font-medium tabular-nums">
-                                <CreditSymbol />
-                                {credits.toLocaleString()}
-                            </span>
+                            {showCreditBalance ? (
+                                <span className="inline-flex items-center gap-1 text-xs font-medium tabular-nums">
+                                    <CreditSymbol />
+                                    {credits.toLocaleString()}
+                                </span>
+                            ) : null}
                             {isRunning ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
                         </span>
                     </Button>

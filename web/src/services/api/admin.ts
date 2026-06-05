@@ -194,6 +194,10 @@ export type AdminPublicSettings = {
             enabled: boolean;
         };
     };
+    ui: {
+        showLoginEntry: boolean;
+        showCreditBalance: boolean;
+    };
 };
 
 export type AdminPrivateSettings = {

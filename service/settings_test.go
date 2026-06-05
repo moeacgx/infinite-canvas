@@ -124,3 +124,29 @@ func TestNormalizeSettingsDefaultsChannelModeSwitches(t *testing.T) {
 		t.Fatal("legacy allowCustomChannel=false should disable local direct channel")
 	}
 }
+
+func TestNormalizeSettingsDefaultsPublicUISwitches(t *testing.T) {
+	settings := normalizeSettings(model.Settings{})
+	if settings.Public.UI.ShowLoginEntry == nil || *settings.Public.UI.ShowLoginEntry {
+		t.Fatal("show login entry should default to false")
+	}
+	if settings.Public.UI.ShowCreditBalance == nil || *settings.Public.UI.ShowCreditBalance {
+		t.Fatal("show credit balance should default to false")
+	}
+
+	enabled := true
+	settings = normalizeSettings(model.Settings{
+		Public: model.PublicSetting{
+			UI: model.PublicUISetting{
+				ShowLoginEntry:    &enabled,
+				ShowCreditBalance: &enabled,
+			},
+		},
+	})
+	if settings.Public.UI.ShowLoginEntry == nil || !*settings.Public.UI.ShowLoginEntry {
+		t.Fatal("show login entry=true should be preserved")
+	}
+	if settings.Public.UI.ShowCreditBalance == nil || !*settings.Public.UI.ShowCreditBalance {
+		t.Fatal("show credit balance=true should be preserved")
+	}
+}

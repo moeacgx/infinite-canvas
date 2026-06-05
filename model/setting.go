@@ -46,6 +46,7 @@ type PublicModelChannelSetting struct {
 type PublicSetting struct {
 	ModelChannel PublicModelChannelSetting `json:"modelChannel"`
 	Auth         PublicAuthSetting         `json:"auth"`
+	UI           PublicUISetting           `json:"ui"`
 }
 
 type PublicAuthSetting struct {
@@ -55,6 +56,12 @@ type PublicAuthSetting struct {
 
 type PublicLinuxDoAuthSetting struct {
 	Enabled bool `json:"enabled"`
+}
+
+// PublicUISetting 控制前台可见入口和额度展示。
+type PublicUISetting struct {
+	ShowLoginEntry    *bool `json:"showLoginEntry"`
+	ShowCreditBalance *bool `json:"showCreditBalance"`
 }
 
 // PrivateSetting 私有配置。

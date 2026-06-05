@@ -12,6 +12,10 @@ const configModalSource = readFileSync(resolve(root, "../components/layout/app-c
 const imageSource = readFileSync(resolve(root, "../services/api/image.ts"), "utf8");
 const videoSource = readFileSync(resolve(root, "../services/api/video.ts"), "utf8");
 const audioSource = readFileSync(resolve(root, "../services/api/audio.ts"), "utf8");
+const userStatusSource = readFileSync(resolve(root, "../components/layout/user-status-actions.tsx"), "utf8");
+const assistantPanelSource = readFileSync(resolve(root, "../app/(user)/canvas/components/canvas-assistant-panel.tsx"), "utf8");
+const nodePromptPanelSource = readFileSync(resolve(root, "../app/(user)/canvas/components/canvas-node-prompt-panel.tsx"), "utf8");
+const configNodePanelSource = readFileSync(resolve(root, "../app/(user)/canvas/components/canvas-config-node-panel.tsx"), "utf8");
 
 test("New API effective config is resolved from fetched models instead of returning raw persisted config", () => {
     assert.match(source, /export function applyFetchedModelsToConfig/);
@@ -105,4 +109,17 @@ test("New API image generation submits async task and polls result", () => {
     assert.match(imageSource, /\/images\/tasks\/\$\{encodeURIComponent\(taskId\)\}/);
     assert.match(imageSource, /task\.status === "succeeded"/);
     assert.match(imageSource, /parseImagePayload\(task\.result\)/);
+});
+
+test("Admin public UI switches hide login entry and credit balance displays", () => {
+    assert.match(adminSettingsSource, /showLoginEntry/);
+    assert.match(adminSettingsSource, /显示前台登录入口/);
+    assert.match(adminSettingsSource, /showCreditBalance/);
+    assert.match(adminSettingsSource, /显示算力点余额/);
+    assert.match(userStatusSource, /showLoginEntry/);
+    assert.match(userStatusSource, /!user && showLoginEntry/);
+    assert.match(userStatusSource, /showCreditBalance/);
+    assert.match(assistantPanelSource, /showCreditBalance/);
+    assert.match(nodePromptPanelSource, /showCreditBalance/);
+    assert.match(configNodePanelSource, /showCreditBalance/);
 });
