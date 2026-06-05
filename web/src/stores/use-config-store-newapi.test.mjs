@@ -103,12 +103,30 @@ test("image and chat requests reject empty models before calling New API", () =>
 
 test("image generation and edits use the selected image model instead of stale generic model", () => {
     assert.match(source, /export function resolveCapabilityModel/);
+    assert.match(source, /if \(selected && models\.includes\(selected\)\) return selected/);
+    assert.doesNotMatch(source, /selected && \(!models\.length/);
+    assert.doesNotMatch(source, /return models\[0\][^;]*config\.model/);
+    assert.match(source, /defaultConfig\[defaultModelKey\(capability\)\]/);
+    assert.doesNotMatch(source, /imageModel:\s*config\.imageModel \|\| config\.model/);
     assert.match(imageSource, /resolveCapabilityModel/);
     assert.match(imageSource, /requestGeneration[\s\S]*const model = resolveCapabilityModel\(config,\s*"image"\)[\s\S]*assertImageModel\(model\)[\s\S]*model,/);
     assert.match(imageSource, /requestEdit[\s\S]*const model = resolveCapabilityModel\(config,\s*"image"\)[\s\S]*assertImageModel\(model\)[\s\S]*formData\.set\("model",\s*model\)/);
     assert.doesNotMatch(imageSource, /resolveCapabilityModel\(config,\s*"image",\s*config\.model\)/);
     assert.doesNotMatch(imageSource, /requestGeneration[\s\S]{0,500}model:\s*config\.model/);
     assert.doesNotMatch(imageSource, /requestEdit[\s\S]{0,500}formData\.set\("model",\s*config\.model\)/);
+});
+
+test("image workbench snapshots persist the selected image model explicitly", () => {
+    const imagePageSource = readFileSync(resolve(root, "../app/(user)/image/page.tsx"), "utf8");
+    assert.match(imagePageSource, /resolveCapabilityModel\(effectiveConfig,\s*"image"\)/);
+    assert.match(imagePageSource, /buildRequestSnapshot[\s\S]*config:\s*\{[\s\S]*imageModel:\s*model[\s\S]*count:\s*"1"/);
+});
+
+test("canvas assistant image mode resolves the capability model before submitting edits", () => {
+    assert.match(assistantPanelSource, /resolveCapabilityModel/);
+    assert.match(assistantPanelSource, /const model = resolveCapabilityModel\(effectiveConfig,\s*nextMode === "image" \? "image" : "text"\)/);
+    assert.match(assistantPanelSource, /requestConfig[\s\S]*model,[\s\S]*imageModel:\s*model/);
+    assert.match(assistantPanelSource, /const activeModel = resolveCapabilityModel\(config,\s*mode === "image" \? "image" : "text"\)/);
 });
 
 test("canvas image nodes ignore stale unavailable saved models", () => {

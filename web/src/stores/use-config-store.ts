@@ -245,10 +245,10 @@ export function selectableModelsByCapability(config: AiConfig, capability?: Mode
 export function resolveCapabilityModel(config: AiConfig, capability: ModelCapability, preferred?: string) {
     const selected = (preferred || "").trim();
     const models = selectableModelsByCapability(config, capability);
-    if (selected && (!models.length || models.includes(selected))) return selected;
+    if (selected && models.includes(selected)) return selected;
     const fallback = config[defaultModelKey(capability)].trim();
     if (fallback && (!models.length || models.includes(fallback))) return fallback;
-    return models[0] || (capability === "audio" ? defaultConfig.audioModel : config.model || defaultConfig.model);
+    return models[0] || defaultConfig[defaultModelKey(capability)] || defaultConfig.model;
 }
 
 function modelListKey(capability: ModelCapability) {
@@ -323,7 +323,7 @@ export const useConfigStore = create<ConfigStore>()(
                         newApiImageGroup: config.newApiImageGroup || "",
                         newApiVideoGroup: config.newApiVideoGroup || "",
                         newApiAudioGroup: config.newApiAudioGroup || "",
-                        imageModel: config.imageModel || config.model,
+                        imageModel: config.imageModel || defaultConfig.imageModel,
                         videoModel: config.videoModel || "grok-imagine-video",
                         textModel: config.textModel || config.model,
                         audioModel: config.audioModel || defaultConfig.audioModel,

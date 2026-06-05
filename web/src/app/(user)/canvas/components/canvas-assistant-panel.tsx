@@ -7,7 +7,7 @@ import { motion } from "motion/react";
 
 import { ImageGenerationPending } from "@/components/image-generation-pending";
 import { ModelPicker } from "@/components/model-picker";
-import { useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { resolveCapabilityModel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { CreditSymbol, requestCreditCost } from "@/constant/credits";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { nanoid } from "nanoid";
@@ -142,10 +142,12 @@ export function CanvasAssistantPanel({ nodes, selectedNodeIds, sessions, activeS
     };
 
     const sendMessage = async (text: string, nextMode: AssistantMode, history: CanvasAssistantMessage[], savedReferences?: CanvasAssistantReference[]) => {
+        const model = resolveCapabilityModel(effectiveConfig, nextMode === "image" ? "image" : "text");
         const requestConfig = {
             ...effectiveConfig,
             count: nextMode === "image" ? effectiveConfig.canvasImageCount || effectiveConfig.count : effectiveConfig.count,
-            model: nextMode === "image" ? effectiveConfig.imageModel || effectiveConfig.model : effectiveConfig.textModel || effectiveConfig.model,
+            model,
+            ...(nextMode === "image" ? { imageModel: model } : { textModel: model }),
         };
         if (!isAiConfigReady(requestConfig, requestConfig.model)) {
             openConfigDialog(true);
@@ -401,7 +403,7 @@ function AssistantComposer({
     showCreditBalance: boolean;
 }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
-    const activeModel = mode === "image" ? config.imageModel || config.model : config.textModel || config.model;
+    const activeModel = resolveCapabilityModel(config, mode === "image" ? "image" : "text");
     const credits = requestCreditCost({ channelMode: config.channelMode, modelCosts, model: activeModel, count: mode === "image" ? config.count : 1 });
 
     return (
@@ -438,7 +440,7 @@ function AssistantComposer({
                         <AssistantModeSwitch mode={mode} theme={theme} onChange={onModeChange} />
                         {mode === "image" ? (
                             <>
-                                <ModelPicker className="h-8 shrink-0" config={config} value={config.imageModel || config.model} onChange={(model) => onConfigChange("imageModel", model)} capability="image" onMissingConfig={onMissingConfig} />
+                                <ModelPicker className="h-8 shrink-0" config={config} value={activeModel} onChange={(model) => onConfigChange("imageModel", model)} capability="image" onMissingConfig={onMissingConfig} />
                                 <CanvasImageSettingsPopover
                                     config={config}
                                     placement="topRight"
@@ -449,7 +451,7 @@ function AssistantComposer({
                                 />
                             </>
                         ) : (
-                            <ModelPicker className="h-8 shrink-0" config={config} value={config.textModel || config.model} onChange={(model) => onConfigChange("textModel", model)} capability="text" onMissingConfig={onMissingConfig} />
+                            <ModelPicker className="h-8 shrink-0" config={config} value={activeModel} onChange={(model) => onConfigChange("textModel", model)} capability="text" onMissingConfig={onMissingConfig} />
                         )}
                     </div>
                     <Button type="primary" className="!h-10 !min-w-16 shrink-0 !rounded-full !px-3" disabled={isRunning || !prompt.trim()} onClick={() => void onSubmit()} aria-label="发送">
