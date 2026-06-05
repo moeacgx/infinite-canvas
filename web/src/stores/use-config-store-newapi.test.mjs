@@ -109,7 +109,11 @@ test("New API image generation submits async task and polls result", () => {
     assert.match(imageSource, /waitForNewApiImageTask/);
     assert.match(imageSource, /\/images\/tasks\/\$\{encodeURIComponent\(taskId\)\}/);
     assert.match(imageSource, /task\.status === "succeeded"/);
-    assert.match(imageSource, /parseImagePayload\(task\.result\)/);
+    assert.match(imageSource, /parseImagePayload\(task\.result,\s*config\)/);
+    assert.match(imageSource, /resolveImageDataUrl\(item,\s*config\)/);
+    assert.match(imageSource, /downloadNewApiImageContent/);
+    assert.match(imageSource, /newApiCanvasUrl\(config\.baseUrl,\s*path\)/);
+    assert.match(imageSource, /responseType:\s*"blob"/);
 });
 
 test("New API image edits submit async task and polls result", () => {

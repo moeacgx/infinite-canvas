@@ -5,7 +5,7 @@ import { useUserStore } from "@/stores/use-user-store";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
-import { imageToDataUrl } from "@/services/image-storage";
+import { imageToDataUrl, setImageBlob } from "@/services/image-storage";
 import type { ReferenceImage } from "@/types/image";
 
 export type ChatCompletionMessage = {
@@ -117,31 +117,49 @@ function resolveRequestSize(quality: string | undefined, size: string) {
     throw new Error("图像尺寸格式不支持，请使用 auto、9:16 或 1024x1024");
 }
 
-function resolveImageDataUrl(item: Record<string, unknown>) {
+async function resolveImageDataUrl(item: Record<string, unknown>, config?: AiConfig) {
     if (typeof item.b64_json === "string" && item.b64_json) {
         return `data:image/png;base64,${item.b64_json}`;
     }
     if (typeof item.url === "string" && item.url) {
+        if (config && isNewApiConfig(config) && item.url.startsWith("/canvas/v1/images/tasks/")) {
+            return downloadNewApiImageContent(config, item.url);
+        }
         return item.url;
     }
     return null;
 }
 
-function parseImagePayload(payload: ImageApiResponse) {
+async function parseImagePayload(payload: ImageApiResponse, config?: AiConfig) {
     if (typeof payload.code === "number" && payload.code !== 0) {
         throw new Error(payload.msg || "请求失败");
     }
-    const images =
-        payload.data
-            ?.map(resolveImageDataUrl)
-            .filter((value): value is string => Boolean(value))
-            .map((dataUrl) => ({ id: nanoid(), dataUrl })) || [];
+    const dataUrls = await Promise.all((payload.data || []).map((item) => resolveImageDataUrl(item, config)));
+    const images = dataUrls.filter((value): value is string => Boolean(value)).map((dataUrl) => ({ id: nanoid(), dataUrl }));
 
     if (images.length === 0) {
         throw new Error("接口没有返回图片");
     }
 
     return images;
+}
+
+async function downloadNewApiImageContent(config: AiConfig, path: string) {
+    const response = await axios.get<Blob>(newApiCanvasUrl(config.baseUrl, path), {
+        ...aiRequestConfig(config, undefined, undefined, "image"),
+        responseType: "blob",
+    });
+    const storageKey = `image:${nanoid()}`;
+    return setImageBlob(storageKey, response.data);
+}
+
+function newApiCanvasUrl(baseUrl: string, path: string) {
+    try {
+        const url = new URL(path, baseUrl.trim());
+        return url.toString();
+    } catch {
+        return buildApiUrl(baseUrl, path.replace(/^\/canvas\/v1/, ""));
+    }
 }
 
 function readAxiosError(error: unknown, fallback: string) {
@@ -240,7 +258,7 @@ export async function requestGeneration(config: AiConfig, prompt: string) {
         const response = await axios.post<ImageApiResponse>(aiApiUrl(config, "/images/generations"), payload, {
             ...aiRequestConfig(config, "application/json", undefined, "image"),
         });
-        const images = parseImagePayload(response.data);
+        const images = await parseImagePayload(response.data);
         refreshRemoteUser(config);
         return images;
     } catch (error) {
@@ -255,7 +273,7 @@ async function requestNewApiImageTask(config: AiConfig, payload: Record<string, 
         if (!taskId) throw new Error("图片任务没有返回任务 ID");
         const task = await waitForNewApiImageTask(config, taskId);
         if (!task.result) throw new Error("图片任务成功但没有返回结果");
-        const images = parseImagePayload(task.result);
+        const images = await parseImagePayload(task.result, config);
         refreshRemoteUser(config);
         return images;
     } catch (error) {
@@ -311,7 +329,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
 
     try {
         const response = await axios.post<ImageApiResponse>(aiApiUrl(config, "/images/edits"), formData, aiRequestConfig(config, undefined, undefined, "image"));
-        const images = parseImagePayload(response.data);
+        const images = await parseImagePayload(response.data);
         refreshRemoteUser(config);
         return images;
     } catch (error) {
