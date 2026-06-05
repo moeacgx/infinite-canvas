@@ -89,6 +89,20 @@ func normalizePublicSettingWithChannels(setting model.PublicSetting, channels []
 		enabled := true
 		setting.ModelChannel.AllowCustomChannel = &enabled
 	}
+	if setting.ModelChannel.AllowLocalChannel == nil {
+		enabled := *setting.ModelChannel.AllowCustomChannel
+		setting.ModelChannel.AllowLocalChannel = &enabled
+	}
+	compatCustomChannel := *setting.ModelChannel.AllowLocalChannel
+	setting.ModelChannel.AllowCustomChannel = &compatCustomChannel
+	if setting.ModelChannel.AllowNewAPIChannel == nil {
+		enabled := true
+		setting.ModelChannel.AllowNewAPIChannel = &enabled
+	}
+	if setting.ModelChannel.AllowRemoteChannel == nil {
+		enabled := true
+		setting.ModelChannel.AllowRemoteChannel = &enabled
+	}
 	if setting.Auth.AllowRegister == nil {
 		enabled := true
 		setting.Auth.AllowRegister = &enabled

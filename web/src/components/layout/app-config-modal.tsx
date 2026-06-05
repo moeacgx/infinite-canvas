@@ -6,7 +6,7 @@ import { useState } from "react";
 import { ModelPicker } from "@/components/model-picker";
 import { fetchImageModels } from "@/services/api/image";
 import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from "@/lib/audio-generation";
-import { applyFetchedModelsToConfig, isNewApiConfig, useConfigStore, useEffectiveConfig, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import { applyFetchedModelsToConfig, channelModeAllowed, isNewApiConfig, resolveAllowedChannelMode, useConfigStore, useEffectiveConfig, type AiConfig, type ChannelMode, type ModelCapability } from "@/stores/use-config-store";
 
 type ModelGroup = {
     capability: ModelCapability;
@@ -17,6 +17,7 @@ type ModelGroup = {
 };
 
 type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
+type ModelChannelSettings = NonNullable<ReturnType<typeof useConfigStore.getState>["publicSettings"]>["modelChannel"];
 
 const modelGroups: ModelGroup[] = [
     { capability: "image", modelKey: "imageModel", modelsKey: "imageModels", defaultLabel: "默认生图模型", optionsLabel: "生图模型可选项" },
@@ -37,31 +38,33 @@ export function AppConfigModal() {
     const publicSettings = useConfigStore((state) => state.publicSettings);
     const effectiveConfig = useEffectiveConfig();
     const modelChannel = publicSettings?.modelChannel;
-    const allowCustomChannel = modelChannel?.allowCustomChannel === true;
-    const effectiveMode = isNewApiConfig(config) ? "newapi" : allowCustomChannel ? config.channelMode : "remote";
+    const channelModeOptions = buildChannelModeOptions(modelChannel);
+    const effectiveMode = resolveAllowedChannelMode(config.channelMode, modelChannel);
     const modelConfig = effectiveMode === "remote" ? effectiveConfig : config;
     const modelOptions = config.models.map((model) => ({ label: model, value: model }));
 
     const finishConfig = () => {
         setConfigDialogOpen(false);
+        if (!effectiveMode) return;
         if (effectiveMode === "local" && (!config.baseUrl.trim() || !config.apiKey.trim())) return;
         if (effectiveMode === "newapi" && (!config.baseUrl.trim() || !config.newApiGroup.trim())) return;
         if (!modelConfig.imageModel.trim() || !modelConfig.videoModel.trim() || !modelConfig.textModel.trim()) return;
-        if (!allowCustomChannel && config.channelMode === "local") updateConfig("channelMode", "remote");
+        if (effectiveMode !== config.channelMode) updateConfig("channelMode", effectiveMode);
         message.success(shouldPromptContinue ? "配置已保存，请继续刚才的请求" : "配置已保存");
         clearPromptContinue();
     };
 
     const refreshModels = async () => {
-        if (effectiveMode === "remote") return;
-        if (!isModelFetchConfigReady(config)) {
-            message.error(isNewApiConfig(config) ? "请先填写 Base URL 和分组" : "请先填写 Base URL 和 API Key");
+        if (!effectiveMode || effectiveMode === "remote") return;
+        const fetchConfig = { ...config, channelMode: effectiveMode };
+        if (!isModelFetchConfigReady(fetchConfig)) {
+            message.error(effectiveMode === "newapi" ? "请先填写 Base URL 和分组" : "请先填写 Base URL 和 API Key");
             return;
         }
         setLoadingModels(true);
         try {
-            const models = await fetchImageModels(config);
-            const nextConfig = applyFetchedModelsToConfig(config, models);
+            const models = await fetchImageModels(fetchConfig);
+            const nextConfig = applyFetchedModelsToConfig(fetchConfig, models);
             applyConfigPatch(updateConfig, config, nextConfig);
             message.success("模型列表已更新");
         } catch (error) {
@@ -98,22 +101,14 @@ export function AppConfigModal() {
         >
             <div className="pt-1">
                 <Form layout="vertical" requiredMark={false}>
-                    {allowCustomChannel ? (
+                    {channelModeOptions.length ? (
                         <Form.Item label="渠道模式" className="mb-5">
-                            <Segmented
-                                block
-                                size="middle"
-                                value={effectiveMode}
-                                onChange={(value) => updateConfig("channelMode", value as AiConfig["channelMode"])}
-                                options={[
-                                    { label: "本地直连", value: "local" },
-                                    { label: "New API 免 Key", value: "newapi" },
-                                    { label: "云端渠道", value: "remote" },
-                                ]}
-                            />
+                            <Segmented block size="middle" value={effectiveMode} onChange={(value) => updateConfig("channelMode", value as AiConfig["channelMode"])} options={channelModeOptions} />
                         </Form.Item>
-                    ) : null}
-                    {effectiveMode === "local" || effectiveMode === "newapi" ? (
+                    ) : (
+                        <div className="mb-5 rounded-lg border border-stone-200 p-3 text-sm text-stone-500 dark:border-stone-800">管理员未开放可用渠道，请联系管理员在后台设置中开启至少一种渠道。</div>
+                    )}
+                    {!effectiveMode ? null : effectiveMode === "local" || effectiveMode === "newapi" ? (
                         <>
                             <div className="grid gap-4 md:grid-cols-2">
                                 <Form.Item label="Base URL" className="mb-4">
@@ -157,7 +152,7 @@ export function AppConfigModal() {
                         </>
                     ) : (
                         <div className="mb-5 rounded-lg border border-stone-200 p-3 text-sm text-stone-500 dark:border-stone-800">
-                            <div className="font-medium text-stone-900 dark:text-stone-100">云端渠道</div>
+                            <div className="font-medium text-stone-900 dark:text-stone-100">后端渠道</div>
                             <div className="mt-1">由系统后台渠道转发请求，当前可用 {modelChannel?.availableModels.length || 0} 个模型。</div>
                         </div>
                     )}
@@ -185,49 +180,53 @@ export function AppConfigModal() {
                             </div>
                         </section>
                     ) : null}
-                    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                        {modelGroups.map((group) => (
-                            <Form.Item key={group.modelKey} label={group.defaultLabel} className="mb-4">
-                                <ModelPicker config={modelConfig} value={modelConfig[group.modelKey]} onChange={(model) => updateConfig(group.modelKey, model)} capability={group.capability} fullWidth />
+                    {effectiveMode ? (
+                        <>
+                            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                                {modelGroups.map((group) => (
+                                    <Form.Item key={group.modelKey} label={group.defaultLabel} className="mb-4">
+                                        <ModelPicker config={modelConfig} value={modelConfig[group.modelKey]} onChange={(model) => updateConfig(group.modelKey, model)} capability={group.capability} fullWidth />
+                                    </Form.Item>
+                                ))}
+                            </div>
+                            <div className="grid gap-4 md:grid-cols-4">
+                                <Form.Item label="画布默认生图张数" extra="新建画布生图和配置节点默认使用，单个节点仍可单独覆盖。" className="mb-4">
+                                    <Input
+                                        type="number"
+                                        min={1}
+                                        max={15}
+                                        value={config.canvasImageCount}
+                                        onChange={(event) => updateConfig("canvasImageCount", event.target.value)}
+                                        onBlur={(event) => updateConfig("canvasImageCount", normalizeImageCount(event.target.value))}
+                                    />
+                                </Form.Item>
+                                <Form.Item label="默认音频声音" className="mb-4">
+                                    <Select value={config.audioVoice} options={audioVoiceOptions} onChange={(value) => updateConfig("audioVoice", value)} />
+                                </Form.Item>
+                                <Form.Item label="默认音频格式" className="mb-4">
+                                    <Select value={config.audioFormat} options={audioFormatOptions} onChange={(value) => updateConfig("audioFormat", value)} />
+                                </Form.Item>
+                                <Form.Item label="默认音频语速" className="mb-4">
+                                    <Input
+                                        type="number"
+                                        min={0.25}
+                                        max={4}
+                                        step={0.05}
+                                        value={config.audioSpeed}
+                                        onChange={(event) => updateConfig("audioSpeed", event.target.value)}
+                                        onBlur={(event) => updateConfig("audioSpeed", normalizeAudioSpeedValue(event.target.value))}
+                                    />
+                                </Form.Item>
+                            </div>
+                            <Form.Item label="默认音频指令" className="mb-4">
+                                <Input.TextArea rows={2} value={config.audioInstructions} placeholder="例如：自然、温暖、适合旁白。" onChange={(event) => updateConfig("audioInstructions", event.target.value)} />
                             </Form.Item>
-                        ))}
-                    </div>
-                    <div className="grid gap-4 md:grid-cols-4">
-                        <Form.Item label="画布默认生图张数" extra="新建画布生图和配置节点默认使用，单个节点仍可单独覆盖。" className="mb-4">
-                            <Input
-                                type="number"
-                                min={1}
-                                max={15}
-                                value={config.canvasImageCount}
-                                onChange={(event) => updateConfig("canvasImageCount", event.target.value)}
-                                onBlur={(event) => updateConfig("canvasImageCount", normalizeImageCount(event.target.value))}
-                            />
-                        </Form.Item>
-                        <Form.Item label="默认音频声音" className="mb-4">
-                            <Select value={config.audioVoice} options={audioVoiceOptions} onChange={(value) => updateConfig("audioVoice", value)} />
-                        </Form.Item>
-                        <Form.Item label="默认音频格式" className="mb-4">
-                            <Select value={config.audioFormat} options={audioFormatOptions} onChange={(value) => updateConfig("audioFormat", value)} />
-                        </Form.Item>
-                        <Form.Item label="默认音频语速" className="mb-4">
-                            <Input
-                                type="number"
-                                min={0.25}
-                                max={4}
-                                step={0.05}
-                                value={config.audioSpeed}
-                                onChange={(event) => updateConfig("audioSpeed", event.target.value)}
-                                onBlur={(event) => updateConfig("audioSpeed", normalizeAudioSpeedValue(event.target.value))}
-                            />
-                        </Form.Item>
-                    </div>
-                    <Form.Item label="默认音频指令" className="mb-4">
-                        <Input.TextArea rows={2} value={config.audioInstructions} placeholder="例如：自然、温暖、适合旁白。" onChange={(event) => updateConfig("audioInstructions", event.target.value)} />
-                    </Form.Item>
-                    {effectiveMode === "local" ? (
-                        <Form.Item label="系统提示词" className="mb-0">
-                            <Input.TextArea rows={3} value={config.systemPrompt} placeholder="例如：你是一位擅长电影感写实摄影的视觉导演。" onChange={(event) => updateConfig("systemPrompt", event.target.value)} />
-                        </Form.Item>
+                            {effectiveMode === "local" ? (
+                                <Form.Item label="系统提示词" className="mb-0">
+                                    <Input.TextArea rows={3} value={config.systemPrompt} placeholder="例如：你是一位擅长电影感写实摄影的视觉导演。" onChange={(event) => updateConfig("systemPrompt", event.target.value)} />
+                                </Form.Item>
+                            ) : null}
+                        </>
                     ) : null}
                 </Form>
             </div>
@@ -243,6 +242,15 @@ function applyConfigPatch(updateConfig: UpdateAiConfig, current: AiConfig, next:
     (Object.keys(next) as Array<keyof AiConfig>).forEach((key) => {
         if (current[key] !== next[key]) updateConfig(key, next[key]);
     });
+}
+
+function buildChannelModeOptions(modelChannel: ModelChannelSettings | null | undefined) {
+    const modes: Array<{ label: string; value: ChannelMode }> = [
+        { label: "本地直连", value: "local" },
+        { label: "New API 免 Key", value: "newapi" },
+        { label: "后端渠道", value: "remote" },
+    ];
+    return modes.filter((mode) => channelModeAllowed(modelChannel, mode.value));
 }
 
 function isModelFetchConfigReady(config: AiConfig) {

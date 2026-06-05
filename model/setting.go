@@ -37,6 +37,9 @@ type PublicModelChannelSetting struct {
 	DefaultTextModel   string      `json:"defaultTextModel"`
 	SystemPrompt       string      `json:"systemPrompt"`
 	AllowCustomChannel *bool       `json:"allowCustomChannel"`
+	AllowLocalChannel  *bool       `json:"allowLocalChannel"`
+	AllowNewAPIChannel *bool       `json:"allowNewApiChannel"`
+	AllowRemoteChannel *bool       `json:"allowRemoteChannel"`
 }
 
 // PublicSetting 公开配置。

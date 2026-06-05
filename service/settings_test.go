@@ -98,3 +98,29 @@ func TestNormalizeSettingsPublishesEnabledChannelModelsAndRepairsDefaults(t *tes
 		t.Fatalf("default video model = %q, want seedance", channel.DefaultVideoModel)
 	}
 }
+
+func TestNormalizeSettingsDefaultsChannelModeSwitches(t *testing.T) {
+	settings := normalizeSettings(model.Settings{})
+	channel := settings.Public.ModelChannel
+	if channel.AllowLocalChannel == nil || !*channel.AllowLocalChannel {
+		t.Fatal("allow local channel should default to true")
+	}
+	if channel.AllowNewAPIChannel == nil || !*channel.AllowNewAPIChannel {
+		t.Fatal("allow New API channel should default to true")
+	}
+	if channel.AllowRemoteChannel == nil || !*channel.AllowRemoteChannel {
+		t.Fatal("allow remote channel should default to true")
+	}
+
+	disabled := false
+	settings = normalizeSettings(model.Settings{
+		Public: model.PublicSetting{
+			ModelChannel: model.PublicModelChannelSetting{
+				AllowCustomChannel: &disabled,
+			},
+		},
+	})
+	if settings.Public.ModelChannel.AllowLocalChannel == nil || *settings.Public.ModelChannel.AllowLocalChannel {
+		t.Fatal("legacy allowCustomChannel=false should disable local direct channel")
+	}
+}

@@ -7,6 +7,8 @@ import test from "node:test";
 const root = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(resolve(root, "use-config-store.ts"), "utf8");
 const initSource = readFileSync(resolve(root, "../components/layout/client-root-init.tsx"), "utf8");
+const adminSettingsSource = readFileSync(resolve(root, "../app/(admin)/admin/settings/page.tsx"), "utf8");
+const configModalSource = readFileSync(resolve(root, "../components/layout/app-config-modal.tsx"), "utf8");
 const imageSource = readFileSync(resolve(root, "../services/api/image.ts"), "utf8");
 const videoSource = readFileSync(resolve(root, "../services/api/video.ts"), "utf8");
 const audioSource = readFileSync(resolve(root, "../services/api/audio.ts"), "utf8");
@@ -25,6 +27,27 @@ test("New API launch params fetch models and apply default models automatically"
     assert.match(initSource, /applyFetchedModelsToConfig/);
     assert.match(initSource, /updateConfig\(key,\s*nextConfig\[key\]\)/);
     assert.match(initSource, /mode === "newapi"[\s\S]*fetchImageModels/);
+});
+
+test("Admin settings exposes separate channel mode switches", () => {
+    assert.match(adminSettingsSource, /allowLocalChannel/);
+    assert.match(adminSettingsSource, /允许本地直连/);
+    assert.match(adminSettingsSource, /allowNewApiChannel/);
+    assert.match(adminSettingsSource, /允许 New API 免 Key/);
+    assert.match(adminSettingsSource, /allowRemoteChannel/);
+    assert.match(adminSettingsSource, /允许后端渠道/);
+});
+
+test("Config modal filters channel modes from admin switches", () => {
+    assert.match(configModalSource, /channelModeOptions/);
+    assert.match(configModalSource, /channelModeAllowed/);
+    assert.match(source, /allowLocalChannel/);
+    assert.match(configModalSource, /value:\s*"local"/);
+    assert.match(source, /allowNewApiChannel/);
+    assert.match(configModalSource, /value:\s*"newapi"/);
+    assert.match(source, /allowRemoteChannel/);
+    assert.match(configModalSource, /value:\s*"remote"/);
+    assert.match(configModalSource, /管理员未开放可用渠道/);
 });
 
 test("New API launch params accept optional capability groups", () => {

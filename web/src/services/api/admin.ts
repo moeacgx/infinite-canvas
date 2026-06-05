@@ -176,6 +176,9 @@ export type AdminPublicModelChannelSettings = {
     defaultTextModel: string;
     systemPrompt: string;
     allowCustomChannel: boolean;
+    allowLocalChannel: boolean;
+    allowNewApiChannel: boolean;
+    allowRemoteChannel: boolean;
 };
 
 export type AdminModelCost = {

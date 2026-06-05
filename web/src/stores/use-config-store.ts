@@ -43,6 +43,7 @@ export type AiConfig = {
 
 export const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
 export type ModelCapability = "image" | "video" | "text" | "audio";
+export type ChannelMode = AiConfig["channelMode"];
 export type FetchedModelLists = {
     models: string[];
     imageModels?: string[];
@@ -100,7 +101,7 @@ type ConfigStore = {
 };
 
 function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSettings["modelChannel"] | null) {
-    const channelMode = config.channelMode === "newapi" ? "newapi" : modelChannel?.allowCustomChannel ? config.channelMode : "remote";
+    const channelMode = resolveAllowedChannelMode(config.channelMode, modelChannel);
     if (channelMode === "newapi") {
         return applyFetchedModelsToConfig(
             { ...config, channelMode },
@@ -112,6 +113,9 @@ function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSetti
                 audioModels: config.audioModels,
             },
         );
+    }
+    if (!channelMode) {
+        return { ...config, channelMode: config.channelMode, models: [], imageModels: [], videoModels: [], textModels: [], audioModels: [], model: "", imageModel: "", videoModel: "", textModel: "", audioModel: "" };
     }
     if (channelMode === "local" || !modelChannel) return { ...config, channelMode };
     const models = modelChannel.availableModels;
@@ -139,6 +143,19 @@ function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSetti
         audioModel: audioModels.includes(config.audioModel) ? config.audioModel : fallbackAudioModel,
         systemPrompt: modelChannel.systemPrompt,
     };
+}
+
+export function channelModeAllowed(modelChannel: AdminPublicSettings["modelChannel"] | null | undefined, mode: ChannelMode) {
+    if (!modelChannel) return mode !== "local";
+    if (mode === "local") return modelChannel.allowLocalChannel ?? modelChannel.allowCustomChannel;
+    if (mode === "newapi") return modelChannel.allowNewApiChannel !== false;
+    return modelChannel.allowRemoteChannel !== false;
+}
+
+export function resolveAllowedChannelMode(mode: ChannelMode, modelChannel: AdminPublicSettings["modelChannel"] | null | undefined): ChannelMode | null {
+    if (channelModeAllowed(modelChannel, mode)) return mode;
+    const fallbackModes: ChannelMode[] = ["remote", "newapi", "local"];
+    return fallbackModes.find((item) => channelModeAllowed(modelChannel, item)) || null;
 }
 
 export function applyFetchedModelsToConfig(config: AiConfig, fetchedModels: string[] | FetchedModelLists): AiConfig {

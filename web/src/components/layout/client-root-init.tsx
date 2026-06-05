@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { App } from "antd";
 
 import { fetchImageModels } from "@/services/api/image";
-import { applyFetchedModelsToConfig, type AiConfig, useConfigStore } from "@/stores/use-config-store";
+import { applyFetchedModelsToConfig, channelModeAllowed, type AiConfig, useConfigStore } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
 export function ClientRootInit({ children }: { children: ReactNode }) {
@@ -41,7 +41,7 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
         const newApiVideoGroup = searchParams.get("videoGroup") || "";
         if (mode !== "newapi" && !baseUrl && !apiKey) return;
         if (mode === "newapi" && (!baseUrl || !newApiGroup)) return;
-        if (mode !== "newapi" && !publicSettings) return;
+        if (!publicSettings) return;
         handledConfigParams.current = true;
         searchParams.delete("mode");
         searchParams.delete("group");
@@ -55,6 +55,11 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
         searchParams.delete("apikey");
         window.history.replaceState(null, "", `${window.location.pathname}${searchParams.size ? `?${searchParams}` : ""}${window.location.hash}`);
         if (mode === "newapi") {
+            if (!channelModeAllowed(publicSettings.modelChannel, "newapi")) {
+                openConfigDialog(false);
+                message.error("后台未允许 New API 免 Key，请联系管理员进行配置");
+                return;
+            }
             updateConfig("channelMode", "newapi");
             updateConfig("baseUrl", baseUrl || "");
             updateConfig("newApiGroup", newApiGroup);
@@ -76,9 +81,9 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
             return;
         }
         if (!publicSettings) return;
-        if (!publicSettings.modelChannel.allowCustomChannel) {
+        if (!channelModeAllowed(publicSettings.modelChannel, "local")) {
             openConfigDialog(false);
-            message.error("后台未允许用户自定义渠道，请联系管理员进行配置");
+            message.error("后台未允许本地直连，请联系管理员进行配置");
             return;
         }
         updateConfig("channelMode", "local");

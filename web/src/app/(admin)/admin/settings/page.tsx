@@ -7,7 +7,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { EditorView } from "@uiw/react-codemirror";
 
-import { fetchAdminSettings, fetchChannelModels, saveAdminSettings, testChannelModel, type AdminModelChannel, type AdminModelCost, type AdminSettings } from "@/services/api/admin";
+import { fetchAdminSettings, fetchChannelModels, saveAdminSettings, testChannelModel, type AdminModelChannel, type AdminModelCost, type AdminPublicModelChannelSettings, type AdminSettings } from "@/services/api/admin";
 import { useUserStore } from "@/stores/use-user-store";
 
 const CodeMirror = dynamic(() => import("@uiw/react-codemirror"), { ssr: false });
@@ -35,6 +35,9 @@ const emptySettings: AdminSettings = {
             defaultTextModel: "",
             systemPrompt: "",
             allowCustomChannel: true,
+            allowLocalChannel: true,
+            allowNewApiChannel: true,
+            allowRemoteChannel: true,
         },
         auth: { allowRegister: true, linuxDo: { enabled: false } },
     },
@@ -443,8 +446,18 @@ export default function AdminSettingsPage() {
                                             <Input.TextArea rows={4} />
                                         </Form.Item>
                                     </Col>
-                                    <Col span={24}>
-                                        <Form.Item name={["public", "modelChannel", "allowCustomChannel"]} label="是否允许用户自定义渠道" extra="开启后，前端可提供走后端渠道和用户自定义 baseUrl 直连两种模式" valuePropName="checked">
+                                    <Col xs={24} md={8}>
+                                        <Form.Item name={["public", "modelChannel", "allowRemoteChannel"]} label="允许后端渠道" extra="开启后，前端可使用后台私有渠道转发请求" valuePropName="checked">
+                                            <Switch />
+                                        </Form.Item>
+                                    </Col>
+                                    <Col xs={24} md={8}>
+                                        <Form.Item name={["public", "modelChannel", "allowLocalChannel"]} label="允许本地直连" extra="开启后，用户可填写自己的 Base URL 和 API Key 直连" valuePropName="checked">
+                                            <Switch />
+                                        </Form.Item>
+                                    </Col>
+                                    <Col xs={24} md={8}>
+                                        <Form.Item name={["public", "modelChannel", "allowNewApiChannel"]} label="允许 New API 免 Key" extra="开启后，可使用 New API 登录态和分组代理请求" valuePropName="checked">
                                             <Switch />
                                         </Form.Item>
                                     </Col>
@@ -467,15 +480,7 @@ export default function AdminSettingsPage() {
                                                     dataIndex: "credits",
                                                     width: 220,
                                                     render: (_, item) => (
-                                                        <InputNumber
-                                                            min={0}
-                                                            step={1}
-                                                            precision={0}
-                                                            className="!w-full"
-                                                            value={item.credits}
-                                                            addonAfter="点"
-                                                            onChange={(value) => setModelCost(form, setModelCosts, item.model, Number(value) || 0)}
-                                                        />
+                                                        <InputNumber min={0} step={1} precision={0} className="!w-full" value={item.credits} addonAfter="点" onChange={(value) => setModelCost(form, setModelCosts, item.model, Number(value) || 0)} />
                                                     ),
                                                 },
                                             ]}
@@ -832,13 +837,20 @@ function normalizeSettings(settings: Partial<AdminSettings> = {}): AdminSettings
 }
 
 function normalizePublicSetting(setting: Partial<AdminSettings["public"]> = {}): AdminSettings["public"] {
+    const inputModelChannel = (setting.modelChannel || {}) as Partial<AdminPublicModelChannelSettings>;
+    const allowCustomChannel = inputModelChannel.allowCustomChannel !== false;
+    const allowLocalChannel = inputModelChannel.allowLocalChannel ?? allowCustomChannel;
     return {
         ...emptySettings.public,
         modelChannel: {
             ...emptySettings.public.modelChannel,
-            ...(setting.modelChannel || {}),
-            availableModels: setting.modelChannel?.availableModels || [],
-            modelCosts: normalizeModelCosts(setting.modelChannel?.modelCosts || []),
+            ...inputModelChannel,
+            allowCustomChannel: allowLocalChannel,
+            allowLocalChannel,
+            allowNewApiChannel: inputModelChannel.allowNewApiChannel !== false,
+            allowRemoteChannel: inputModelChannel.allowRemoteChannel !== false,
+            availableModels: inputModelChannel.availableModels || [],
+            modelCosts: normalizeModelCosts(inputModelChannel.modelCosts || []),
         },
         auth: {
             allowRegister: setting.auth?.allowRegister !== false,
@@ -910,11 +922,7 @@ function collectChannelModels(channels: AdminModelChannel[]) {
 }
 
 function collectKnownModels(settings: AdminSettings) {
-    return uniqueModels([
-        ...(settings.public.modelChannel.availableModels || []),
-        ...(settings.public.modelChannel.modelCosts || []).map((item) => item.model),
-        ...settings.private.channels.flatMap((channel) => channel.models || []),
-    ]);
+    return uniqueModels([...(settings.public.modelChannel.availableModels || []), ...(settings.public.modelChannel.modelCosts || []).map((item) => item.model), ...settings.private.channels.flatMap((channel) => channel.models || [])]);
 }
 
 function buildModelSelectGroups(sourceModels: string[], existingModels: string[]): Record<ModelSelectTabKey, string[]> {
