@@ -96,3 +96,13 @@ test("image and chat requests reject empty models before calling New API", () =>
     assert.match(imageSource, /requestEdit[\s\S]*assertImageModel\(config\.model\)/);
     assert.match(imageSource, /requestImageQuestion[\s\S]*assertImageModel\(config\.model\)/);
 });
+
+test("New API image generation submits async task and polls result", () => {
+    assert.match(imageSource, /type ImageTaskResponse/);
+    assert.match(imageSource, /requestNewApiImageGeneration/);
+    assert.match(imageSource, /aiApiUrl\(config,\s*"\/images\/tasks"\)/);
+    assert.match(imageSource, /waitForNewApiImageTask/);
+    assert.match(imageSource, /\/images\/tasks\/\$\{encodeURIComponent\(taskId\)\}/);
+    assert.match(imageSource, /task\.status === "succeeded"/);
+    assert.match(imageSource, /parseImagePayload\(task\.result\)/);
+});

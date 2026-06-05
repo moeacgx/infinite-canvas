@@ -19,6 +19,13 @@ type ImageApiResponse = {
     code?: number;
     msg?: string;
 };
+type ImageTaskResponse = {
+    task_id?: string;
+    status?: "queued" | "processing" | "succeeded" | "failed";
+    progress?: string;
+    result?: ImageApiResponse;
+    error?: string | { message?: string };
+};
 
 const QUALITY_BASE: Record<string, number> = {
     low: 1024,
@@ -39,6 +46,8 @@ const IMAGE_MAX_PIXELS = 8294400;
 const IMAGE_MAX_EDGE = 3840;
 const IMAGE_MAX_RATIO = 3;
 const IMAGE_OUTPUT_FORMAT = "png";
+const NEW_API_IMAGE_TASK_POLL_INTERVAL_MS = 2500;
+const NEW_API_IMAGE_TASK_MAX_ATTEMPTS = 240;
 
 function normalizeQuality(quality: string) {
     const value = quality.trim().toLowerCase();
@@ -215,28 +224,63 @@ export async function requestGeneration(config: AiConfig, prompt: string) {
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const quality = normalizeQuality(config.quality);
     const requestSize = resolveRequestSize(quality, config.size);
+    const payload = {
+        model: config.model,
+        prompt: withSystemPrompt(config, prompt),
+        n,
+        ...(quality ? { quality } : {}),
+        ...(requestSize ? { size: requestSize } : {}),
+        response_format: "b64_json",
+        output_format: IMAGE_OUTPUT_FORMAT,
+    };
+    if (isNewApiConfig(config)) {
+        return requestNewApiImageGeneration(config, payload);
+    }
     try {
-        const response = await axios.post<ImageApiResponse>(
-            aiApiUrl(config, "/images/generations"),
-            {
-                model: config.model,
-                prompt: withSystemPrompt(config, prompt),
-                n,
-                ...(quality ? { quality } : {}),
-                ...(requestSize ? { size: requestSize } : {}),
-                response_format: "b64_json",
-                output_format: IMAGE_OUTPUT_FORMAT,
-            },
-            {
-                ...aiRequestConfig(config, "application/json", undefined, "image"),
-            },
-        );
+        const response = await axios.post<ImageApiResponse>(aiApiUrl(config, "/images/generations"), payload, {
+            ...aiRequestConfig(config, "application/json", undefined, "image"),
+        });
         const images = parseImagePayload(response.data);
         refreshRemoteUser(config);
         return images;
     } catch (error) {
         throw new Error(readAxiosError(error, "请求失败"));
     }
+}
+
+async function requestNewApiImageGeneration(config: AiConfig, payload: Record<string, unknown>) {
+    try {
+        const created = (await axios.post<ImageTaskResponse>(aiApiUrl(config, "/images/tasks"), payload, aiRequestConfig(config, "application/json", undefined, "image"))).data;
+        const taskId = created.task_id;
+        if (!taskId) throw new Error("图片任务没有返回任务 ID");
+        const task = await waitForNewApiImageTask(config, taskId);
+        if (!task.result) throw new Error("图片任务成功但没有返回结果");
+        const images = parseImagePayload(task.result);
+        refreshRemoteUser(config);
+        return images;
+    } catch (error) {
+        throw new Error(readAxiosError(error, "请求失败"));
+    }
+}
+
+async function waitForNewApiImageTask(config: AiConfig, taskId: string) {
+    for (let attempt = 0; attempt < NEW_API_IMAGE_TASK_MAX_ATTEMPTS; attempt += 1) {
+        const task = (await axios.get<ImageTaskResponse>(aiApiUrl(config, `/images/tasks/${encodeURIComponent(taskId)}`), aiRequestConfig(config, undefined, undefined, "image"))).data;
+        if (task.status === "succeeded") return task;
+        if (task.status === "failed") throw new Error(readImageTaskError(task.error) || "图片生成失败");
+        if (attempt === NEW_API_IMAGE_TASK_MAX_ATTEMPTS - 1) throw new Error("图片生成超时，请稍后重试");
+        await delay(NEW_API_IMAGE_TASK_POLL_INTERVAL_MS);
+    }
+    throw new Error("图片生成超时，请稍后重试");
+}
+
+function readImageTaskError(error: ImageTaskResponse["error"]) {
+    if (typeof error === "string") return error;
+    return error?.message || "";
+}
+
+function delay(ms: number) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], mask?: ReferenceImage) {
