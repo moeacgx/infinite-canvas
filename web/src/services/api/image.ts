@@ -238,7 +238,7 @@ function withSystemMessage(config: AiConfig, messages: ChatCompletionMessage[]) 
 }
 
 export async function requestGeneration(config: AiConfig, prompt: string) {
-    const model = resolveCapabilityModel(config, "image", config.model);
+    const model = resolveCapabilityModel(config, "image");
     assertImageModel(model);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const quality = normalizeQuality(config.quality);
@@ -303,7 +303,7 @@ function delay(ms: number) {
 }
 
 export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], mask?: ReferenceImage) {
-    const model = resolveCapabilityModel(config, "image", config.model);
+    const model = resolveCapabilityModel(config, "image");
     assertImageModel(model);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const quality = normalizeQuality(config.quality);

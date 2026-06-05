@@ -104,8 +104,9 @@ test("image and chat requests reject empty models before calling New API", () =>
 test("image generation and edits use the selected image model instead of stale generic model", () => {
     assert.match(source, /export function resolveCapabilityModel/);
     assert.match(imageSource, /resolveCapabilityModel/);
-    assert.match(imageSource, /requestGeneration[\s\S]*const model = resolveCapabilityModel\(config,\s*"image",\s*config\.model\)[\s\S]*assertImageModel\(model\)[\s\S]*model,/);
-    assert.match(imageSource, /requestEdit[\s\S]*const model = resolveCapabilityModel\(config,\s*"image",\s*config\.model\)[\s\S]*assertImageModel\(model\)[\s\S]*formData\.set\("model",\s*model\)/);
+    assert.match(imageSource, /requestGeneration[\s\S]*const model = resolveCapabilityModel\(config,\s*"image"\)[\s\S]*assertImageModel\(model\)[\s\S]*model,/);
+    assert.match(imageSource, /requestEdit[\s\S]*const model = resolveCapabilityModel\(config,\s*"image"\)[\s\S]*assertImageModel\(model\)[\s\S]*formData\.set\("model",\s*model\)/);
+    assert.doesNotMatch(imageSource, /resolveCapabilityModel\(config,\s*"image",\s*config\.model\)/);
     assert.doesNotMatch(imageSource, /requestGeneration[\s\S]{0,500}model:\s*config\.model/);
     assert.doesNotMatch(imageSource, /requestEdit[\s\S]{0,500}formData\.set\("model",\s*config\.model\)/);
 });
