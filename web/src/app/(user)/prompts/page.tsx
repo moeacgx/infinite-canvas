@@ -1,7 +1,7 @@
 "use client";
 
 import { FolderPlus, Search } from "lucide-react";
-import { type UIEvent, useEffect, useState } from "react";
+import { type UIEvent, useEffect, useRef, useState } from "react";
 import { App, Button, Empty, Input, Spin, Tag } from "antd";
 
 import { PromptCard } from "@/components/prompts/prompt-card";
@@ -21,6 +21,8 @@ export default function PromptsPage() {
     const addAsset = useAssetStore((state) => state.addAsset);
     const copyText = useCopyText();
     const { query, items: promptItems, tags: promptTags, categories: promptCategoryOptions, total: totalPrompts } = usePromptList({ keyword: titleKeyword, tags: selectedTags, category: selectedCategory });
+    const lastScrollTop = useRef(0);
+    const [filtersCollapsed, setFiltersCollapsed] = useState(false);
 
     useEffect(() => {
         if (query.isError) {
@@ -40,7 +42,13 @@ export default function PromptsPage() {
 
     const handleListScroll = (event: UIEvent<HTMLDivElement>) => {
         const target = event.currentTarget;
-        if (query.hasNextPage && !query.isFetchingNextPage && target.scrollTop + target.clientHeight >= target.scrollHeight - 160) {
+        const scrollTop = target.scrollTop;
+        const delta = scrollTop - lastScrollTop.current;
+        if (delta > 10) setFiltersCollapsed(true);
+        else if (delta < -10) setFiltersCollapsed(false);
+        if (scrollTop < 50) setFiltersCollapsed(false);
+        lastScrollTop.current = scrollTop;
+        if (query.hasNextPage && !query.isFetchingNextPage && scrollTop + target.clientHeight >= target.scrollHeight - 160) {
             void query.fetchNextPage();
         }
     };
@@ -66,7 +74,7 @@ export default function PromptsPage() {
                             <div className="mx-auto mt-8 w-full max-w-2xl">
                                 <Input size="large" className="w-full" prefix={<Search className="size-4 text-stone-400" />} value={titleKeyword} placeholder="按标题查询" onChange={(event) => setTitleKeyword(event.target.value)} />
                             </div>
-                            <div className="mx-auto mt-6 grid max-w-6xl gap-3 text-left">
+                            <div className={cn("mx-auto mt-6 grid max-w-6xl gap-3 text-left overflow-hidden transition-all duration-300", filtersCollapsed ? "max-h-0 opacity-0 mt-0" : "max-h-[600px] opacity-100")}>
                                 <div className="grid gap-2 sm:grid-cols-[56px_minmax(0,1fr)] sm:items-start">
                                     <div className="pt-2 text-xs font-medium text-stone-500 dark:text-stone-400">分类</div>
                                     <div className="flex flex-wrap gap-2">

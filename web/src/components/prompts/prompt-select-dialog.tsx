@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, Search } from "lucide-react";
-import { type UIEvent, useEffect, useState } from "react";
+import { type UIEvent, useEffect, useRef, useState } from "react";
 import { App, Empty, Input, Modal, Spin, Tag } from "antd";
 
 import { ALL_PROMPTS_OPTION } from "@/services/api/prompts";
@@ -15,6 +15,8 @@ export function PromptSelectDialog({ open, onOpenChange, onSelect }: { open: boo
     const [selectedTags, setSelectedTags] = useState<string[]>([]);
     const [selectedCategory, setSelectedCategory] = useState(ALL_PROMPTS_OPTION);
     const { query, items, tags: promptTags, categories: promptCategories } = usePromptList({ keyword, tags: selectedTags, category: selectedCategory, enabled: open });
+    const lastScrollTop = useRef(0);
+    const [filtersCollapsed, setFiltersCollapsed] = useState(false);
     const toggleTag = (tag: string) => {
         if (tag === ALL_PROMPTS_OPTION) return setSelectedTags([]);
         setSelectedTags((items) => (items.includes(tag) ? items.filter((item) => item !== tag) : [...items, tag]));
@@ -30,7 +32,13 @@ export function PromptSelectDialog({ open, onOpenChange, onSelect }: { open: boo
 
     const handleListScroll = (event: UIEvent<HTMLDivElement>) => {
         const target = event.currentTarget;
-        if (query.hasNextPage && !query.isFetchingNextPage && target.scrollTop + target.clientHeight >= target.scrollHeight - 160) void query.fetchNextPage();
+        const scrollTop = target.scrollTop;
+        const delta = scrollTop - lastScrollTop.current;
+        if (delta > 10) setFiltersCollapsed(true);
+        else if (delta < -10) setFiltersCollapsed(false);
+        if (scrollTop < 50) setFiltersCollapsed(false);
+        lastScrollTop.current = scrollTop;
+        if (query.hasNextPage && !query.isFetchingNextPage && scrollTop + target.clientHeight >= target.scrollHeight - 160) void query.fetchNextPage();
     };
 
     return (
@@ -39,7 +47,7 @@ export function PromptSelectDialog({ open, onOpenChange, onSelect }: { open: boo
                 <div className="mx-auto max-w-2xl">
                     <Input size="large" prefix={<Search className="size-4 text-stone-400" />} value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="按标题查询" />
                 </div>
-                <div className="mt-5 grid gap-3">
+                <div className={cn("mt-5 grid gap-3 overflow-hidden transition-all duration-300", filtersCollapsed ? "max-h-0 opacity-0 mt-0" : "max-h-[600px] opacity-100")}>
                     <div className="grid gap-2 sm:grid-cols-[56px_minmax(0,1fr)] sm:items-start">
                         <div className="pt-2 text-xs font-medium text-stone-500 dark:text-stone-400">分类</div>
                         <div className="flex flex-wrap gap-2">
