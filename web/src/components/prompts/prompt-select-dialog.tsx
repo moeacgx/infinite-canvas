@@ -70,9 +70,11 @@ export function PromptSelectDialog({ open, onOpenChange, onSelect }: { open: boo
                             <Spin />
                         </div>
                     ) : null}
-                    <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+                    <div className="columns-1 gap-5 sm:columns-2 lg:columns-3">
                         {items.map((item) => (
-                            <PromptCard key={item.id} item={item} onOpen={() => selectPrompt(item.prompt)} onCopy={() => selectPrompt(item.prompt)} actionLabel="使用此提示词" actionIcon={<Check className="size-3.5" />} actionType="primary" />
+                            <div key={item.id} className="mb-5 break-inside-avoid">
+                                <PromptCard item={item} onOpen={() => selectPrompt(item.prompt)} onCopy={() => selectPrompt(item.prompt)} actionLabel="使用此提示词" actionIcon={<Check className="size-3.5" />} actionType="primary" />
+                            </div>
                         ))}
                     </div>
                     {!query.isLoading && items.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有找到匹配的提示词" className="py-8" /> : null}

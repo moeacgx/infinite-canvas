@@ -99,19 +99,20 @@ export default function PromptsPage() {
 
                 {!query.isLoading ? (
                     <div>
-                        <div className="mx-auto grid max-w-7xl gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                        <div className="mx-auto max-w-7xl columns-1 gap-5 sm:columns-2 xl:columns-3 2xl:columns-4">
                             {promptItems.map((item) => (
-                                <PromptCard
-                                    key={item.id}
-                                    item={item}
-                                    onOpen={() => setSelectedPrompt(item)}
-                                    onCopy={() => copyText(item.prompt, "提示词已复制")}
-                                    extraAction={
-                                        <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => savePromptAsset(item)}>
-                                            加入我的素材
-                                        </Button>
-                                    }
-                                />
+                                <div key={item.id} className="mb-5 break-inside-avoid">
+                                    <PromptCard
+                                        item={item}
+                                        onOpen={() => setSelectedPrompt(item)}
+                                        onCopy={() => copyText(item.prompt, "提示词已复制")}
+                                        extraAction={
+                                            <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => savePromptAsset(item)}>
+                                                加入我的素材
+                                            </Button>
+                                        }
+                                    />
+                                </div>
                             ))}
                         </div>
                         {promptItems.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有找到匹配的提示词" className="py-16" /> : null}
