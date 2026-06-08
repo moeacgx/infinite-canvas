@@ -50,20 +50,24 @@ type davidWuGptImage2Prompt struct {
 }
 
 func SyncPromptCategory(category string) ([]model.PromptCategory, error) {
-	for _, item := range repository.PromptCategories() {
-		if item.Category != category {
-			continue
-		}
-		items, err := buildPromptCategory(item.Category)
-		if err != nil {
-			return nil, err
-		}
-		if err := repository.ReplacePromptCategory(item, items); err != nil {
-			return nil, err
-		}
-		return repository.ListPromptCategories()
+	item, found, err := repository.GetPromptCategoryByCode(category)
+	if err != nil {
+		return nil, err
 	}
-	return nil, errors.New("未知提示词分类")
+	if !found {
+		return nil, errors.New("未知提示词分类")
+	}
+	if !item.Remote {
+		return nil, errors.New("该分类不支持远程同步")
+	}
+	items, err := buildPromptCategory(item.Category)
+	if err != nil {
+		return nil, err
+	}
+	if err := repository.ReplacePromptCategory(item, items); err != nil {
+		return nil, err
+	}
+	return repository.ListPromptCategories()
 }
 
 func buildPromptCategory(category string) ([]model.Prompt, error) {

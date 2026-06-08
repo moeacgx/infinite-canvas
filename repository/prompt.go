@@ -7,26 +7,71 @@ import (
 	"gorm.io/gorm"
 )
 
-// PromptCategories 返回内置提示词分类的副本。
-func PromptCategories() []model.PromptCategory {
-	result := make([]model.PromptCategory, len(promptCategories))
-	copy(result, promptCategories)
+// DefaultPromptCategories 返回内置提示词分类的副本，仅用于种子数据。
+func DefaultPromptCategories() []model.PromptCategory {
+	result := make([]model.PromptCategory, len(defaultPromptCategories))
+	copy(result, defaultPromptCategories)
 	return result
 }
 
-// PromptCategoryByCode 根据分类编码查找内置提示词分类。
-func PromptCategoryByCode(category string) (model.PromptCategory, bool) {
-	for _, item := range promptCategories {
-		if item.Category == category {
-			return item, true
-		}
+// GetPromptCategoryByCode 根据分类编码从数据库查找提示词分类。
+func GetPromptCategoryByCode(category string) (model.PromptCategory, bool, error) {
+	db, err := DB()
+	if err != nil {
+		return model.PromptCategory{}, false, err
 	}
-	return model.PromptCategory{}, false
+	var item model.PromptCategory
+	if err := db.Where("category = ?", category).First(&item).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return model.PromptCategory{}, false, nil
+		}
+		return model.PromptCategory{}, false, err
+	}
+	return item, true, nil
 }
 
-// ListPromptCategories 返回内置提示词分类。
+// ListPromptCategories 从数据库返回全部提示词分类。
 func ListPromptCategories() ([]model.PromptCategory, error) {
-	return PromptCategories(), nil
+	db, err := DB()
+	if err != nil {
+		return nil, err
+	}
+	var items []model.PromptCategory
+	if err := db.Order("updated_at asc").Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+// SavePromptCategory 保存提示词分类。
+func SavePromptCategory(item model.PromptCategory) error {
+	db, err := DB()
+	if err != nil {
+		return err
+	}
+	return db.Save(&item).Error
+}
+
+// DeletePromptCategory 删除指定提示词分类。
+func DeletePromptCategory(category string) error {
+	db, err := DB()
+	if err != nil {
+		return err
+	}
+	return db.Delete(&model.PromptCategory{}, "category = ?", category).Error
+}
+
+// CountPromptsByCategory 统计指定分类下的提示词数量。
+func CountPromptsByCategory(category string) (int64, error) {
+	db, err := DB()
+	if err != nil {
+		return 0, err
+	}
+	var count int64
+	if err := db.Model(&model.Prompt{}).Where("category = ?", category).Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 // ListPrompts 按查询条件返回提示词分页列表。

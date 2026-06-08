@@ -1,6 +1,6 @@
 "use client";
 
-import { FileTextOutlined, HomeOutlined, LogoutOutlined, PictureOutlined, SettingOutlined, TransactionOutlined, UserOutlined } from "@ant-design/icons";
+import { AppstoreOutlined, FileTextOutlined, HomeOutlined, LogoutOutlined, PictureOutlined, SettingOutlined, TransactionOutlined, UserOutlined } from "@ant-design/icons";
 import { Button, Flex, Layout, Menu, Typography, theme } from "antd";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -15,6 +15,7 @@ const adminMenus = [
     { key: "/admin/users", icon: <UserOutlined />, label: "用户管理" },
     { key: "/admin/credit-logs", icon: <TransactionOutlined />, label: "算力点日志" },
     { key: "/admin/prompts", icon: <FileTextOutlined />, label: "提示词管理" },
+    { key: "/admin/prompt-categories", icon: <AppstoreOutlined />, label: "分类管理" },
     { key: "/admin/assets", icon: <PictureOutlined />, label: "素材库" },
     { key: "/admin/settings", icon: <SettingOutlined />, label: "系统设置" },
 ];
@@ -31,14 +32,16 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
         ? "/admin/settings"
         : pathname.startsWith("/admin/assets")
           ? "/admin/assets"
-          : pathname.startsWith("/admin/prompts")
-            ? "/admin/prompts"
-            : pathname.startsWith("/admin/credit-logs")
-              ? "/admin/credit-logs"
-              : pathname.startsWith("/admin/users")
-                ? "/admin/users"
-                : "";
-    const pageTitle = pathname.startsWith("/admin/settings") ? "系统设置" : pathname.startsWith("/admin/assets") ? "素材库管理" : pathname.startsWith("/admin/prompts") ? "提示词管理" : pathname.startsWith("/admin/credit-logs") ? "算力点日志" : "用户管理";
+          : pathname.startsWith("/admin/prompt-categories")
+            ? "/admin/prompt-categories"
+            : pathname.startsWith("/admin/prompts")
+              ? "/admin/prompts"
+              : pathname.startsWith("/admin/credit-logs")
+                ? "/admin/credit-logs"
+                : pathname.startsWith("/admin/users")
+                  ? "/admin/users"
+                  : "";
+    const pageTitle = pathname.startsWith("/admin/settings") ? "系统设置" : pathname.startsWith("/admin/assets") ? "素材库管理" : pathname.startsWith("/admin/prompt-categories") ? "分类管理" : pathname.startsWith("/admin/prompts") ? "提示词管理" : pathname.startsWith("/admin/credit-logs") ? "算力点日志" : "用户管理";
 
     useEffect(() => {
         if (!isReady) return;

@@ -8,6 +8,7 @@ export type AdminPromptCategory = {
     file: string;
     githubUrl: string;
     remote: boolean;
+    updatedAt: string;
 };
 
 export type AdminUser = {
@@ -90,6 +91,14 @@ export async function fetchAdminPromptCategories(token: string) {
 
 export async function syncAdminPromptCategory(token: string, category: string) {
     return apiPost<AdminPromptCategory[]>("/api/admin/prompt-categories/sync", { category }, token);
+}
+
+export async function saveAdminPromptCategory(token: string, category: Partial<AdminPromptCategory>) {
+    return apiPost<AdminPromptCategory>("/api/admin/prompt-categories", category, token);
+}
+
+export async function deleteAdminPromptCategory(token: string, category: string) {
+    return apiDelete<boolean>(`/api/admin/prompt-categories/${encodeURIComponent(category)}`, token);
 }
 
 export type AdminPromptQuery = {

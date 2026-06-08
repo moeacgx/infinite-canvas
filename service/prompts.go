@@ -27,18 +27,22 @@ func ListPromptCategories() []model.PromptCategory {
 
 func SavePrompt(item model.Prompt) (model.Prompt, error) {
 	now := time.Now().Format(time.RFC3339)
+	categories := ListPromptCategories()
+	defaultCategory := ""
+	if len(categories) > 0 {
+		defaultCategory = categories[0].Category
+	}
 	if item.Category == "" {
-		item.Category = repository.PromptCategories()[0].Category
+		item.Category = defaultCategory
 	}
 	if item.ID == "" {
 		item.ID = newID(item.Category)
 		item.CreatedAt = now
 	}
 	item.UpdatedAt = now
-	category, ok := repository.PromptCategoryByCode(item.Category)
-	if !ok {
-		category = repository.PromptCategories()[0]
-		item.Category = category.Category
+	_, found, _ := repository.GetPromptCategoryByCode(item.Category)
+	if !found && defaultCategory != "" {
+		item.Category = defaultCategory
 	}
 	item.GithubURL = ""
 	return repository.SavePrompt(item)

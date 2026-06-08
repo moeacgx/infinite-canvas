@@ -49,7 +49,12 @@ func RefreshPromptSyncScheduler() {
 }
 
 func SyncRemotePromptCategories() {
-	for _, category := range repository.PromptCategories() {
+	categories, err := repository.ListPromptCategories()
+	if err != nil {
+		log.Printf("scheduled prompt sync list failed err=%v", err)
+		return
+	}
+	for _, category := range categories {
 		if !category.Remote {
 			continue
 		}

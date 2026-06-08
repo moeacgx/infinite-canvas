@@ -72,3 +72,22 @@ func AdminSyncPromptCategories(w http.ResponseWriter, r *http.Request) {
 	log.Printf("sync prompt category done category=%s", request.Category)
 	OK(w, categories)
 }
+
+func AdminSavePromptCategory(w http.ResponseWriter, r *http.Request) {
+	var item model.PromptCategory
+	_ = json.NewDecoder(r.Body).Decode(&item)
+	result, err := service.SavePromptCategory(item)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, result)
+}
+
+func AdminDeletePromptCategory(w http.ResponseWriter, r *http.Request, category string) {
+	if err := service.DeletePromptCategory(category); err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, true)
+}

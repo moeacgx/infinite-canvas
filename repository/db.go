@@ -20,7 +20,7 @@ import (
 	"gorm.io/gorm"
 )
 
-var promptCategories = []model.PromptCategory{
+var defaultPromptCategories = []model.PromptCategory{
 	{Category: "system", Name: "系统", Description: "系统提示词分类"},
 	{Category: "gpt-image-2-prompts", Name: "GPT Image 2 Prompts", Description: "EvoLinkAI 的 GPT Image 2 案例提示词分类", GithubURL: "https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts", Remote: true},
 	{Category: "awesome-gpt-image", Name: "Awesome GPT Image", Description: "ZeroLu 的中文 GPT Image 提示词分类", GithubURL: "https://github.com/ZeroLu/awesome-gpt-image", Remote: true},
@@ -67,6 +67,7 @@ func DB() (*gorm.DB, error) {
 			&model.User{},
 			&model.CreditLog{},
 			&model.Prompt{},
+			&model.PromptCategory{},
 			&model.Asset{},
 			&model.Setting{},
 		)
