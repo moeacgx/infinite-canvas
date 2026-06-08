@@ -14,12 +14,18 @@ type Prompt struct {
 	UpdatedAt string   `json:"updatedAt"`
 }
 
+// PromptCategoryOption 提示词分类选项（公开接口用）。
+type PromptCategoryOption struct {
+	Category string `json:"category"`
+	Name     string `json:"name"`
+}
+
 // PromptList 提示词分页结果。
 type PromptList struct {
-	Items      []Prompt `json:"items"`
-	Tags       []string `json:"tags"`
-	Categories []string `json:"categories"`
-	Total      int      `json:"total"`
+	Items      []Prompt               `json:"items"`
+	Tags       []string               `json:"tags"`
+	Categories []PromptCategoryOption  `json:"categories"`
+	Total      int                    `json:"total"`
 }
 
 // PromptCategory 提示词分类。

@@ -43,9 +43,9 @@ export function PromptSelectDialog({ open, onOpenChange, onSelect }: { open: boo
                     <div className="grid gap-2 sm:grid-cols-[56px_minmax(0,1fr)] sm:items-start">
                         <div className="pt-2 text-xs font-medium text-stone-500 dark:text-stone-400">分类</div>
                         <div className="flex flex-wrap gap-2">
-                            {promptCategories.map((category) => (
-                                <Tag.CheckableTag key={category} checked={selectedCategory === category} className={cn("prompt-filter-tag", selectedCategory === category && "is-active")} onChange={() => setSelectedCategory(category)}>
-                                    {category}
+                            {promptCategories.map((item) => (
+                                <Tag.CheckableTag key={item.category} checked={selectedCategory === item.category} className={cn("prompt-filter-tag", selectedCategory === item.category && "is-active")} onChange={() => setSelectedCategory(item.category)}>
+                                    {item.name}
                                 </Tag.CheckableTag>
                             ))}
                         </div>

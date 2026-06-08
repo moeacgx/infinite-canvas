@@ -15,10 +15,15 @@ export type Prompt = {
 
 export const ALL_PROMPTS_OPTION = "全部";
 
+export type PromptCategoryOption = {
+    category: string;
+    name: string;
+};
+
 export type PromptListResponse = {
     items: Prompt[];
     tags: string[];
-    categories: string[];
+    categories: PromptCategoryOption[];
     total: number;
 };
 

@@ -3,9 +3,11 @@
 import { useMemo } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 
-import { ALL_PROMPTS_OPTION, fetchPrompts } from "@/services/api/prompts";
+import { ALL_PROMPTS_OPTION, fetchPrompts, type PromptCategoryOption } from "@/services/api/prompts";
 
 export const PROMPT_PAGE_SIZE = 20;
+
+const ALL_CATEGORY_OPTION: PromptCategoryOption = { category: ALL_PROMPTS_OPTION, name: "全部" };
 
 export function usePromptList({ keyword, tags, category, enabled = true }: { keyword: string; tags: string[]; category: string; enabled?: boolean }) {
     const query = useInfiniteQuery({
@@ -20,7 +22,7 @@ export function usePromptList({ keyword, tags, category, enabled = true }: { key
         query,
         items: useMemo(() => query.data?.pages.flatMap((page) => page.items) || [], [query.data?.pages]),
         tags: useMemo(() => [ALL_PROMPTS_OPTION, ...(firstPage?.tags || [])], [firstPage?.tags]),
-        categories: useMemo(() => [ALL_PROMPTS_OPTION, ...(firstPage?.categories || [])], [firstPage?.categories]),
+        categories: useMemo(() => [ALL_CATEGORY_OPTION, ...(firstPage?.categories || [])], [firstPage?.categories]),
         total: firstPage?.total || 0,
     };
 }
