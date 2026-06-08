@@ -49,9 +49,19 @@ func AdminDeletePromptSkill(w http.ResponseWriter, r *http.Request, id string) {
 	OK(w, true)
 }
 
-// AdminSyncOpenDesignSkills 从 OpenDesign 仓库同步技能预设。
-func AdminSyncOpenDesignSkills(w http.ResponseWriter, r *http.Request) {
-	count, err := service.SyncOpenDesignSkills()
+// AdminSyncSkillRepo 从自定义 GitHub 仓库同步技能预设。
+func AdminSyncSkillRepo(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		RepoURL    string `json:"repoUrl"`
+		Branch     string `json:"branch"`
+		SkillsPath string `json:"skillsPath"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&request)
+	if request.RepoURL == "" {
+		Fail(w, "请输入 GitHub 仓库 URL")
+		return
+	}
+	count, err := service.SyncSkillRepo(request.RepoURL, request.Branch, request.SkillsPath)
 	if err != nil {
 		FailError(w, err)
 		return

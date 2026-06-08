@@ -96,6 +96,22 @@ export const useChatStore = create<ChatStore>()(
                     ),
                 })),
         }),
-        { name: "infinite-canvas:chat_store" }
+        {
+            name: "infinite-canvas:chat_store",
+            partialize: (state) => ({
+                ...state,
+                // Strip skillResults (base64 images) before persisting to avoid localStorage overflow
+                sessions: state.sessions.map((s) => ({
+                    ...s,
+                    messages: s.messages.map((m) => {
+                        if (m.skillResults?.length) {
+                            const { skillResults, ...rest } = m;
+                            return rest;
+                        }
+                        return m;
+                    }),
+                })),
+            }),
+        }
     )
 );

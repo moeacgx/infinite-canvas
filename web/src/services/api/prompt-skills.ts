@@ -33,6 +33,6 @@ export async function deleteAdminPromptSkill(token: string, id: string) {
     return apiDelete<boolean>(`/api/admin/prompt-skills/${encodeURIComponent(id)}`, token);
 }
 
-export async function syncOpenDesignSkills(token: string) {
-    return apiPost<{ synced: number }>("/api/admin/prompt-skills/sync-opendesign", {}, token);
+export async function syncSkillRepo(token: string, repoUrl: string, branch?: string, skillsPath?: string) {
+    return apiPost<{ synced: number }>("/api/admin/prompt-skills/sync", { repoUrl, branch, skillsPath }, token);
 }

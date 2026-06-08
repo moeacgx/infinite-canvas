@@ -66,8 +66,22 @@ export function ChatMessage({
     const isUser = message.role === "user";
     const isTool = message.role === "tool";
 
-    // Don't render tool messages as separate bubbles - their results are shown on the assistant message
-    if (isTool) return null;
+    // Tool messages only render if they have skill results (images/video/audio)
+    if (isTool && !message.skillResults?.length) return null;
+
+    // Tool messages render as a standalone result block (no avatar/bubble)
+    if (isTool && message.skillResults?.length) {
+        return (
+            <div className="flex gap-3">
+                <div className="size-8 shrink-0" />
+                <div className="min-w-0 max-w-[75%]">
+                    {message.skillResults.map((result, i) => (
+                        <SkillResultView key={i} result={result} />
+                    ))}
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : ""}`}>

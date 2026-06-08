@@ -6,7 +6,7 @@ import { App, Button, Flex, Form, Input, Modal, Space, Tag, Tooltip, Typography 
 import { useEffect, useState } from "react";
 
 import type { PromptSkill } from "@/services/api/prompt-skills";
-import { syncOpenDesignSkills } from "@/services/api/prompt-skills";
+import { syncSkillRepo } from "@/services/api/prompt-skills";
 import { useAdminPromptSkills } from "./use-admin-prompt-skills";
 
 export default function AdminPromptSkillsPage() {
@@ -16,14 +16,18 @@ export default function AdminPromptSkillsPage() {
     const [editingSkill, setEditingSkill] = useState<Partial<PromptSkill> | null>(null);
     const [deletingSkill, setDeletingSkill] = useState<PromptSkill | null>(null);
     const [isSyncing, setIsSyncing] = useState(false);
+    const [isSyncOpen, setIsSyncOpen] = useState(false);
+    const [syncForm] = Form.useForm<{ repoUrl: string; branch: string; skillsPath: string }>();
 
-    const handleSyncOpenDesign = async () => {
+    const handleSync = async () => {
+        const values = await syncForm.validateFields();
         setIsSyncing(true);
         try {
             const token = (await import("@/stores/use-user-store")).useUserStore.getState().token;
-            const result = await syncOpenDesignSkills(token);
-            message.success(`已从 OpenDesign 同步 ${result.synced} 个技能`);
+            const result = await syncSkillRepo(token, values.repoUrl, values.branch, values.skillsPath);
+            message.success(`已同步 ${result.synced} 个技能`);
             await refreshSkills();
+            setIsSyncOpen(false);
         } catch (error) {
             message.error(error instanceof Error ? error.message : "同步失败");
         } finally {
@@ -129,8 +133,8 @@ export default function AdminPromptSkillsPage() {
                     }
                     options={{ density: true, setting: true, reload: () => void refreshSkills() }}
                     toolBarRender={() => [
-                        <Button key="sync" icon={<CloudDownloadOutlined />} loading={isSyncing} onClick={() => void handleSyncOpenDesign()}>
-                            同步 OpenDesign
+                        <Button key="sync" icon={<CloudDownloadOutlined />} onClick={() => setIsSyncOpen(true)}>
+                            从 GitHub 同步
                         </Button>,
                         <Button key="add" type="primary" icon={<PlusOutlined />} onClick={() => setEditingSkill({ icon: "🎨" })}>
                             新增
@@ -201,6 +205,25 @@ export default function AdminPromptSkillsPage() {
                 cancelText="取消"
             >
                 确定删除「{deletingSkill?.name}」吗？删除后用户将无法使用此技能预设。
+            </Modal>
+
+            <Modal title="从 GitHub 仓库同步 Skills" open={isSyncOpen} onCancel={() => !isSyncing && setIsSyncOpen(false)} onOk={() => void handleSync()} okText="开始同步" okButtonProps={{ loading: isSyncing }} cancelText="取消" destroyOnHidden width={600}>
+                <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+                    输入任意 GitHub 仓库地址，系统会自动拉取其 skills 目录下的所有 SKILL.md 文件并导入。支持 OpenDesign、GPT-Image-2-Skill 等开源 skill 仓库。
+                </Typography.Paragraph>
+                <Form form={syncForm} layout="vertical" requiredMark={false} initialValues={{ repoUrl: "https://github.com/nexu-io/open-design", branch: "main", skillsPath: "skills" }}>
+                    <Form.Item name="repoUrl" label="仓库地址" rules={[{ required: true, message: "请输入 GitHub 仓库 URL" }]}>
+                        <Input placeholder="https://github.com/owner/repo" />
+                    </Form.Item>
+                    <Flex gap={16}>
+                        <Form.Item name="branch" label="分支" style={{ flex: 1 }}>
+                            <Input placeholder="main" />
+                        </Form.Item>
+                        <Form.Item name="skillsPath" label="Skills 目录路径" style={{ flex: 1 }}>
+                            <Input placeholder="skills" />
+                        </Form.Item>
+                    </Flex>
+                </Form>
             </Modal>
         </main>
     );

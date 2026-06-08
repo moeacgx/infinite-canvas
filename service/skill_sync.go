@@ -13,44 +13,80 @@ import (
 	"github.com/basketikun/infinite-canvas/repository"
 )
 
-const (
-	openDesignContentsURL = "https://api.github.com/repos/nexu-io/open-design/contents/skills"
-	openDesignRawBase     = "https://raw.githubusercontent.com/nexu-io/open-design/main/skills"
-)
-
 type githubContent struct {
 	Name string `json:"name"`
 	Type string `json:"type"`
 }
 
-// SyncOpenDesignSkills 从 OpenDesign GitHub 仓库同步所有技能预设。
-func SyncOpenDesignSkills() (int, error) {
-	dirs, err := fetchSkillDirectories()
+// SyncSkillRepo 从任意 GitHub 仓库的 skills 目录同步技能预设。
+// repoURL 格式: https://github.com/owner/repo
+// branch: 分支名，默认 "main"
+// skillsPath: skills 目录路径，默认 "skills"
+func SyncSkillRepo(repoURL, branch, skillsPath string) (int, error) {
+	repoURL = strings.TrimRight(strings.TrimSpace(repoURL), "/")
+	if branch == "" {
+		branch = "main"
+	}
+	if skillsPath == "" {
+		skillsPath = "skills"
+	}
+	// 从 URL 提取 owner/repo
+	ownerRepo := extractOwnerRepo(repoURL)
+	if ownerRepo == "" {
+		return 0, fmt.Errorf("无效的 GitHub 仓库 URL: %s", repoURL)
+	}
+	// 生成唯一前缀，用于 skill ID
+	prefix := repoSlug(ownerRepo)
+
+	contentsURL := fmt.Sprintf("https://api.github.com/repos/%s/contents/%s?ref=%s", ownerRepo, skillsPath, branch)
+	rawBase := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s", ownerRepo, branch, skillsPath)
+
+	dirs, err := fetchGithubDirectories(contentsURL)
 	if err != nil {
 		return 0, fmt.Errorf("获取技能目录失败: %w", err)
 	}
-	log.Printf("open-design sync: found %d skill directories", len(dirs))
+	log.Printf("skill-sync [%s]: found %d skill directories", ownerRepo, len(dirs))
 
 	synced := 0
 	for _, dir := range dirs {
-		skill, err := fetchAndParseSkill(dir)
+		skill, err := fetchAndParseSkillMD(rawBase, dir, prefix, ownerRepo)
 		if err != nil {
-			log.Printf("open-design sync: skip %s: %v", dir, err)
+			log.Printf("skill-sync [%s]: skip %s: %v", ownerRepo, dir, err)
 			continue
 		}
 		if _, err := repository.SavePromptSkill(skill); err != nil {
-			log.Printf("open-design sync: save %s failed: %v", dir, err)
+			log.Printf("skill-sync [%s]: save %s failed: %v", ownerRepo, dir, err)
 			continue
 		}
 		synced++
 	}
-	log.Printf("open-design sync: done, synced %d skills", synced)
+	log.Printf("skill-sync [%s]: done, synced %d skills", ownerRepo, synced)
 	return synced, nil
 }
 
-func fetchSkillDirectories() ([]string, error) {
+func extractOwnerRepo(repoURL string) string {
+	// 支持 https://github.com/owner/repo 和 https://github.com/owner/repo.git
+	repoURL = strings.TrimSuffix(repoURL, ".git")
+	for _, prefix := range []string{"https://github.com/", "http://github.com/"} {
+		if strings.HasPrefix(repoURL, prefix) {
+			return strings.TrimPrefix(repoURL, prefix)
+		}
+	}
+	// 也支持直接传 owner/repo
+	parts := strings.Split(repoURL, "/")
+	if len(parts) == 2 {
+		return repoURL
+	}
+	return ""
+}
+
+func repoSlug(ownerRepo string) string {
+	return strings.ReplaceAll(strings.ToLower(ownerRepo), "/", "-")
+}
+
+func fetchGithubDirectories(contentsURL string) ([]string, error) {
 	client := http.Client{Timeout: 30 * time.Second}
-	req, _ := http.NewRequest(http.MethodGet, openDesignContentsURL, nil)
+	req, _ := http.NewRequest(http.MethodGet, contentsURL, nil)
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 	resp, err := client.Do(req)
 	if err != nil {
@@ -73,8 +109,8 @@ func fetchSkillDirectories() ([]string, error) {
 	return dirs, nil
 }
 
-func fetchAndParseSkill(dirName string) (model.PromptSkill, error) {
-	url := openDesignRawBase + "/" + dirName + "/SKILL.md"
+func fetchAndParseSkillMD(rawBase, dirName, prefix, ownerRepo string) (model.PromptSkill, error) {
+	url := rawBase + "/" + dirName + "/SKILL.md"
 	client := http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
@@ -88,11 +124,10 @@ func fetchAndParseSkill(dirName string) (model.PromptSkill, error) {
 	if err != nil {
 		return model.PromptSkill{}, err
 	}
-	return parseSkillMD(dirName, string(data))
+	return parseSkillMD(dirName, string(data), prefix, ownerRepo)
 }
 
-func parseSkillMD(dirName, content string) (model.PromptSkill, error) {
-	// Split frontmatter and body
+func parseSkillMD(dirName, content, prefix, ownerRepo string) (model.PromptSkill, error) {
 	parts := strings.SplitN(content, "---", 3)
 	frontmatter := ""
 	body := content
@@ -101,14 +136,12 @@ func parseSkillMD(dirName, content string) (model.PromptSkill, error) {
 		body = strings.TrimSpace(parts[2])
 	}
 
-	// Parse simple YAML fields from frontmatter
 	name := yamlValue(frontmatter, "name")
 	if name == "" {
 		name = dirName
 	}
 	description := yamlValue(frontmatter, "description")
 	if description == "" {
-		// Try multi-line description (common in YAML)
 		description = yamlMultilineValue(frontmatter, "description")
 	}
 	mode := yamlNestedValue(frontmatter, "od", "mode")
@@ -116,20 +149,21 @@ func parseSkillMD(dirName, content string) (model.PromptSkill, error) {
 	if category == "" {
 		category = mode
 	}
-
-	// Icon based on mode
 	icon := skillModeIcon(mode)
+
+	// 作者显示仓库名
+	author := ownerRepo
 
 	now := time.Now().Format(time.RFC3339)
 
 	return model.PromptSkill{
-		ID:           "od-" + dirName,
+		ID:           prefix + "-" + dirName,
 		Name:         name,
 		Description:  strings.TrimSpace(description),
 		SystemPrompt: body,
 		Icon:         icon,
 		Category:     category,
-		Author:       "OpenDesign",
+		Author:       author,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}, nil
