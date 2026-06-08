@@ -32,3 +32,7 @@ export async function saveAdminPromptSkill(token: string, skill: Partial<PromptS
 export async function deleteAdminPromptSkill(token: string, id: string) {
     return apiDelete<boolean>(`/api/admin/prompt-skills/${encodeURIComponent(id)}`, token);
 }
+
+export async function syncOpenDesignSkills(token: string) {
+    return apiPost<{ synced: number }>("/api/admin/prompt-skills/sync-opendesign", {}, token);
+}

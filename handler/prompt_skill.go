@@ -48,3 +48,13 @@ func AdminDeletePromptSkill(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	OK(w, true)
 }
+
+// AdminSyncOpenDesignSkills 从 OpenDesign 仓库同步技能预设。
+func AdminSyncOpenDesignSkills(w http.ResponseWriter, r *http.Request) {
+	count, err := service.SyncOpenDesignSkills()
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, map[string]int{"synced": count})
+}

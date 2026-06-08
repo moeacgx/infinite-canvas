@@ -79,6 +79,7 @@ func New() *gin.Engine {
 	})
 	admin.GET("/prompt-skills", gin.WrapF(handler.AdminPromptSkills))
 	admin.POST("/prompt-skills", gin.WrapF(handler.AdminSavePromptSkill))
+	admin.POST("/prompt-skills/sync-opendesign", gin.WrapF(handler.AdminSyncOpenDesignSkills))
 	admin.DELETE("/prompt-skills/:id", func(c *gin.Context) {
 		handler.AdminDeletePromptSkill(c.Writer, c.Request, c.Param("id"))
 	})

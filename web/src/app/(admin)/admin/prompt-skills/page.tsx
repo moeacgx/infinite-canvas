@@ -1,18 +1,35 @@
 "use client";
 
-import { DeleteOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
+import { CloudDownloadOutlined, DeleteOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
 import { ProTable, type ProColumns } from "@ant-design/pro-components";
-import { Button, Flex, Form, Input, Modal, Space, Tag, Tooltip, Typography } from "antd";
+import { App, Button, Flex, Form, Input, Modal, Space, Tag, Tooltip, Typography } from "antd";
 import { useEffect, useState } from "react";
 
 import type { PromptSkill } from "@/services/api/prompt-skills";
+import { syncOpenDesignSkills } from "@/services/api/prompt-skills";
 import { useAdminPromptSkills } from "./use-admin-prompt-skills";
 
 export default function AdminPromptSkillsPage() {
+    const { message } = App.useApp();
     const { skills, isLoading, saveSkill, deleteSkill, refreshSkills } = useAdminPromptSkills();
     const [form] = Form.useForm<Partial<PromptSkill>>();
     const [editingSkill, setEditingSkill] = useState<Partial<PromptSkill> | null>(null);
     const [deletingSkill, setDeletingSkill] = useState<PromptSkill | null>(null);
+    const [isSyncing, setIsSyncing] = useState(false);
+
+    const handleSyncOpenDesign = async () => {
+        setIsSyncing(true);
+        try {
+            const token = (await import("@/stores/use-user-store")).useUserStore.getState().token;
+            const result = await syncOpenDesignSkills(token);
+            message.success(`已从 OpenDesign 同步 ${result.synced} 个技能`);
+            await refreshSkills();
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "同步失败");
+        } finally {
+            setIsSyncing(false);
+        }
+    };
 
     useEffect(() => {
         if (editingSkill) form.setFieldsValue(editingSkill);
@@ -112,6 +129,9 @@ export default function AdminPromptSkillsPage() {
                     }
                     options={{ density: true, setting: true, reload: () => void refreshSkills() }}
                     toolBarRender={() => [
+                        <Button key="sync" icon={<CloudDownloadOutlined />} loading={isSyncing} onClick={() => void handleSyncOpenDesign()}>
+                            同步 OpenDesign
+                        </Button>,
                         <Button key="add" type="primary" icon={<PlusOutlined />} onClick={() => setEditingSkill({ icon: "🎨" })}>
                             新增
                         </Button>,
