@@ -38,7 +38,7 @@ func SyncOpenDesignSkills() (int, error) {
 			log.Printf("open-design sync: skip %s: %v", dir, err)
 			continue
 		}
-		if err := repository.SavePromptSkill(skill); err != nil {
+		if _, err := repository.SavePromptSkill(skill); err != nil {
 			log.Printf("open-design sync: save %s failed: %v", dir, err)
 			continue
 		}
