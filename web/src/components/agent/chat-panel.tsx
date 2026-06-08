@@ -136,26 +136,9 @@ export function ChatPanel() {
                     onMessageCreate: (msg) => addMessage(sessionId, msg),
                     onMessageUpdate: (id, updates) =>
                         updateMessage(sessionId, id, updates),
-                    onSkillStart: (messageId, name) =>
+                    onSkillExecuting: (messageId, name) =>
                         setExecutingSkill({ messageId, name }),
-                    onSkillComplete: (messageId, _name, result) => {
-                        setExecutingSkill(null);
-                        // Attach skill result to the assistant message that triggered it
-                        const latestSession = useChatStore
-                            .getState()
-                            .sessions.find((s) => s.id === sessionId);
-                        const assistantMsg = latestSession?.messages.find(
-                            (m) => m.id === messageId
-                        );
-                        if (assistantMsg) {
-                            updateMessage(sessionId, messageId, {
-                                skillResults: [
-                                    ...(assistantMsg.skillResults || []),
-                                    result,
-                                ],
-                            });
-                        }
-                    },
+                    onSkillDone: () => setExecutingSkill(null),
                 },
                 controller.signal
             );

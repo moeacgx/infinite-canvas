@@ -21,8 +21,8 @@ export type AgentMessage = {
 export type AgentCallbacks = {
     onMessageCreate: (msg: AgentMessage) => void;
     onMessageUpdate: (id: string, updates: Partial<AgentMessage>) => void;
-    onSkillStart: (messageId: string, skillName: string, args: Record<string, unknown>) => void;
-    onSkillComplete: (messageId: string, skillName: string, result: SkillResult) => void;
+    onSkillExecuting: (messageId: string, skillName: string) => void;
+    onSkillDone: (messageId: string) => void;
 };
 
 const MAX_TOOL_ROUNDS = 5;
@@ -99,11 +99,13 @@ export async function runAgent(
                 /* use empty */
             }
 
-            callbacks.onSkillStart(assistantId, tc.name, args);
-            const skillResult = await executeSkill(config, tc.name, args);
-            callbacks.onSkillComplete(assistantId, tc.name, skillResult);
+            // Notify UI: skill is executing
+            callbacks.onSkillExecuting(assistantId, tc.name);
 
-            // Build tool result message
+            // Execute the skill
+            const skillResult = await executeSkill(config, tc.name, args);
+
+            // Build tool result message WITH the skill result embedded
             const toolResultContent =
                 skillResult.type === "error"
                     ? `错误: ${skillResult.error}`
@@ -115,6 +117,7 @@ export async function runAgent(
                           ? "音频已成功生成。"
                           : "技能执行完成。";
 
+            // Tool message carries the actual results (images/video/audio)
             const toolMsg: AgentMessage = {
                 id: nanoid(),
                 role: "tool",
@@ -124,6 +127,9 @@ export async function runAgent(
             };
             callbacks.onMessageCreate(toolMsg);
             messages = [...messages, toolMsg];
+
+            // Notify UI: skill done
+            callbacks.onSkillDone(assistantId);
         }
 
         // Continue to next round (model will see tool results)
