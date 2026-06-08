@@ -7,6 +7,7 @@ import { dataUrlToFile } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
 import { imageToDataUrl, setImageBlob } from "@/services/image-storage";
 import type { ReferenceImage } from "@/types/image";
+import { aiApiUrl, aiHeaders, aiRequestConfig, withSystemMessage, withSystemPrompt, refreshRemoteUser, readAxiosError } from "@/services/api/ai-utils";
 
 export type ChatCompletionMessage = {
     role: "system" | "user" | "assistant";
@@ -162,20 +163,6 @@ function newApiCanvasUrl(baseUrl: string, path: string) {
     }
 }
 
-function readAxiosError(error: unknown, fallback: string) {
-    if (axios.isAxiosError<{ error?: { message?: string }; msg?: string; code?: number }>(error)) {
-        const responseData = error.response?.data;
-        return responseData?.msg || responseData?.error?.message || readStatusError(error.response?.status, fallback);
-    }
-    return error instanceof Error ? error.message : fallback;
-}
-
-function readStatusError(status: number | undefined, fallback: string) {
-    if (status === 401 || status === 403) return "鉴权失败，请检查登录状态、分组、API Key 或模型权限";
-    if (status === 429) return "请求被限流或额度不足，请稍后重试";
-    return status ? `${fallback}：${status}` : fallback;
-}
-
 function parseStreamChunk(chunk: string, onDelta: (value: string) => void) {
     let deltaText = "";
     for (const eventBlock of chunk.split("\n\n")) {
@@ -188,53 +175,6 @@ function parseStreamChunk(chunk: string, onDelta: (value: string) => void) {
         deltaText += delta;
     }
     if (deltaText) onDelta(deltaText);
-}
-
-function withSystemPrompt(config: AiConfig, prompt: string) {
-    const systemPrompt = config.systemPrompt.trim();
-    return systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
-}
-
-function aiApiUrl(config: AiConfig, path: string) {
-    return config.channelMode === "remote" ? `/api/v1${path}` : buildApiUrl(config.baseUrl, path);
-}
-
-function aiHeaders(config: AiConfig, contentType?: string) {
-    const token = useUserStore.getState().token;
-    if (config.channelMode === "remote") {
-        return {
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            ...(contentType ? { "Content-Type": contentType } : {}),
-        };
-    }
-    if (isNewApiConfig(config)) {
-        return {
-            ...(contentType ? { "Content-Type": contentType } : {}),
-        };
-    }
-    return {
-        Authorization: `Bearer ${config.apiKey}`,
-        ...(contentType ? { "Content-Type": contentType } : {}),
-    };
-}
-
-function aiRequestConfig(config: AiConfig, contentType?: string, params?: Record<string, string>, capability?: ModelCapability) {
-    const nextParams = { ...(params || {}) };
-    if (isNewApiConfig(config)) nextParams.group = resolveNewApiGroup(config, capability);
-    return {
-        headers: aiHeaders(config, contentType),
-        ...(Object.keys(nextParams).length ? { params: nextParams } : {}),
-        ...(isNewApiConfig(config) ? { withCredentials: true } : {}),
-    };
-}
-
-function refreshRemoteUser(config: AiConfig) {
-    if (config.channelMode === "remote") void useUserStore.getState().hydrateUser();
-}
-
-function withSystemMessage(config: AiConfig, messages: ChatCompletionMessage[]) {
-    const systemPrompt = config.systemPrompt.trim();
-    return systemPrompt ? [{ role: "system" as const, content: systemPrompt }, ...messages] : messages;
 }
 
 export async function requestGeneration(config: AiConfig, prompt: string) {
