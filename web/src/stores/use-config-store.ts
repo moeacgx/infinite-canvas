@@ -41,6 +41,15 @@ export type AiConfig = {
     canvasImageCount: string;
 };
 
+export type WebdavSyncConfig = {
+    proxyMode: "direct" | "nextjs";
+    url: string;
+    username: string;
+    password: string;
+    directory: string;
+    lastSyncedAt: string;
+};
+
 export const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
 export type ModelCapability = "image" | "video" | "text" | "audio";
 export type ChannelMode = AiConfig["channelMode"];
@@ -86,13 +95,24 @@ export const defaultConfig: AiConfig = {
     canvasImageCount: "3",
 };
 
+export const defaultWebdavSyncConfig: WebdavSyncConfig = {
+    proxyMode: "direct",
+    url: "",
+    username: "",
+    password: "",
+    directory: "infinite-canvas",
+    lastSyncedAt: "",
+};
+
 type ConfigStore = {
     config: AiConfig;
+    webdav: WebdavSyncConfig;
     publicSettings: AdminPublicSettings | null;
     isPublicSettingsLoading: boolean;
     isConfigOpen: boolean;
     shouldPromptContinue: boolean;
     updateConfig: <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
+    updateWebdavConfig: <K extends keyof WebdavSyncConfig>(key: K, value: WebdavSyncConfig[K]) => void;
     loadPublicSettings: () => Promise<void>;
     isAiConfigReady: (config: AiConfig, model: string) => boolean;
     openConfigDialog: (shouldPromptContinue?: boolean) => void;
@@ -282,6 +302,7 @@ export const useConfigStore = create<ConfigStore>()(
     persist(
         (set, get) => ({
             config: defaultConfig,
+            webdav: defaultWebdavSyncConfig,
             publicSettings: null,
             isPublicSettingsLoading: false,
             isConfigOpen: false,
@@ -290,6 +311,13 @@ export const useConfigStore = create<ConfigStore>()(
                 set((state) => ({
                     config: {
                         ...state.config,
+                        [key]: value,
+                    },
+                })),
+            updateWebdavConfig: (key, value) =>
+                set((state) => ({
+                    webdav: {
+                        ...state.webdav,
                         [key]: value,
                     },
                 })),
@@ -309,12 +337,15 @@ export const useConfigStore = create<ConfigStore>()(
         }),
         {
             name: CONFIG_STORE_KEY,
-            partialize: (state) => ({ config: state.config }),
+            partialize: (state) => ({ config: state.config, webdav: state.webdav }),
             merge: (persisted, current) => {
-                const persistedConfig = ((persisted as Partial<ConfigStore>).config || {}) as Partial<AiConfig>;
+                const persistedState = (persisted || {}) as Partial<ConfigStore>;
+                const persistedConfig = (persistedState.config || {}) as Partial<AiConfig>;
+                const persistedWebdav = (persistedState.webdav || {}) as Partial<WebdavSyncConfig>;
                 const config = { ...defaultConfig, ...persistedConfig };
                 return {
                     ...current,
+                    webdav: { ...defaultWebdavSyncConfig, ...persistedWebdav },
                     config: {
                         ...config,
                         channelMode: config.channelMode || "remote",

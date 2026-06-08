@@ -341,7 +341,7 @@ function NodeContent(props: NodeContentRendererProps) {
     if (props.node.metadata?.status === "error") return <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} />;
 
     const Renderer = nodeContentRenderers[props.node.type];
-    return <Renderer {...props} />;
+    return Renderer ? <Renderer {...props} /> : <UnknownNodeContent theme={props.theme} />;
 }
 
 const nodeContentRenderers = {
@@ -378,6 +378,14 @@ function ErrorContent({ node, theme, onRetry }: Pick<NodeContentRendererProps, "
                 <RefreshCw className="size-3.5" />
                 重试
             </button>
+        </div>
+    );
+}
+
+function UnknownNodeContent({ theme }: Pick<NodeContentRendererProps, "theme">) {
+    return (
+        <div className="flex h-full w-full items-center justify-center text-sm" style={{ color: theme.node.placeholder }}>
+            未知节点
         </div>
     );
 }

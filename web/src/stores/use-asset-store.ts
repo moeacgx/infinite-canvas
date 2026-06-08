@@ -28,10 +28,12 @@ type AssetBase<T extends AssetKind> = {
 };
 
 type AssetStore = {
+    hydrated: boolean;
     assets: Asset[];
     addAsset: (asset: Omit<Asset, "id" | "createdAt" | "updatedAt">) => string;
     updateAsset: (id: string, patch: Partial<Omit<Asset, "id" | "createdAt">>) => void;
     removeAsset: (id: string) => void;
+    replaceAssets: (assets: Asset[]) => void;
     cleanupImages: (extra?: unknown) => void;
 };
 
@@ -66,6 +68,7 @@ const assetStorage: PersistStorage<AssetStore> = {
 export const useAssetStore = create<AssetStore>()(
     persist(
         (set, get) => ({
+            hydrated: false,
             assets: [],
             addAsset: (asset) => {
                 const now = new Date().toISOString();
@@ -83,6 +86,7 @@ export const useAssetStore = create<AssetStore>()(
                     get().cleanupImages({ assets });
                     return { assets };
                 }),
+            replaceAssets: (assets) => set({ assets }),
             cleanupImages: (extra) => {
                 window.setTimeout(async () => {
                     const { useCanvasStore } = await import("@/app/(user)/canvas/stores/use-canvas-store");
@@ -95,6 +99,9 @@ export const useAssetStore = create<AssetStore>()(
             name: ASSET_STORE_KEY,
             storage: assetStorage,
             partialize: (state) => ({ assets: state.assets }) as StorageValue<AssetStore>["state"],
+            onRehydrateStorage: () => () => {
+                useAssetStore.setState({ hydrated: true });
+            },
         },
     ),
 );
