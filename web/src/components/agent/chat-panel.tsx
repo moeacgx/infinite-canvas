@@ -7,11 +7,14 @@ import { nanoid } from "nanoid";
 
 import { useConfigStore } from "@/stores/use-config-store";
 import { useChatStore } from "@/stores/use-chat-store";
+import { useSkillStore } from "@/stores/use-skill-store";
 import { fetchSkills, type Skill } from "@/services/api/skills";
+import { fetchPromptSkills } from "@/services/api/prompt-skills";
 import { runAgent, type AgentMessage } from "@/services/agent/agent-engine";
 import type { SkillResult } from "@/services/agent/skill-executor";
 import { ChatMessage } from "./chat-message";
 import { SkillSelector } from "./skill-selector";
+import { SkillPresetPicker } from "./skill-preset-picker";
 
 export function ChatPanel() {
     const { message: antMessage } = App.useApp();
@@ -28,6 +31,9 @@ export function ChatPanel() {
         setSessionTitle,
         clearMessages,
     } = useChatStore();
+
+    const setServerSkills = useSkillStore((s) => s.setServerSkills);
+    const activeSkill = useSkillStore((s) => s.activeSkill)();
 
     const [input, setInput] = useState("");
     const [isRunning, setIsRunning] = useState(false);
@@ -60,6 +66,11 @@ export function ChatPanel() {
             cancelled = true;
         };
     }, [config]);
+
+    // Fetch server prompt skill presets
+    useEffect(() => {
+        fetchPromptSkills().then(setServerSkills).catch(() => {});
+    }, [setServerSkills]);
 
     // Auto-scroll to bottom
     useEffect(() => {
@@ -105,9 +116,20 @@ export function ChatPanel() {
         const controller = new AbortController();
         abortRef.current = controller;
 
+        // Merge active skill preset into config
+        const agentConfig = activeSkill
+            ? {
+                  ...config,
+                  systemPrompt: [activeSkill.systemPrompt, config.systemPrompt].filter(Boolean).join("\n\n"),
+                  ...(activeSkill.defaultModel ? { imageModel: activeSkill.defaultModel } : {}),
+                  ...(activeSkill.defaultQuality ? { quality: activeSkill.defaultQuality } : {}),
+                  ...(activeSkill.defaultSize ? { size: activeSkill.defaultSize } : {}),
+              }
+            : config;
+
         try {
             await runAgent(
-                config,
+                agentConfig,
                 currentMessages,
                 enabledSkillDefs,
                 {
@@ -154,6 +176,7 @@ export function ChatPanel() {
         activeSessionId,
         config,
         skills,
+        activeSkill,
         createSession,
         addMessage,
         updateMessage,
@@ -224,6 +247,9 @@ export function ChatPanel() {
                         />
                     </div>
                 ) : null}
+                <div className="mt-2">
+                    <SkillPresetPicker />
+                </div>
             </div>
 
             {/* Messages */}

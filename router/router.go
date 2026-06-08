@@ -42,6 +42,7 @@ func New() *gin.Engine {
 		handler.AIVideoContent(c.Writer, c.Request, c.Param("id"))
 	})
 	api.GET("/skills", middleware.OptionalAuth, gin.WrapF(handler.Skills))
+	api.GET("/prompt-skills", middleware.OptionalAuth, gin.WrapF(handler.PromptSkills))
 	api.GET("/prompts", middleware.OptionalAuth, gin.WrapF(handler.Prompts))
 	api.GET("/assets", middleware.OptionalAuth, gin.WrapF(handler.Assets))
 	api.POST("/admin/login", gin.WrapF(handler.AdminLogin))
@@ -75,6 +76,11 @@ func New() *gin.Engine {
 	admin.POST("/prompts/batch-delete", gin.WrapF(handler.AdminDeletePrompts))
 	admin.DELETE("/prompts/:id", func(c *gin.Context) {
 		handler.AdminDeletePrompt(c.Writer, c.Request, c.Param("id"))
+	})
+	admin.GET("/prompt-skills", gin.WrapF(handler.AdminPromptSkills))
+	admin.POST("/prompt-skills", gin.WrapF(handler.AdminSavePromptSkill))
+	admin.DELETE("/prompt-skills/:id", func(c *gin.Context) {
+		handler.AdminDeletePromptSkill(c.Writer, c.Request, c.Param("id"))
 	})
 	admin.GET("/assets", gin.WrapF(handler.AdminAssets))
 	admin.POST("/assets", gin.WrapF(handler.AdminSaveAsset))
