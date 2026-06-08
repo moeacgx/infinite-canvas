@@ -16,7 +16,7 @@ import { formatBytes, formatDuration } from "@/lib/image-utils";
 import { boolConfig, isSeedanceVideoConfig, normalizeSeedanceRatio, seedanceReferenceLabel, seedanceVideoReferenceError, seedanceVideoReferenceHint, SEEDANCE_REFERENCE_LIMITS } from "@/lib/seedance-video";
 import { deleteStoredMedia, resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
 import { resolveImageUrl, uploadImage } from "@/services/image-storage";
-import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
+import { createVideoGenerationTask, pollVideoGenerationTask, storeGeneratedVideo, type VideoGenerationTask } from "@/services/api/video";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -56,7 +56,8 @@ type GenerationLog = {
     size: string;
     resolution: string;
     seconds: string;
-    status: "成功" | "失败";
+    status: "生成中" | "成功" | "失败";
+    task?: VideoGenerationTask;
     video?: GeneratedVideo;
     error?: string;
 };
@@ -71,6 +72,7 @@ const logStore = localforage.createInstance({ name: "infinite-canvas", storeName
 export default function VideoPage() {
     const { message } = App.useApp();
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const activeLogIdsRef = useRef<Set<string>>(new Set());
     const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
     const updateConfig = useConfigStore((state) => state.updateConfig);
@@ -174,26 +176,15 @@ export default function VideoPage() {
         const batchStartedAt = performance.now();
         setStartedAt(batchStartedAt);
         try {
-            const stored = await storeGeneratedVideo(await requestVideoGeneration(snapshot.config, snapshot.text, snapshot.references, snapshot.videoReferences, snapshot.audioReferences));
-            const nextVideo: GeneratedVideo = {
-                id: nanoid(),
-                url: stored.url,
-                storageKey: stored.storageKey,
-                durationMs: performance.now() - batchStartedAt,
-                width: stored.width || 1280,
-                height: stored.height || 720,
-                bytes: stored.bytes,
-                mimeType: stored.mimeType,
-            };
-            setResults([{ id: nextVideo.id, status: "success", video: nextVideo }]);
-            saveLog(buildLog({ prompt: snapshot.text, model, config: snapshot.config, references: snapshot.references, videoReferences: snapshot.videoReferences, audioReferences: snapshot.audioReferences, durationMs: nextVideo.durationMs, status: "成功", video: nextVideo }));
-            message.success("视频已生成");
+            const task = await createVideoGenerationTask(snapshot.config, snapshot.text, snapshot.references, snapshot.videoReferences, snapshot.audioReferences);
+            const log = buildLog({ prompt: snapshot.text, model, config: snapshot.config, references: snapshot.references, videoReferences: snapshot.videoReferences, audioReferences: snapshot.audioReferences, durationMs: 0, status: "生成中", task });
+            await saveLog(log);
+            void pollGenerationLog(log, snapshot.config);
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : "生成失败";
             setResults([{ id: nanoid(), status: "failed", error: errorMessage }]);
-            saveLog(buildLog({ prompt: snapshot.text, model, config: snapshot.config, references: snapshot.references, videoReferences: snapshot.videoReferences, audioReferences: snapshot.audioReferences, durationMs: performance.now() - batchStartedAt, status: "失败", error: errorMessage }));
+            await saveLog(buildLog({ prompt: snapshot.text, model, config: snapshot.config, references: snapshot.references, videoReferences: snapshot.videoReferences, audioReferences: snapshot.audioReferences, durationMs: performance.now() - batchStartedAt, status: "失败", error: errorMessage }));
             message.error(errorMessage);
-        } finally {
             setRunning(false);
         }
     };
@@ -276,11 +267,68 @@ export default function VideoPage() {
         setDeleteConfirmOpen(false);
     };
 
-    const saveLog = (log: GenerationLog) => {
-        void logStore.setItem(log.id, serializeLog(log)).then(refreshLogs);
+    const saveLog = async (log: GenerationLog) => {
+        await logStore.setItem(log.id, serializeLog(log));
+        await refreshLogs();
     };
 
-    const refreshLogs = async () => setLogs(await readStoredLogs());
+    const refreshLogs = async () => {
+        const nextLogs = await readStoredLogs();
+        setLogs(nextLogs);
+        resumePendingLogs(nextLogs);
+        return nextLogs;
+    };
+
+    const resumePendingLogs = (items: GenerationLog[]) => {
+        for (const log of items) {
+            if (log.status === "生成中" && log.task) void pollGenerationLog(log);
+        }
+    };
+
+    const pollGenerationLog = async (log: GenerationLog, configOverride?: AiConfig) => {
+        if (!log.task || activeLogIdsRef.current.has(log.id)) return;
+        activeLogIdsRef.current.add(log.id);
+        setRunning(true);
+        setStartedAt((value) => value || performance.now());
+        setResults((value) => (value.length ? value : [{ id: log.id, status: "pending" }]));
+        const taskConfig = buildVideoConfig({ ...effectiveConfig, ...log.config }, log.task.model || log.model);
+        try {
+            for (let attempt = 0; attempt < 120; attempt += 1) {
+                const state = await pollVideoGenerationTask(configOverride || taskConfig, log.task);
+                if (state.status === "completed") {
+                    const stored = await storeGeneratedVideo(state.result);
+                    const nextVideo: GeneratedVideo = {
+                        id: nanoid(),
+                        url: stored.url,
+                        storageKey: stored.storageKey,
+                        durationMs: Date.now() - log.createdAt,
+                        width: stored.width || 1280,
+                        height: stored.height || 720,
+                        bytes: stored.bytes,
+                        mimeType: stored.mimeType,
+                    };
+                    setResults([{ id: nextVideo.id, status: "success", video: nextVideo }]);
+                    await saveLog({ ...log, status: "成功", durationMs: nextVideo.durationMs, video: nextVideo, error: undefined });
+                    message.success("视频已生成");
+                    return;
+                }
+                if (state.status === "failed") throw new Error(state.error);
+                if (attempt === 119) throw new Error("视频生成超时，请稍后重试");
+                await delay(log.task.provider === "seedance" ? 5000 : 2500);
+            }
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : "生成失败";
+            setResults([{ id: log.id, status: "failed", error: errorMessage }]);
+            await saveLog({ ...log, status: "失败", durationMs: Date.now() - log.createdAt, error: errorMessage });
+            message.error(errorMessage);
+        } finally {
+            activeLogIdsRef.current.delete(log.id);
+            if (!activeLogIdsRef.current.size) {
+                setRunning(false);
+                setStartedAt(0);
+            }
+        }
+    };
 
     const previewGenerationLog = (log: GenerationLog) => {
         setPreviewLog(log);
@@ -295,7 +343,7 @@ export default function VideoPage() {
         if (log.config.videoSeconds) updateConfig("videoSeconds", log.config.videoSeconds);
         if (log.config.videoGenerateAudio) updateConfig("videoGenerateAudio", log.config.videoGenerateAudio);
         if (log.config.videoWatermark) updateConfig("videoWatermark", log.config.videoWatermark);
-        setResults(log.video ? [{ id: log.video.id, status: "success", video: log.video }] : [{ id: log.id, status: "failed", error: log.error || "生成失败" }]);
+        setResults(log.status === "生成中" ? [{ id: log.id, status: "pending" }] : log.video ? [{ id: log.video.id, status: "success", video: log.video }] : [{ id: log.id, status: "failed", error: log.error || "生成失败" }]);
     };
 
     return (
@@ -608,7 +656,7 @@ function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: Ge
                     </div>
                 </div>
                 <div className="grid justify-items-end gap-2">
-                    <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color={log.status === "成功" ? "blue" : "red"}>
+                    <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color={log.status === "成功" ? "blue" : log.status === "生成中" ? "processing" : "red"}>
                         {log.status}
                     </Tag>
                     <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color="green">
@@ -670,6 +718,7 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
         resolution: normalizeResolution(log.resolution || config.vquality || ""),
         seconds: log.seconds || config.videoSeconds || "",
         status: log.status || "成功",
+        task: log.task,
         video,
         error: log.error,
     };
@@ -739,7 +788,7 @@ function normalizeLogConfig(log: Partial<GenerationLog>): GenerationLogConfig {
     };
 }
 
-function buildLog({ prompt, model, config, references, videoReferences, audioReferences, durationMs, status, video, error }: { prompt: string; model: string; config: AiConfig; references: ReferenceImage[]; videoReferences: ReferenceVideo[]; audioReferences: ReferenceAudio[]; durationMs: number; status: GenerationLog["status"]; video?: GeneratedVideo; error?: string }): GenerationLog {
+function buildLog({ prompt, model, config, references, videoReferences, audioReferences, durationMs, status, task, video, error }: { prompt: string; model: string; config: AiConfig; references: ReferenceImage[]; videoReferences: ReferenceVideo[]; audioReferences: ReferenceAudio[]; durationMs: number; status: GenerationLog["status"]; task?: VideoGenerationTask; video?: GeneratedVideo; error?: string }): GenerationLog {
     const logConfig = {
         model: config.model,
         videoModel: config.videoModel,
@@ -765,6 +814,7 @@ function buildLog({ prompt, model, config, references, videoReferences, audioRef
         resolution: logConfig.vquality,
         seconds: logConfig.videoSeconds,
         status,
+        task,
         video,
         error,
     };
@@ -796,4 +846,8 @@ function normalizeVideoSize(value: string) {
 
 function normalizeResolution(value: string) {
     return normalizeVideoResolutionValue(value);
+}
+
+function delay(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }
