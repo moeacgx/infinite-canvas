@@ -10,6 +10,7 @@ import { ModelPicker } from "@/components/model-picker";
 import { resolveCapabilityModel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { CreditSymbol, requestCreditCost } from "@/constant/credits";
 import { canvasThemes } from "@/lib/canvas-theme";
+import { isPlainEnterKey } from "@/lib/keyboard-event";
 import { nanoid } from "nanoid";
 import { cn } from "@/lib/utils";
 import { requestEdit, requestGeneration, requestImageQuestion, type ChatCompletionMessage } from "@/services/api/image";
@@ -426,7 +427,7 @@ function AssistantComposer({
                         onPasteImage(file);
                     }}
                     onKeyDown={(event) => {
-                        if (event.key !== "Enter" || event.ctrlKey || event.metaKey || event.shiftKey) return;
+                        if (!isPlainEnterKey(event)) return;
                         event.preventDefault();
                         void onSubmit();
                     }}

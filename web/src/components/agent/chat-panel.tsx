@@ -12,6 +12,7 @@ import { fetchSkills, type Skill } from "@/services/api/skills";
 import { fetchPromptSkills } from "@/services/api/prompt-skills";
 import { runAgent, type AgentMessage } from "@/services/agent/agent-engine";
 import type { SkillResult } from "@/services/agent/skill-executor";
+import { isPlainEnterKey } from "@/lib/keyboard-event";
 import { ChatMessage } from "./chat-message";
 import { SkillSelector } from "./skill-selector";
 import { SkillPresetPicker } from "./skill-preset-picker";
@@ -176,7 +177,7 @@ export function ChatPanel() {
     };
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
-        if (e.key === "Enter" && !e.shiftKey) {
+        if (isPlainEnterKey(e)) {
             e.preventDefault();
             void handleSend();
         }
