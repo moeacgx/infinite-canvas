@@ -1,5 +1,3 @@
-import axios from "axios";
-
 import { buildApiUrl, isNewApiConfig, resolveCapabilityModel, resolveModelRequestConfig, resolveNewApiGroup, type AiConfig, type FetchedModelLists, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { nanoid } from "nanoid";
@@ -9,6 +7,7 @@ import { imageToDataUrl, setImageBlob } from "@/services/image-storage";
 import type { ReferenceImage } from "@/types/image";
 import { aiApiUrl, aiHeaders, aiRequestConfig, withSystemMessage, withSystemPrompt, refreshRemoteUser, readAxiosError } from "@/services/api/ai-utils";
 import { fetchGeminiModels, requestGeminiImages, streamGeminiChat } from "@/services/api/gemini";
+import { channelAxiosRequest } from "@/services/api/channel-request";
 
 export type ChatCompletionMessage = {
     role: "system" | "user" | "assistant";
@@ -148,7 +147,9 @@ async function parseImagePayload(payload: ImageApiResponse, config?: AiConfig) {
 }
 
 async function downloadNewApiImageContent(config: AiConfig, path: string) {
-    const response = await axios.get<Blob>(newApiCanvasUrl(config.baseUrl, path), {
+    const response = await channelAxiosRequest<Blob>(config, {
+        method: "GET",
+        url: newApiCanvasUrl(config.baseUrl, path),
         ...aiRequestConfig(config, undefined, undefined, "image"),
         responseType: "blob",
     });
@@ -205,7 +206,10 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
         return requestNewApiImageTask(requestConfig, payload, undefined, options);
     }
     try {
-        const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/generations"), payload, {
+        const response = await channelAxiosRequest<ImageApiResponse>(requestConfig, {
+            method: "POST",
+            url: aiApiUrl(requestConfig, "/images/generations"),
+            data: payload,
             ...aiRequestConfig(requestConfig, "application/json", undefined, "image"),
             signal: options?.signal,
         });
@@ -219,7 +223,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
 
 async function requestNewApiImageTask(config: AiConfig, payload: Record<string, unknown> | FormData, params?: Record<string, string>, options?: RequestOptions) {
     try {
-        const created = (await axios.post<ImageTaskResponse>(aiApiUrl(config, "/images/tasks"), payload, { ...aiRequestConfig(config, payload instanceof FormData ? undefined : "application/json", params, "image"), signal: options?.signal })).data;
+        const created = (await channelAxiosRequest<ImageTaskResponse>(config, { method: "POST", url: aiApiUrl(config, "/images/tasks"), data: payload, ...aiRequestConfig(config, payload instanceof FormData ? undefined : "application/json", params, "image"), signal: options?.signal })).data;
         const taskId = created.task_id;
         if (!taskId) throw new Error("图片任务没有返回任务 ID");
         const task = await waitForNewApiImageTask(config, taskId, options);
@@ -234,7 +238,7 @@ async function requestNewApiImageTask(config: AiConfig, payload: Record<string, 
 
 async function waitForNewApiImageTask(config: AiConfig, taskId: string, options?: RequestOptions) {
     for (let attempt = 0; attempt < NEW_API_IMAGE_TASK_MAX_ATTEMPTS; attempt += 1) {
-        const task = (await axios.get<ImageTaskResponse>(aiApiUrl(config, `/images/tasks/${encodeURIComponent(taskId)}`), { ...aiRequestConfig(config, undefined, undefined, "image"), signal: options?.signal })).data;
+        const task = (await channelAxiosRequest<ImageTaskResponse>(config, { method: "GET", url: aiApiUrl(config, `/images/tasks/${encodeURIComponent(taskId)}`), ...aiRequestConfig(config, undefined, undefined, "image"), signal: options?.signal })).data;
         if (task.status === "succeeded") return task;
         if (task.status === "failed") throw new Error(readImageTaskError(task.error) || "图片生成失败");
         if (attempt === NEW_API_IMAGE_TASK_MAX_ATTEMPTS - 1) throw new Error("图片生成超时，请稍后重试");
@@ -299,7 +303,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     }
 
     try {
-        const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), formData, { ...aiRequestConfig(requestConfig, undefined, undefined, "image"), signal: options?.signal });
+        const response = await channelAxiosRequest<ImageApiResponse>(requestConfig, { method: "POST", url: aiApiUrl(requestConfig, "/images/edits"), data: formData, ...aiRequestConfig(requestConfig, undefined, undefined, "image"), signal: options?.signal });
         const images = await parseImagePayload(response.data);
         refreshRemoteUser(requestConfig);
         return images;
@@ -322,18 +326,18 @@ export async function requestImageQuestion(config: AiConfig, messages: ChatCompl
             if (!result.content) onDelta(answer);
             return answer;
         }
-        const response = await axios.post(
-            aiApiUrl(requestConfig, "/chat/completions"),
-            {
+        const response = await channelAxiosRequest(requestConfig, {
+            method: "POST",
+            url: aiApiUrl(requestConfig, "/chat/completions"),
+            data: {
                 model: requestConfig.model,
                 messages: withSystemMessage(requestConfig, messages),
                 stream: true,
             },
-            {
-                ...aiRequestConfig(requestConfig, "application/json", undefined, "text"),
-                signal: options?.signal,
-                responseType: "text",
-                onDownloadProgress: (event) => {
+            ...aiRequestConfig(requestConfig, "application/json", undefined, "text"),
+            signal: options?.signal,
+            responseType: "text",
+            onDownloadProgress: (event) => {
                     const responseText = String(event.event?.target?.responseText || "");
                     const nextText = responseText.slice(processedLength);
                     processedLength = responseText.length;
@@ -346,9 +350,8 @@ export async function requestImageQuestion(config: AiConfig, messages: ChatCompl
                             onDelta(answer);
                         });
                     }
-                },
             },
-        );
+        });
         if (typeof response.data === "object" && response.data && "code" in response.data && (response.data as { code?: number; msg?: string }).code !== 0) {
             throw new Error((response.data as { msg?: string }).msg || "请求失败");
         }
@@ -403,7 +406,9 @@ export async function fetchImageModels(config: AiConfig) {
 export async function fetchChannelModels(channel: ModelChannel) {
     try {
         if (channel.apiFormat === "gemini") return await fetchGeminiModels(channel);
-        const response = await axios.get<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(buildApiUrl(channel.baseUrl, "/models"), {
+        const response = await channelAxiosRequest<{ data?: Array<{ id?: string }>; error?: { message?: string } }>({ channelMode: "local" }, {
+            method: "GET",
+            url: buildApiUrl(channel.baseUrl, "/models"),
             headers: { Authorization: `Bearer ${channel.apiKey}` },
         });
         if (response.data.error?.message) throw new Error(response.data.error.message);
@@ -420,7 +425,7 @@ async function fetchNewApiGroupModels(config: AiConfig) {
 }
 
 async function fetchModelsForGroup(config: AiConfig) {
-    const response = await axios.get<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(buildApiUrl(config.baseUrl, "/models"), aiRequestConfig(config));
+    const response = await channelAxiosRequest<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(config, { method: "GET", url: buildApiUrl(config.baseUrl, "/models"), ...aiRequestConfig(config) });
     return uniqueSortedModels((response.data.data || []).map((model) => model.id).filter((id): id is string => Boolean(id)));
 }
 

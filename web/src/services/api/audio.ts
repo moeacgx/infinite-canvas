@@ -1,7 +1,6 @@
-import axios from "axios";
-
 import { audioMimeType, normalizeAudioFormatValue, normalizeAudioSpeedValue, normalizeAudioVoiceValue } from "@/lib/audio-generation";
 import { readAxiosError } from "@/services/api/ai-utils";
+import { channelAxiosRequest } from "@/services/api/channel-request";
 import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { buildApiUrl, isNewApiConfig, resolveCapabilityModel, resolveModelRequestConfig, resolveNewApiGroup, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
@@ -51,9 +50,10 @@ export async function requestAudioGeneration(config: AiConfig, prompt: string, o
     const instructions = requestConfig.audioInstructions.trim();
 
     try {
-        const response = await axios.post<Blob>(
-            aiApiUrl(requestConfig, "/audio/speech"),
-            {
+        const response = await channelAxiosRequest<Blob>(requestConfig, {
+            method: "POST",
+            url: aiApiUrl(requestConfig, "/audio/speech"),
+            data: {
                 model,
                 input: prompt,
                 voice: normalizeAudioVoiceValue(requestConfig.audioVoice),
@@ -61,8 +61,10 @@ export async function requestAudioGeneration(config: AiConfig, prompt: string, o
                 speed: Number(normalizeAudioSpeedValue(requestConfig.audioSpeed)),
                 ...(instructions ? { instructions } : {}),
             },
-            { ...aiRequestConfig(requestConfig), responseType: "blob", signal: options?.signal },
-        );
+            ...aiRequestConfig(requestConfig),
+            responseType: "blob",
+            signal: options?.signal,
+        });
         await assertAudioBlob(response.data);
         refreshRemoteUser(requestConfig);
         return response.data.type.startsWith("audio/") ? response.data : new Blob([response.data], { type: audioMimeType(format) });

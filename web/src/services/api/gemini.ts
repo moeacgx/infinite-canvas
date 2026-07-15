@@ -1,10 +1,10 @@
-import axios from "axios";
 import { nanoid } from "nanoid";
 
 import { imageToDataUrl } from "@/services/image-storage";
 import { networkFailureMessage } from "@/services/api/network-error";
 import type { AiConfig } from "@/stores/use-config-store";
 import type { ReferenceImage } from "@/types/image";
+import { channelAxiosRequest, channelFetch } from "@/services/api/channel-request";
 
 export type GeminiMessageContent = string | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }>;
 
@@ -82,7 +82,7 @@ export function geminiHeaders(config: Pick<AiConfig, "apiKey">) {
 
 export async function fetchGeminiModels(config: Pick<AiConfig, "baseUrl" | "apiKey">) {
     const requestConfig = { ...config, model: "" };
-    const response = await axios.get<GeminiPayload>(geminiApiUrl(requestConfig), { headers: geminiHeaders(requestConfig) });
+    const response = await channelAxiosRequest<GeminiPayload>({ channelMode: "local" }, { method: "GET", url: geminiApiUrl(requestConfig), headers: geminiHeaders(requestConfig) });
     validateGeminiPayload(response.data);
     return (response.data.models || [])
         .map((model) => model.name?.replace(/^models\//, ""))
@@ -98,9 +98,10 @@ export async function requestGeminiImages(config: AiConfig, prompt: string, refe
 async function requestGeminiImagesOnce(config: AiConfig, prompt: string, references: ReferenceImage[], options?: RequestOptions) {
     const parts: GeminiPart[] = [{ text: prompt }];
     for (const image of references) parts.push(toGeminiImagePart(await imageToDataUrl(image)));
-    const response = await axios.post<GeminiPayload>(
-        geminiApiUrl(config, "generateContent"),
-        {
+    const response = await channelAxiosRequest<GeminiPayload>(config, {
+        method: "POST",
+        url: geminiApiUrl(config, "generateContent"),
+        data: {
             ...toGeminiBody(config, [{ role: "user", content: prompt }]),
             generationConfig: {
                 responseModalities: ["TEXT", "IMAGE"],
@@ -108,8 +109,9 @@ async function requestGeminiImagesOnce(config: AiConfig, prompt: string, referen
             },
             contents: [{ role: "user", parts }],
         },
-        { headers: geminiHeaders(config), signal: options?.signal },
-    );
+        headers: geminiHeaders(config),
+        signal: options?.signal,
+    });
     return parseGeminiImages(response.data);
 }
 
@@ -117,7 +119,7 @@ export async function streamGeminiChat(config: AiConfig, messages: GeminiChatMes
     const requestUrl = `${geminiApiUrl(config, "streamGenerateContent")}?alt=sse`;
     let response: Response;
     try {
-        response = await fetch(requestUrl, {
+        response = await channelFetch(config, requestUrl, {
             method: "POST",
             headers: geminiHeaders(config),
             body: JSON.stringify({ ...toGeminiBody(config, messages), ...toGeminiToolOptions(tools || []) }),
@@ -125,6 +127,7 @@ export async function streamGeminiChat(config: AiConfig, messages: GeminiChatMes
         });
     } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") throw error;
+        if (error instanceof Error && !(error instanceof TypeError)) throw error;
         throw new Error(
             networkFailureMessage({
                 fallback: "Gemini 请求失败",

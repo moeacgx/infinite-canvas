@@ -1,9 +1,9 @@
-import axios from "axios";
 import { nanoid } from "nanoid";
 
 import { resolveCapabilityModel, resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
 import type { Skill } from "@/services/api/skills";
 import { aiApiUrl, aiRequestConfig, refreshRemoteUser, readAxiosError } from "@/services/api/ai-utils";
+import { channelAxiosRequest } from "@/services/api/channel-request";
 import { streamGeminiChat, type GeminiChatMessage, type GeminiFunctionTool } from "@/services/api/gemini";
 import { parseAgentStreamChunk } from "./agent-stream";
 import { buildToolDefinitions } from "./skill-definitions";
@@ -184,19 +184,19 @@ async function streamChatCompletion(config: AiConfig, messages: Array<Record<str
     const model = requestConfig.model || "gpt-4o";
 
     try {
-        await axios.post(
-            aiApiUrl(requestConfig, "/chat/completions"),
-            {
+        await channelAxiosRequest(requestConfig, {
+            method: "POST",
+            url: aiApiUrl(requestConfig, "/chat/completions"),
+            data: {
                 model,
                 messages,
                 stream: true,
                 ...(tools?.length ? { tools } : {}),
             },
-            {
-                ...aiRequestConfig(requestConfig, "application/json", undefined, "text"),
-                responseType: "text",
-                signal,
-                onDownloadProgress: (event) => {
+            ...aiRequestConfig(requestConfig, "application/json", undefined, "text"),
+            responseType: "text",
+            signal,
+            onDownloadProgress: (event) => {
                     const responseText = String(event.event?.target?.responseText || "");
                     const nextText = responseText.slice(processedLength);
                     processedLength = responseText.length;
@@ -223,9 +223,8 @@ async function streamChatCompletion(config: AiConfig, messages: Array<Record<str
                             }
                         }
                     }
-                },
             },
-        );
+        });
 
         // Process remaining buffer
         if (buffer) {

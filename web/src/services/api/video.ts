@@ -2,6 +2,7 @@ import axios from "axios";
 
 import { dataUrlToFile } from "@/lib/image-utils";
 import { readAxiosError } from "@/services/api/ai-utils";
+import { channelAxiosRequest } from "@/services/api/channel-request";
 import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
 import { boolConfig, buildSeedancePromptText, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceVideoReferenceError, SEEDANCE_REFERENCE_LIMITS } from "@/lib/seedance-video";
@@ -123,7 +124,7 @@ async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: st
     const files = await Promise.all(references.slice(0, 7).map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
     files.forEach((file) => body.append("input_reference[]", file));
     try {
-        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), body, { ...aiRequestConfig(config, undefined, undefined, "video"), signal: options?.signal })).data);
+        const created = unwrapVideoResponse((await channelAxiosRequest<ApiVideoResponse>(config, { method: "POST", url: aiApiUrl(config, "/videos"), data: body, ...aiRequestConfig(config, undefined, undefined, "video"), signal: options?.signal })).data);
         if (!created.id) throw new Error("视频接口没有返回任务 ID");
         return { id: created.id, provider: "openai", model, ...(channelModel ? { channelModel } : {}) };
     } catch (error) {
@@ -134,9 +135,9 @@ async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: st
 async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
     const params = config.channelMode === "remote" || isNewApiConfig(config) ? { model: task.model } : undefined;
     try {
-        const video = unwrapVideoResponse((await axios.get<ApiVideoResponse>(aiApiUrl(config, `/videos/${task.id}`), { ...aiRequestConfig(config, undefined, params, "video"), signal: options?.signal })).data);
+        const video = unwrapVideoResponse((await channelAxiosRequest<ApiVideoResponse>(config, { method: "GET", url: aiApiUrl(config, `/videos/${task.id}`), ...aiRequestConfig(config, undefined, params, "video"), signal: options?.signal })).data);
         if (video.status === "completed") {
-            const content = await axios.get<Blob>(aiApiUrl(config, `/videos/${task.id}/content`), { ...aiRequestConfig(config, undefined, params, "video"), responseType: "blob", signal: options?.signal });
+            const content = await channelAxiosRequest<Blob>(config, { method: "GET", url: aiApiUrl(config, `/videos/${task.id}/content`), ...aiRequestConfig(config, undefined, params, "video"), responseType: "blob", signal: options?.signal });
             await assertVideoBlob(content.data);
             refreshRemoteUser(config);
             return { status: "completed", result: { blob: content.data } };
@@ -180,7 +181,7 @@ async function createSeedanceTask(
     }
 
     try {
-        const created = unwrapSeedanceTask((await axios.post<ApiEnvelope<SeedanceTask>>(seedanceApiUrl(config), payload, { ...aiRequestConfig(config, "application/json", undefined, "video"), signal: options?.signal })).data);
+        const created = unwrapSeedanceTask((await channelAxiosRequest<ApiEnvelope<SeedanceTask>>(config, { method: "POST", url: seedanceApiUrl(config), data: payload, ...aiRequestConfig(config, "application/json", undefined, "video"), signal: options?.signal })).data);
         if (!created.id) throw new Error("Seedance 接口没有返回任务 ID");
         return { id: created.id, provider: "seedance", model, ...(channelModel ? { channelModel } : {}) };
     } catch (error) {
@@ -191,7 +192,7 @@ async function createSeedanceTask(
 async function pollSeedanceTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
     const params = config.channelMode === "remote" || isNewApiConfig(config) ? { model: task.model } : undefined;
     try {
-        const state = unwrapSeedanceTask((await axios.get<ApiEnvelope<SeedanceTask>>(seedanceApiUrl(config, task.id), { ...aiRequestConfig(config, undefined, params, "video"), signal: options?.signal })).data);
+        const state = unwrapSeedanceTask((await channelAxiosRequest<ApiEnvelope<SeedanceTask>>(config, { method: "GET", url: seedanceApiUrl(config, task.id), ...aiRequestConfig(config, undefined, params, "video"), signal: options?.signal })).data);
         if (state.status === "succeeded") {
             const url = state.content?.video_url;
             if (!url) return { status: "failed", error: "Seedance 任务成功但没有返回视频 URL" };
@@ -222,7 +223,7 @@ async function requestNewApiSeedanceGeneration(config: AiConfig, model: string, 
     };
 
     try {
-        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), body, { ...aiRequestConfig(config, "application/json", undefined, "video"), signal: options?.signal })).data);
+        const created = unwrapVideoResponse((await channelAxiosRequest<ApiVideoResponse>(config, { method: "POST", url: aiApiUrl(config, "/videos"), data: body, ...aiRequestConfig(config, "application/json", undefined, "video"), signal: options?.signal })).data);
         if (!created.id) throw new Error("Seedance 接口没有返回任务 ID");
         return { id: created.id, provider: "openai" as const, model, ...(channelModel ? { channelModel } : {}) };
     } catch (error) {
