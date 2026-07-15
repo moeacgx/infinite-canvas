@@ -512,7 +512,10 @@ function pipeJsonLines(child: ReturnType<typeof spawn>, emit: AgentEmit, agent: 
 
 function spawnAgent(name: string, args: string[], stdio: StdioOptions, emit: AgentEmit) {
     try {
-        return spawn(name, args, { stdio, shell: process.platform === "win32", windowsHide: true });
+        if (process.platform === "win32") {
+            throw new Error("为避免命令注入，Windows 暂不直接启动 Claude CLI；请使用默认 Codex Agent");
+        }
+        return spawn(name, args, { stdio, shell: false, windowsHide: true });
     } catch (error) {
         emit("agent_error", { message: errorMessage(error) });
         return null;

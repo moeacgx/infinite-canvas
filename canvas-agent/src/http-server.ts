@@ -15,7 +15,6 @@ export function startHttpServer() {
     const emit = (type: string, payload: unknown) => session.emitAll(type, payload);
     const app = express();
     app.disable("x-powered-by");
-    app.use(express.json({ limit: "30mb" }));
     app.use((req, res, next) => {
         const url = requestUrl(req, config);
         if (!setCors(req, res, url, config)) return void res.status(403).json({ ok: false, error: "origin not allowed" });
@@ -28,6 +27,7 @@ export function startHttpServer() {
         if (validToken(req, requestUrl(req, config), config.token)) return next();
         res.status(401).json({ ok: false, error: "invalid token" });
     });
+    app.use(express.json({ limit: "30mb" }));
     app.get("/events", (req, res) => session.openEvents(requestUrl(req, config), res));
     app.post("/canvas/state", (req, res) => {
         session.updateState(req.body, String(req.query.clientId || "") || undefined);
