@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { App } from "antd";
 import { APP_VERSION } from "@/constant/env";
-import { parseChangelog, type ReleaseInfo } from "@/lib/release";
+import { displayedLatestVersion, isNewerVersion, mergeReleases, parseChangelog, type ReleaseInfo } from "@/lib/release";
 
-const latestVersionUrl = "https://raw.githubusercontent.com/basketikun/infinite-canvas/main/VERSION";
-const latestChangelogUrl = "https://raw.githubusercontent.com/basketikun/infinite-canvas/main/CHANGELOG.md";
+const latestVersionUrl = "https://raw.githubusercontent.com/moeacgx/infinite-canvas/main/VERSION";
+const latestChangelogUrl = "https://raw.githubusercontent.com/moeacgx/infinite-canvas/main/CHANGELOG.md";
 
 function readLocalReleases(): ReleaseInfo[] {
     try {
@@ -12,18 +12,6 @@ function readLocalReleases(): ReleaseInfo[] {
     } catch {
         return [];
     }
-}
-
-function toVersionParts(version: string) {
-    const match = version.trim().match(/^v?(\d+)\.(\d+)\.(\d+)/);
-    return match ? match.slice(1).map(Number) : null;
-}
-
-function isNewerVersion(latestVersion: string, currentVersion: string) {
-    const latest = toVersionParts(latestVersion);
-    const current = toVersionParts(currentVersion);
-    if (!latest || !current) return false;
-    return latest.some((value, index) => value > current[index] && latest.slice(0, index).every((part, prevIndex) => part === current[prevIndex]));
 }
 
 export function useVersionCheck() {
@@ -41,7 +29,7 @@ export function useVersionCheck() {
             const response = await fetch(latestVersionUrl);
             if (!response.ok) return false;
             const version = await response.text();
-            setLatestVersion(version.trim() || currentVersion);
+            setLatestVersion(displayedLatestVersion(version, currentVersion));
             return true;
         } catch {
             return false;
@@ -56,8 +44,8 @@ export function useVersionCheck() {
                 if (!versionResponse.ok) throw new Error("版本读取失败");
                 if (!changelogResponse.ok) throw new Error("更新日志读取失败");
                 const [version, changelog] = await Promise.all([versionResponse.text(), changelogResponse.text()]);
-                setLatestVersion(version.trim() || currentVersion);
-                if (changelog.trim()) setReleases(parseChangelog(changelog));
+                setLatestVersion(displayedLatestVersion(version, currentVersion));
+                if (changelog.trim()) setReleases(mergeReleases(parseChangelog(changelog), localReleases));
                 if (showMessage) message.success("已获取最新版本信息");
                 return true;
             } catch {
