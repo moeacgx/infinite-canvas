@@ -1,7 +1,7 @@
 "use client";
 
-import { useRef } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useRef } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { App, Button } from "antd";
 import { Download, FileUp, Plus } from "lucide-react";
 
@@ -18,7 +18,10 @@ import { exportCanvasProjects } from "./utils/canvas-export";
 export default function CanvasPage() {
     const { message } = App.useApp();
     const router = useRouter();
+    const searchParams = useSearchParams();
     const inputRef = useRef<HTMLInputElement>(null);
+    const handledLaunchRef = useRef(false);
+    const launchRef = useRef(readCanvasLaunch(searchParams));
     const hydrated = useCanvasStore((state) => state.hydrated);
     const projects = useCanvasStore((state) => state.projects);
     const createProject = useCanvasStore((state) => state.createProject);
@@ -27,7 +30,7 @@ export default function CanvasPage() {
     const setDeleteIds = useCanvasUiStore((state) => state.setDeleteProjectIds);
 
     const enterProject = (id: string) => {
-        router.push(`/canvas/${id}`);
+        router.push(`/canvas/${id}${launchRef.current.agentQuery}`);
     };
     const createAndEnter = () => enterProject(createProject(`无限画布 ${projects.length + 1}`));
     const importCanvas = async (file?: File) => {
@@ -55,6 +58,25 @@ export default function CanvasPage() {
             if (inputRef.current) inputRef.current.value = "";
         }
     };
+
+    useEffect(() => {
+        const next = new URL(window.location.href);
+        ["mode", "agentUrl", "agentToken"].forEach((key) => next.searchParams.delete(key));
+        window.history.replaceState(window.history.state, "", `${next.pathname}${next.search}${next.hash}`);
+    }, []);
+
+    useEffect(() => {
+        if (!hydrated || handledLaunchRef.current) return;
+        const mode = launchRef.current.mode;
+        if (mode !== "new" && mode !== "recent") return;
+        handledLaunchRef.current = true;
+        if (mode === "new" || !projects.length) {
+            enterProject(createProject(`无限画布 ${projects.length + 1}`));
+            return;
+        }
+        const recent = [...projects].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
+        if (recent) enterProject(recent.id);
+    }, [createProject, hydrated, projects]);
 
     return (
         <main className="h-full overflow-auto bg-background text-stone-950 dark:text-stone-100">
@@ -94,7 +116,7 @@ export default function CanvasPage() {
                 ) : projects.length ? (
                     <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
                         {projects.map((project) => (
-                            <CanvasProjectCard key={project.id} project={project} />
+                            <CanvasProjectCard key={project.id} project={project} openQuery={launchRef.current.agentQuery} />
                         ))}
                     </div>
                 ) : (
@@ -112,4 +134,16 @@ export default function CanvasPage() {
             <CanvasDeleteProjectsDialog />
         </main>
     );
+}
+
+function readCanvasLaunch(searchParams: ReturnType<typeof useSearchParams>) {
+    const mode = (searchParams.get("mode") || "choose").toLowerCase();
+    const agentUrl = searchParams.get("agentUrl") || "";
+    const agentToken = searchParams.get("agentToken") || "";
+    const query = new URLSearchParams();
+    if (agentUrl && agentToken) {
+        query.set("agentUrl", agentUrl);
+        query.set("agentToken", agentToken);
+    }
+    return { mode, agentQuery: query.size ? `?${query.toString()}` : "" };
 }
