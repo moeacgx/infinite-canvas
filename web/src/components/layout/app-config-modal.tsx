@@ -1,10 +1,11 @@
 "use client";
 
 import { App, Button, Form, Input, Modal, Progress, Segmented, Select } from "antd";
-import { CircleAlert, Cloud, Plus, RefreshCw, Trash2, Wifi } from "lucide-react";
+import { CircleAlert, Cloud, Code2, Plus, RefreshCw, Trash2, Wifi } from "lucide-react";
 import { useState } from "react";
 
 import { ModelPicker } from "@/components/model-picker";
+import { ModelScriptEditor } from "@/components/layout/model-script-editor";
 import { fetchChannelModels, fetchImageModels } from "@/services/api/image";
 import { syncAppDataToWebdav, type AppSyncDomainKey, type AppSyncProgressEvent } from "@/services/app-sync";
 import { testWebdavConnection, WEBDAV_MANIFEST_FILE_NAME } from "@/services/webdav-sync";
@@ -15,6 +16,7 @@ import {
     createModelChannel,
     defaultBaseUrlForApiFormat,
     isNewApiConfig,
+    modelScriptFingerprint,
     modelOptionLabel,
     resolveAllowedChannelMode,
     useConfigStore,
@@ -23,6 +25,7 @@ import {
     type AiConfig,
     type ApiCallFormat,
     type ChannelMode,
+    type ChannelRequestMode,
     type ModelCapability,
     type ModelChannel,
 } from "@/stores/use-config-store";
@@ -56,6 +59,11 @@ const apiFormatOptions: Array<{ label: string; value: ApiCallFormat }> = [
     { label: "OpenAI", value: "openai" },
     { label: "Gemini", value: "gemini" },
 ];
+const requestModeOptions: Array<{ label: string; value: ChannelRequestMode }> = [
+    { label: "自动", value: "auto" },
+    { label: "浏览器直连", value: "direct" },
+    { label: "后端兼容", value: "proxy" },
+];
 
 const webdavDomainKeys: AppSyncDomainKey[] = ["canvas", "assets", "image-workbench", "video-workbench"];
 const webdavDomainLabels: Record<AppSyncDomainKey, string> = {
@@ -78,6 +86,7 @@ function createWebdavDomainProgress(): Record<AppSyncDomainKey, WebdavDomainProg
 export function AppConfigModal() {
     const { message } = App.useApp();
     const [loadingChannelId, setLoadingChannelId] = useState("");
+    const [scriptChannelId, setScriptChannelId] = useState("");
     const [testingWebdav, setTestingWebdav] = useState(false);
     const [syncingWebdav, setSyncingWebdav] = useState(false);
     const [webdavSyncStatus, setWebdavSyncStatus] = useState("");
@@ -100,6 +109,7 @@ export function AppConfigModal() {
     const modelConfig = effectiveMode === "remote" ? effectiveConfig : effectiveMode === "local" ? localConfig : config;
     const modelOptions = modelConfig.models.map((model) => ({ label: modelOptionLabel(modelConfig, model), value: model }));
     const webdavReady = Boolean(webdav.url.trim());
+    const scriptChannel = config.channels.find((channel) => channel.id === scriptChannelId) || null;
 
     const finishConfig = () => {
         setConfigDialogOpen(false);
@@ -120,6 +130,27 @@ export function AppConfigModal() {
         updateChannels(config.channels.map((channel) => (channel.id === id ? { ...channel, ...patch, models: patch.models ? uniqueModels(patch.models) : channel.models } : channel)));
     };
 
+    const saveModelScript = (channelId: string, model: string, capability: ModelCapability, source: string) => {
+        const channel = config.channels.find((item) => item.id === channelId);
+        if (!channel) return;
+        const modelScripts = { ...(channel.modelScripts || {}) };
+        const modelScriptApprovals = { ...(channel.modelScriptApprovals || {}) };
+        const scripts = { ...(modelScripts[model] || {}) };
+        const approvals = { ...(modelScriptApprovals[model] || {}) };
+        if (source) {
+            scripts[capability] = source;
+            approvals[capability] = modelScriptFingerprint(source);
+        } else {
+            delete scripts[capability];
+            delete approvals[capability];
+        }
+        if (Object.keys(scripts).length) modelScripts[model] = scripts;
+        else delete modelScripts[model];
+        if (Object.keys(approvals).length) modelScriptApprovals[model] = approvals;
+        else delete modelScriptApprovals[model];
+        updateChannel(channelId, { modelScripts, modelScriptApprovals });
+    };
+
     const updateChannelApiFormat = (channel: ModelChannel, apiFormat: ApiCallFormat) => {
         const baseUrl = !channel.baseUrl.trim() || channel.baseUrl.trim() === defaultBaseUrlForApiFormat(channel.apiFormat) ? defaultBaseUrlForApiFormat(apiFormat) : channel.baseUrl;
         updateChannel(channel.id, { apiFormat, baseUrl });
@@ -132,6 +163,7 @@ export function AppConfigModal() {
             message.warning("至少保留一个本地渠道");
             return;
         }
+        if (scriptChannelId === id) setScriptChannelId("");
         updateChannels(config.channels.filter((channel) => channel.id !== id));
     };
 
@@ -285,7 +317,7 @@ export function AppConfigModal() {
                         <>
                             <div className="mb-3 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
                                 <CircleAlert className="mt-0.5 size-4 shrink-0" />
-                                <span>默认由浏览器直连；遇到 CORS/OPTIONS、证书或混合内容网络错误时，会自动改用本站服务端安全转发（需登录，不转发 localhost/内网地址）。转发时 API Key 会发送到当前部署的服务器，请只在信任本站时使用。</span>
+                                <span>自动模式先由浏览器直连；拉取模型确认被 CORS/OPTIONS、证书或混合内容拦截后，该接口后续请求会直接改走本站服务端，避免重复发送生成请求。也可手动选“后端兼容”（需登录，不转发 localhost/内网地址）。转发时 API Key 会发送到当前部署的服务器，请只在信任本站时使用。</span>
                             </div>
                             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                                 <div>
@@ -317,10 +349,16 @@ export function AppConfigModal() {
                                             <Form.Item label="API Key" className="mb-0">
                                                 <Input.Password value={channel.apiKey} onChange={(event) => updateChannel(channel.id, { apiKey: event.target.value })} />
                                             </Form.Item>
+                                            <Form.Item label="网络方式" className="mb-0 md:col-span-2">
+                                                <Segmented block value={channel.requestMode || "auto"} options={requestModeOptions} onChange={(value) => updateChannel(channel.id, { requestMode: value as ChannelRequestMode })} />
+                                            </Form.Item>
                                         </div>
                                         <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                                             <span className="text-xs text-stone-500">已保存 {channel.models.length} 个模型</span>
                                             <div className="flex gap-2">
+                                                <Button size="small" icon={<Code2 className="size-4" />} disabled={!channel.models.length} type={countModelScripts(channel) ? "primary" : "default"} ghost={Boolean(countModelScripts(channel))} onClick={() => setScriptChannelId(channel.id)}>
+                                                    调用脚本{countModelScripts(channel) ? ` ${countModelScripts(channel)}` : ""}
+                                                </Button>
                                                 <Button size="small" loading={loadingChannelId === channel.id} onClick={() => void refreshChannel(channel)}>
                                                     拉取模型
                                                 </Button>
@@ -513,6 +551,12 @@ export function AppConfigModal() {
                     </section>
                 </Form>
             </div>
+            <ModelScriptEditor
+                open={Boolean(scriptChannel)}
+                channel={scriptChannel}
+                onSave={(model, capability, script) => scriptChannel && saveModelScript(scriptChannel.id, model, capability, script)}
+                onClose={() => setScriptChannelId("")}
+            />
         </Modal>
     );
 }
@@ -544,6 +588,10 @@ function isModelFetchConfigReady(config: AiConfig) {
 
 function uniqueModels(models: string[]) {
     return Array.from(new Set(models.map((model) => model.trim()).filter(Boolean)));
+}
+
+function countModelScripts(channel: ModelChannel) {
+    return Object.values(channel.modelScripts || {}).reduce((total, scripts) => total + Object.values(scripts || {}).filter((source) => Boolean(source?.trim())).length, 0);
 }
 
 function formatWebdavTime(value: string) {

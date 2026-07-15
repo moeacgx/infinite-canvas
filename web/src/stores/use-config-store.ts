@@ -9,6 +9,7 @@ import { apiGet } from "@/services/api/request";
 import type { AdminPublicSettings } from "@/services/api/admin";
 
 export type ApiCallFormat = "openai" | "gemini";
+export type ChannelRequestMode = "auto" | "direct" | "proxy";
 
 export type ModelChannel = {
     id: string;
@@ -16,14 +17,20 @@ export type ModelChannel = {
     baseUrl: string;
     apiKey: string;
     apiFormat: ApiCallFormat;
+    requestMode?: ChannelRequestMode;
     models: string[];
+    modelScripts?: ModelScriptMap;
+    modelScriptApprovals?: ModelScriptMap;
 };
+
+export type ModelScriptMap = Record<string, Partial<Record<ModelCapability, string>>>;
 
 export type AiConfig = {
     channelMode: "remote" | "local" | "newapi";
     baseUrl: string;
     apiKey: string;
     apiFormat: ApiCallFormat;
+    requestMode?: ChannelRequestMode;
     channels: ModelChannel[];
     newApiGroup: string;
     newApiTextGroup: string;
@@ -105,6 +112,7 @@ export const defaultConfig: AiConfig = {
             baseUrl: OPENAI_BASE_URL,
             apiKey: "",
             apiFormat: "openai",
+            requestMode: "auto",
             models: [],
         },
     ],
@@ -490,13 +498,17 @@ export function useEffectiveConfig() {
 
 export function createModelChannel(channel?: Partial<ModelChannel>): ModelChannel {
     const apiFormat = normalizeApiFormat(channel?.apiFormat);
+    const rawModels = channel?.models || [];
     return {
         id: channel?.id?.trim() || nanoid(),
         name: channel?.name?.trim() || "新渠道",
         baseUrl: channel?.baseUrl?.trim() || defaultBaseUrlForApiFormat(apiFormat),
         apiKey: channel?.apiKey || "",
         apiFormat,
-        models: uniqueRawModels(channel?.models || []),
+        requestMode: normalizeChannelRequestMode(channel?.requestMode),
+        models: uniqueRawModels(rawModels),
+        modelScripts: normalizeModelScripts(channel?.modelScripts, rawModels),
+        modelScriptApprovals: normalizeModelScriptApprovals(channel?.modelScriptApprovals, channel?.modelScripts),
     };
 }
 
@@ -505,7 +517,7 @@ export function defaultBaseUrlForApiFormat(apiFormat: ApiCallFormat) {
 }
 
 export function encodeChannelModel(channelId: string, model: string) {
-    return `${channelId}${CHANNEL_MODEL_SEPARATOR}${modelOptionName(model).trim()}`;
+    return `${channelId}${CHANNEL_MODEL_SEPARATOR}${model.trim()}`;
 }
 
 export function decodeChannelModel(value: string) {
@@ -550,7 +562,23 @@ export function resolveModelRequestConfig(config: AiConfig, value: string): AiCo
         baseUrl: channel.baseUrl,
         apiKey: channel.apiKey,
         apiFormat: channel.apiFormat,
+        requestMode: normalizeChannelRequestMode(channel.requestMode),
     };
+}
+
+export function resolveModelScript(config: AiConfig, value: string, capability: ModelCapability) {
+    if (config.channelMode !== "local") return "";
+    const model = modelOptionName(value).trim();
+    if (!model) return "";
+    const channel = resolveModelChannel(config, value);
+    const source = channel.modelScripts?.[model]?.[capability]?.trim() || "";
+    return source && channel.modelScriptApprovals?.[model]?.[capability] === modelScriptFingerprint(source) ? source : "";
+}
+
+export function modelScriptFingerprint(source: string) {
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < source.length; index += 1) hash = Math.imul(hash ^ source.charCodeAt(index), 0x01000193);
+    return `v1-${source.length}-${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
 export function withLocalChannels(config: AiConfig, inputChannels: ModelChannel[]): AiConfig {
@@ -560,7 +588,10 @@ export function withLocalChannels(config: AiConfig, inputChannels: ModelChannel[
         baseUrl: channel.baseUrl ?? "",
         apiKey: channel.apiKey ?? "",
         apiFormat: normalizeApiFormat(channel.apiFormat),
+        requestMode: normalizeChannelRequestMode(channel.requestMode),
         models: uniqueRawModels(channel.models || []),
+        modelScripts: normalizeModelScripts(channel.modelScripts, channel.models),
+        modelScriptApprovals: normalizeModelScriptApprovals(channel.modelScriptApprovals, channel.modelScripts),
     }));
     const models = modelOptionsFromChannels(channels);
     const capabilityLists = {
@@ -575,6 +606,7 @@ export function withLocalChannels(config: AiConfig, inputChannels: ModelChannel[
         baseUrl: channels[0]?.baseUrl ?? config.baseUrl,
         apiKey: channels[0]?.apiKey ?? config.apiKey,
         apiFormat: channels[0]?.apiFormat ?? config.apiFormat,
+        requestMode: channels[0]?.requestMode ?? config.requestMode ?? "auto",
         models,
         ...capabilityLists,
         model: nextLocalDefault(config.model, capabilityLists.textModels),
@@ -626,8 +658,66 @@ function normalizeApiFormat(value: unknown): ApiCallFormat {
     return value === "gemini" ? "gemini" : "openai";
 }
 
-function uniqueRawModels(models: string[]) {
-    return Array.from(new Set((models || []).map((model) => modelOptionName(model).trim()).filter(Boolean)));
+function normalizeChannelRequestMode(value: unknown): ChannelRequestMode {
+    return value === "direct" || value === "proxy" ? value : "auto";
+}
+
+function uniqueRawModels(models: unknown) {
+    if (!Array.isArray(models)) return [];
+    return Array.from(new Set(models.map(rawChannelModelName).filter(Boolean)));
+}
+
+function normalizeModelScripts(value: unknown, legacyModels?: unknown): ModelScriptMap {
+    const result: ModelScriptMap = {};
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+        Object.entries(value)
+            .slice(0, 256)
+            .forEach(([rawModel, scripts]) => {
+                const model = rawModel.trim().slice(0, 256);
+                if (!model || !scripts || typeof scripts !== "object" || Array.isArray(scripts)) return;
+                for (const capability of ["image", "video", "text", "audio"] as const) {
+                    const source = (scripts as Record<string, unknown>)[capability];
+                    if (typeof source === "string" && source.trim()) (result[model] ||= {})[capability] = source.slice(0, 100_000);
+                }
+            });
+    }
+    if (Array.isArray(legacyModels)) {
+        legacyModels.slice(0, 256).forEach((item) => {
+            if (!item || typeof item !== "object" || Array.isArray(item)) return;
+            const record = item as Record<string, unknown>;
+            const model = typeof record.name === "string" ? record.name.trim().slice(0, 256) : "";
+            const capability = record.capability;
+            const source = record.script;
+            if (model && (capability === "image" || capability === "video" || capability === "text" || capability === "audio") && typeof source === "string" && source.trim()) {
+                (result[model] ||= {})[capability] ||= source.slice(0, 100_000);
+            }
+        });
+    }
+    return result;
+}
+
+function normalizeModelScriptApprovals(value: unknown, scripts: unknown): ModelScriptMap {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const normalizedScripts = normalizeModelScripts(scripts);
+    const result: ModelScriptMap = {};
+    Object.entries(value)
+        .slice(0, 256)
+        .forEach(([rawModel, approvals]) => {
+            const model = rawModel.trim().slice(0, 256);
+            if (!model || !approvals || typeof approvals !== "object" || Array.isArray(approvals)) return;
+            for (const capability of ["image", "video", "text", "audio"] as const) {
+                const approval = (approvals as Record<string, unknown>)[capability];
+                const source = normalizedScripts[model]?.[capability];
+                if (typeof approval === "string" && source && approval === modelScriptFingerprint(source.trim())) (result[model] ||= {})[capability] = approval;
+            }
+        });
+    return result;
+}
+
+function rawChannelModelName(value: unknown) {
+    if (typeof value === "string") return value.trim();
+    if (value && typeof value === "object" && !Array.isArray(value) && typeof (value as { name?: unknown }).name === "string") return (value as { name: string }).name.trim();
+    return "";
 }
 
 function uniqueModelOptions(models: string[]) {

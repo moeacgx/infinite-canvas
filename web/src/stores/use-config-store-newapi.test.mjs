@@ -118,8 +118,8 @@ test("image generation and edits use the selected image model instead of stale g
     assert.match(source, /defaultConfig\[defaultModelKey\(capability\)\]/);
     assert.doesNotMatch(source, /imageModel:\s*config\.imageModel \|\| config\.model/);
     assert.match(imageSource, /resolveCapabilityModel/);
-    assert.match(imageSource, /requestGeneration[\s\S]*resolveModelRequestConfig\(config,\s*resolveCapabilityModel\(config,\s*"image"\)\)[\s\S]*model:\s*requestConfig\.model/);
-    assert.match(imageSource, /requestEdit[\s\S]*resolveModelRequestConfig\(config,\s*resolveCapabilityModel\(config,\s*"image"\)\)[\s\S]*formData\.set\("model",\s*requestConfig\.model\)/);
+    assert.match(imageSource, /requestGeneration[\s\S]*channelModel\s*=\s*resolveCapabilityModel\(config,\s*"image"\)[\s\S]*resolveModelRequestConfig\(config,\s*channelModel\)[\s\S]*model:\s*requestConfig\.model/);
+    assert.match(imageSource, /requestEdit[\s\S]*channelModel\s*=\s*resolveCapabilityModel\(config,\s*"image"\)[\s\S]*resolveModelRequestConfig\(config,\s*channelModel\)[\s\S]*formData\.set\("model",\s*requestConfig\.model\)/);
     assert.doesNotMatch(imageSource, /resolveCapabilityModel\(config,\s*"image",\s*config\.model\)/);
     assert.doesNotMatch(imageSource, /requestGeneration[\s\S]{0,500}model:\s*config\.model/);
     assert.doesNotMatch(imageSource, /requestEdit[\s\S]{0,500}formData\.set\("model",\s*config\.model\)/);
@@ -164,8 +164,8 @@ test("New API image generation submits async task and polls result", () => {
     assert.match(imageSource, /waitForNewApiImageTask/);
     assert.match(imageSource, /\/images\/tasks\/\$\{encodeURIComponent\(taskId\)\}/);
     assert.match(imageSource, /task\.status === "succeeded"/);
-    assert.match(imageSource, /parseImagePayload\(task\.result,\s*config\)/);
-    assert.match(imageSource, /resolveImageDataUrl\(item,\s*config\)/);
+    assert.match(imageSource, /parseImagePayload\(task\.result,\s*config(?:,\s*options\?\.signal)?\)/);
+    assert.match(imageSource, /resolveImageDataUrl\(item,\s*config(?:,\s*signal)?\)/);
     assert.match(imageSource, /downloadNewApiImageContent/);
     assert.match(imageSource, /newApiCanvasUrl\(config\.baseUrl,\s*path\)/);
     assert.match(imageSource, /responseType:\s*"blob"/);

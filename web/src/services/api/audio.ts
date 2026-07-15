@@ -1,8 +1,9 @@
 import { audioMimeType, normalizeAudioFormatValue, normalizeAudioSpeedValue, normalizeAudioVoiceValue } from "@/lib/audio-generation";
 import { readAxiosError } from "@/services/api/ai-utils";
 import { channelAxiosRequest } from "@/services/api/channel-request";
+import { resolveModelPluginResultUrl, runModelPlugin } from "@/services/api/model-plugin";
 import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
-import { buildApiUrl, isNewApiConfig, resolveCapabilityModel, resolveModelRequestConfig, resolveNewApiGroup, type AiConfig } from "@/stores/use-config-store";
+import { buildApiUrl, isNewApiConfig, resolveCapabilityModel, resolveModelRequestConfig, resolveModelScript, resolveNewApiGroup, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
 type RequestOptions = { signal?: AbortSignal };
@@ -42,12 +43,30 @@ function refreshRemoteUser(config: AiConfig) {
 }
 
 export async function requestAudioGeneration(config: AiConfig, prompt: string, options?: RequestOptions): Promise<Blob> {
-    const requestConfig = resolveModelRequestConfig(config, resolveCapabilityModel(config, "audio", config.model || config.audioModel));
+    const channelModel = resolveCapabilityModel(config, "audio", config.model || config.audioModel);
+    const requestConfig = resolveModelRequestConfig(config, channelModel);
     const model = requestConfig.model.trim();
     assertAudioConfig(requestConfig, model);
-    if (requestConfig.apiFormat === "gemini") throw new Error("Gemini 调用格式暂不支持语音生成，请为音频模型选择 OpenAI 格式渠道");
     const format = normalizeAudioFormatValue(requestConfig.audioFormat);
     const instructions = requestConfig.audioInstructions.trim();
+    const script = resolveModelScript(config, channelModel, "audio");
+
+    if (script) {
+        try {
+            const result = await runModelPlugin({
+                capability: "audio",
+                script,
+                config: requestConfig,
+                prompt,
+                params: { voice: normalizeAudioVoiceValue(requestConfig.audioVoice), format, speed: normalizeAudioSpeedValue(requestConfig.audioSpeed), instructions },
+                signal: options?.signal,
+            });
+            return await audioPluginBlob(result, format, requestConfig, options?.signal);
+        } catch (error) {
+            throw new Error(readAxiosError(error, "音频生成失败"));
+        }
+    }
+    if (requestConfig.apiFormat === "gemini") throw new Error("Gemini 调用格式暂不支持语音生成，请为音频模型选择 OpenAI 格式渠道或配置自定义调用脚本");
 
     try {
         const response = await channelAxiosRequest<Blob>(requestConfig, {
@@ -71,6 +90,59 @@ export async function requestAudioGeneration(config: AiConfig, prompt: string, o
     } catch (error) {
         throw new Error(readAxiosError(error, "音频生成失败"));
     }
+}
+
+async function audioPluginBlob(result: unknown, format: string, config: AiConfig, signal?: AbortSignal): Promise<Blob> {
+    if (result instanceof Blob) return result;
+    if (result instanceof ArrayBuffer) return new Blob([result], { type: audioMimeType(format) });
+    const record = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
+    if (record.blob instanceof Blob) return record.blob;
+    const mimeType = typeof record.mimeType === "string" && record.mimeType.startsWith("audio/") ? record.mimeType : audioMimeType(format);
+    const value = typeof result === "string" ? result : typeof record.data === "string" ? record.data : typeof record.b64_json === "string" ? record.b64_json : "";
+    const url = typeof record.url === "string" ? record.url : "";
+    if (url) {
+        const resultUrl = resolveModelPluginResultUrl(config.baseUrl, url);
+        const sameOrigin = (() => {
+            try {
+                return new URL(resultUrl).origin === new URL(config.baseUrl).origin;
+            } catch {
+                return false;
+            }
+        })();
+        const response = await channelAxiosRequest<Blob>(config, { method: "GET", url: resultUrl, headers: sameOrigin && config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : undefined, responseType: "blob", signal });
+        return response.data;
+    }
+    if (!value) throw new Error("模型调用脚本没有返回音频");
+    if (value.startsWith("data:")) return await (await fetch(value)).blob();
+    try {
+        const bytes = Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
+        if (/pcm|l16/i.test(mimeType)) return pcm16ToWav(bytes, Number(mimeType.match(/rate=(\d+)/i)?.[1]) || 24_000);
+        return new Blob([bytes], { type: mimeType });
+    } catch {
+        throw new Error("模型调用脚本返回的音频格式无效");
+    }
+}
+
+function pcm16ToWav(pcm: Uint8Array, sampleRate: number) {
+    const header = new ArrayBuffer(44);
+    const view = new DataView(header);
+    const write = (offset: number, value: string) => Array.from(value).forEach((character, index) => view.setUint8(offset + index, character.charCodeAt(0)));
+    write(0, "RIFF");
+    view.setUint32(4, 36 + pcm.byteLength, true);
+    write(8, "WAVE");
+    write(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    write(36, "data");
+    view.setUint32(40, pcm.byteLength, true);
+    const body = new ArrayBuffer(pcm.byteLength);
+    new Uint8Array(body).set(pcm);
+    return new Blob([header, body], { type: "audio/wav" });
 }
 
 export async function storeGeneratedAudio(blob: Blob, format = "mp3"): Promise<UploadedFile> {

@@ -1,12 +1,14 @@
 import axios from "axios";
+import { nanoid } from "nanoid";
 
 import { dataUrlToFile } from "@/lib/image-utils";
 import { isRequestCanceled, readAxiosError } from "@/services/api/ai-utils";
 import { channelAxiosRequest } from "@/services/api/channel-request";
+import { resolveModelPluginResultUrl, runModelPlugin } from "@/services/api/model-plugin";
 import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
 import { boolConfig, buildSeedancePromptText, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceVideoReferenceError, SEEDANCE_REFERENCE_LIMITS } from "@/lib/seedance-video";
-import { buildApiUrl, isNewApiConfig, resolveCapabilityModel, resolveModelRequestConfig, resolveNewApiGroup, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import { buildApiUrl, isNewApiConfig, resolveCapabilityModel, resolveModelRequestConfig, resolveModelScript, resolveNewApiGroup, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
@@ -32,9 +34,11 @@ type SeedancePayload = {
 };
 
 export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string };
-export type VideoGenerationTask = { id: string; provider: "openai" | "seedance"; model: string; channelModel?: string };
+export type VideoGenerationTask = { id: string; provider: "openai" | "seedance" | "plugin"; model: string; channelModel?: string };
 export type VideoGenerationTaskState = { status: "pending" } | { status: "completed"; result: VideoGenerationResult } | { status: "failed"; error: string };
 type RequestOptions = { signal?: AbortSignal };
+
+const pluginVideoResults = new Map<string, { result: VideoGenerationResult; timer: ReturnType<typeof setTimeout> }>();
 
 function aiApiUrl(config: AiConfig, path: string) {
     return config.channelMode === "remote" ? `/api/v1${path}` : buildApiUrl(config.baseUrl, path);
@@ -91,6 +95,8 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
     const requestConfig = resolveModelRequestConfig(config, channelModel);
     const model = requestConfig.model.trim();
     assertVideoConfig(requestConfig, model);
+    const script = resolveModelScript(config, channelModel, "video");
+    if (script) return createPluginVideoTask(requestConfig, channelModel, script, prompt, references, videoReferences, audioReferences, options);
     if (requestConfig.apiFormat === "gemini") throw new Error("Gemini 调用格式暂不支持视频生成，请为视频模型选择 OpenAI 格式渠道");
     if (isSeedanceVideoConfig({ ...requestConfig, model })) {
         return createSeedanceTask(requestConfig, model, prompt, references, videoReferences, audioReferences, options, channelModel);
@@ -102,9 +108,86 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
 }
 
 export async function pollVideoGenerationTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
+    if (task.provider === "plugin") {
+        const entry = pluginVideoResults.get(task.id);
+        if (!entry) return { status: "failed", error: "自定义脚本视频结果已失效，请重新生成" };
+        clearTimeout(entry.timer);
+        pluginVideoResults.delete(task.id);
+        return { status: "completed", result: entry.result };
+    }
     const requestConfig = resolveModelRequestConfig(config, task.channelModel || task.model);
     assertVideoConfig(requestConfig, task.model);
     return task.provider === "seedance" ? pollSeedanceTask(requestConfig, task, options) : pollOpenAIVideoTask(requestConfig, task, options);
+}
+
+async function createPluginVideoTask(
+    config: AiConfig,
+    channelModel: string,
+    script: string,
+    prompt: string,
+    references: ReferenceImage[],
+    videoReferences: ReferenceVideo[],
+    audioReferences: ReferenceAudio[],
+    options?: RequestOptions,
+): Promise<VideoGenerationTask> {
+    const [images, videos, audios] = await Promise.all([
+        Promise.all(references.map((image) => imageToDataUrl(image))),
+        Promise.all(videoReferences.map(resolveSeedanceVideoUrl)),
+        Promise.all(audioReferences.map(resolveSeedanceAudioUrl)),
+    ]);
+    try {
+        const raw = await runModelPlugin({
+            capability: "video",
+            script,
+            config,
+            prompt,
+            images,
+            params: {
+                seconds: normalizeVideoSeconds(config.videoSeconds),
+                size: normalizeVideoSize(config.size),
+                resolution: normalizeVideoResolution(config.vquality),
+                ratio: config.size,
+                generateAudio: boolConfig(config.videoGenerateAudio, true),
+                watermark: boolConfig(config.videoWatermark, false),
+                videoReferences: videos,
+                audioReferences: audios,
+            },
+            signal: options?.signal,
+        });
+        const result = await materializePluginVideoResult(config, normalizePluginVideoResult(raw, config.baseUrl), options?.signal);
+        const id = `plugin-${nanoid()}`;
+        while (pluginVideoResults.size >= 32) {
+            const oldest = pluginVideoResults.entries().next().value as [string, { result: VideoGenerationResult; timer: ReturnType<typeof setTimeout> }] | undefined;
+            if (!oldest) break;
+            clearTimeout(oldest[1].timer);
+            pluginVideoResults.delete(oldest[0]);
+        }
+        const timer = setTimeout(() => pluginVideoResults.delete(id), 10 * 60 * 1000);
+        pluginVideoResults.set(id, { result, timer });
+        return { id, provider: "plugin", model: config.model, channelModel };
+    } catch (error) {
+        throw new Error(readAxiosError(error, "自定义视频脚本执行失败"));
+    }
+}
+
+function normalizePluginVideoResult(value: unknown, baseUrl: string): VideoGenerationResult {
+    if (value instanceof Blob) return { blob: value };
+    if (value instanceof ArrayBuffer) return { blob: new Blob([value], { type: "video/mp4" }) };
+    if (typeof value === "string" && value.trim()) return { url: resolveModelPluginResultUrl(baseUrl, value.trim()), mimeType: "video/mp4" };
+    if (value && typeof value === "object") {
+        const record = value as Record<string, unknown>;
+        if (record.blob instanceof Blob) return { blob: record.blob };
+        if (typeof record.url === "string" && record.url.trim()) return { url: resolveModelPluginResultUrl(baseUrl, record.url.trim()), mimeType: typeof record.mimeType === "string" ? record.mimeType : "video/mp4" };
+    }
+    throw new Error("模型调用脚本没有返回视频");
+}
+
+async function materializePluginVideoResult(config: AiConfig, result: VideoGenerationResult, signal?: AbortSignal) {
+    if (result.blob || !result.url) return result;
+    const headers = config.apiFormat === "gemini" ? { "x-goog-api-key": config.apiKey } : { Authorization: `Bearer ${config.apiKey}` };
+    const response = await channelAxiosRequest<Blob>(config, { method: "GET", url: result.url, headers, responseType: "blob", signal });
+    await assertVideoBlob(response.data);
+    return { blob: response.data, mimeType: response.data.type || result.mimeType };
 }
 
 export async function storeGeneratedVideo(result: VideoGenerationResult): Promise<UploadedFile> {

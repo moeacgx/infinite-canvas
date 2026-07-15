@@ -80,9 +80,9 @@ export function geminiHeaders(config: Pick<AiConfig, "apiKey">) {
     };
 }
 
-export async function fetchGeminiModels(config: Pick<AiConfig, "baseUrl" | "apiKey">) {
+export async function fetchGeminiModels(config: Pick<AiConfig, "baseUrl" | "apiKey"> & Partial<Pick<AiConfig, "requestMode">>) {
     const requestConfig = { ...config, model: "" };
-    const response = await channelAxiosRequest<GeminiPayload>({ channelMode: "local" }, { method: "GET", url: geminiApiUrl(requestConfig), headers: geminiHeaders(requestConfig) });
+    const response = await channelAxiosRequest<GeminiPayload>({ channelMode: "local", requestMode: config.requestMode }, { method: "GET", url: geminiApiUrl(requestConfig), headers: geminiHeaders(requestConfig) });
     validateGeminiPayload(response.data);
     return (response.data.models || [])
         .map((model) => model.name?.replace(/^models\//, ""))

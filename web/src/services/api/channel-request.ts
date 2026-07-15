@@ -1,11 +1,16 @@
 import axios, { AxiosHeaders, type AxiosRequestConfig, type AxiosResponse } from "axios";
 
 import { useUserStore } from "@/stores/use-user-store";
-import type { AiConfig } from "@/stores/use-config-store";
+import type { AiConfig, ChannelRequestMode } from "@/stores/use-config-store";
 
 import { channelProxyHeaders, isRetryableChannelNetworkFailure } from "./channel-proxy-client";
 
-export async function channelAxiosRequest<T = unknown>(config: Pick<AiConfig, "channelMode">, requestConfig: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+type ChannelTransportConfig = Pick<AiConfig, "channelMode"> & { requestMode?: ChannelRequestMode };
+const proxyPreferredOrigins = new Set<string>();
+
+export async function channelAxiosRequest<T = unknown>(config: ChannelTransportConfig, requestConfig: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+    const target = axios.getUri(requestConfig);
+    if (shouldUseChannelProxy(config, target)) return requestThroughChannelProxy<T>(requestConfig, axiosHeaderRecord(requestConfig.headers));
     try {
         return await axios.request<T>(requestConfig);
     } catch (error) {
@@ -22,11 +27,14 @@ export async function channelAxiosRequest<T = unknown>(config: Pick<AiConfig, "c
               })
             : false;
         if (!retryable) throw error;
+        rememberProxyOrigin(target);
         return requestThroughChannelProxy<T>(requestConfig, headers);
     }
 }
 
-export async function channelFetch(config: Pick<AiConfig, "channelMode">, input: string | URL, init: RequestInit = {}) {
+export async function channelFetch(config: ChannelTransportConfig, input: string | URL, init: RequestInit = {}) {
+    const target = typeof input === "string" ? input : input.toString();
+    if (shouldUseChannelProxy(config, target)) return fetchThroughChannelProxy(target, init);
     try {
         return await fetch(input, init);
     } catch (error) {
@@ -39,15 +47,18 @@ export async function channelFetch(config: Pick<AiConfig, "channelMode">, input:
             headers,
         });
         if (!retryable) throw error;
-        const token = requireAppToken();
-        const target = typeof input === "string" ? input : input.toString();
-        const proxyHeaders = new Headers(channelProxyHeaders(target, init.method || "GET", headers, token));
-        const bodyIsFormData = typeof FormData !== "undefined" && init.body instanceof FormData;
-        const contentType = new Headers(init.headers).get("content-type");
-        if (contentType && !bodyIsFormData) proxyHeaders.set("content-type", contentType);
-        const response = await fetch("/channel-proxy", { ...init, method: "POST", headers: proxyHeaders });
-        return response;
+        rememberProxyOrigin(target);
+        return fetchThroughChannelProxy(target, init, headers);
     }
+}
+
+async function fetchThroughChannelProxy(target: string, init: RequestInit, providerHeaders = fetchHeaderRecord(init.headers)) {
+    const token = requireAppToken();
+    const proxyHeaders = new Headers(channelProxyHeaders(target, init.method || "GET", providerHeaders, token));
+    const bodyIsFormData = typeof FormData !== "undefined" && init.body instanceof FormData;
+    const contentType = new Headers(init.headers).get("content-type");
+    if (contentType && !bodyIsFormData) proxyHeaders.set("content-type", contentType);
+    return fetch("/channel-proxy", { ...init, method: "POST", headers: proxyHeaders });
 }
 
 async function requestThroughChannelProxy<T>(requestConfig: AxiosRequestConfig, providerHeaders: Record<string, string>) {
@@ -71,6 +82,7 @@ async function requestThroughChannelProxy<T>(requestConfig: AxiosRequestConfig, 
             withCredentials: false,
         });
     } catch (error) {
+        if (requestConfig.signal?.aborted || axios.isCancel(error)) throw error;
         throw new Error(await proxyErrorMessage(error));
     }
 }
@@ -79,6 +91,27 @@ function requireAppToken() {
     const token = useUserStore.getState().token;
     if (!token) throw new Error("浏览器直连被拦截；自动服务端转发需要先登录本站，并且只应在信任当前部署时发送渠道 API Key");
     return token;
+}
+
+function shouldUseChannelProxy(config: ChannelTransportConfig, target: string) {
+    if (config.channelMode !== "local" || config.requestMode === "direct") return false;
+    if (config.requestMode === "proxy") return true;
+    if (!useUserStore.getState().token) return false;
+    const origin = targetOrigin(target);
+    return Boolean(origin && proxyPreferredOrigins.has(origin));
+}
+
+function rememberProxyOrigin(target: string) {
+    const origin = targetOrigin(target);
+    if (origin) proxyPreferredOrigins.add(origin);
+}
+
+function targetOrigin(target: string) {
+    try {
+        return new URL(target, typeof location === "undefined" ? undefined : location.href).origin;
+    } catch {
+        return "";
+    }
 }
 
 function axiosHeaderRecord(headers: AxiosRequestConfig["headers"]) {

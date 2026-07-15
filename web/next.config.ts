@@ -23,5 +23,18 @@ export default function nextConfig(phase: string): NextConfig {
             NEXT_PUBLIC_APP_VERSION: localVersion,
             NEXT_PUBLIC_APP_RELEASES: JSON.stringify(releases),
         },
+        async headers() {
+            return [
+                {
+                    source: "/model-script-worker.js",
+                    headers: [
+                        { key: "Content-Security-Policy", value: "default-src 'none'; connect-src 'none'; script-src 'unsafe-eval'; worker-src 'none'; child-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" },
+                        { key: "Cross-Origin-Resource-Policy", value: "same-origin" },
+                        { key: "X-Content-Type-Options", value: "nosniff" },
+                        { key: "Cache-Control", value: "no-store" },
+                    ],
+                },
+            ];
+        },
     };
 }

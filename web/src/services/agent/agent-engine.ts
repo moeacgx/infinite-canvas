@@ -1,9 +1,10 @@
 import { nanoid } from "nanoid";
 
-import { resolveCapabilityModel, resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
+import { resolveCapabilityModel, resolveModelRequestConfig, resolveModelScript, type AiConfig } from "@/stores/use-config-store";
 import type { Skill } from "@/services/api/skills";
 import { aiApiUrl, aiRequestConfig, refreshRemoteUser, readAxiosError } from "@/services/api/ai-utils";
 import { channelAxiosRequest } from "@/services/api/channel-request";
+import { runModelPlugin, sanitizeModelPluginText } from "@/services/api/model-plugin";
 import { streamGeminiChat, type GeminiChatMessage, type GeminiFunctionTool } from "@/services/api/gemini";
 import { parseAgentStreamChunk } from "./agent-stream";
 import { buildToolDefinitions } from "./skill-definitions";
@@ -166,7 +167,37 @@ type StreamResult = {
 };
 
 async function streamChatCompletion(config: AiConfig, messages: Array<Record<string, unknown>>, tools: ReturnType<typeof buildToolDefinitions> | undefined, onDelta: (fullText: string) => void, signal?: AbortSignal): Promise<StreamResult> {
-    const requestConfig = resolveModelRequestConfig(config, resolveCapabilityModel(config, "text", config.model || config.textModel));
+    const channelModel = resolveCapabilityModel(config, "text", config.model || config.textModel);
+    const requestConfig = resolveModelRequestConfig(config, channelModel);
+    const script = resolveModelScript(config, channelModel, "text");
+    if (script) {
+        try {
+            let streamedText = "";
+            const result = await runModelPlugin<unknown>({
+                capability: "text",
+                script,
+                config: requestConfig,
+                messages,
+                params: { tools: tools || [] },
+                signal,
+                onDelta: (delta) => {
+                    streamedText += delta;
+                    onDelta(sanitizeModelPluginText(streamedText));
+                },
+            });
+            if (typeof result === "string") return { content: sanitizeModelPluginText(result) };
+            if (result && typeof result === "object") {
+                const record = result as Record<string, unknown>;
+                const content = typeof record.content === "string" ? sanitizeModelPluginText(record.content) : "";
+                const toolCalls = normalizePluginToolCalls(record.toolCalls);
+                return { content, ...(toolCalls.length ? { toolCalls } : {}) };
+            }
+            throw new Error("文本脚本没有返回字符串或 { content, toolCalls }");
+        } catch (error) {
+            if (signal?.aborted) throw new Error("已取消");
+            throw new Error(readAxiosError(error, "对话请求失败"));
+        }
+    }
     if (requestConfig.apiFormat === "gemini") {
         try {
             const result = await streamGeminiChat({ ...requestConfig, systemPrompt: "" }, messages as GeminiChatMessage[], tools as GeminiFunctionTool[] | undefined, onDelta, { signal });
@@ -255,4 +286,18 @@ async function streamChatCompletion(config: AiConfig, messages: Array<Record<str
     const toolCalls = toolCallAccumulator.size > 0 ? Array.from(toolCallAccumulator.values()) : undefined;
 
     return { content, toolCalls };
+}
+
+function normalizePluginToolCalls(value: unknown): NonNullable<StreamResult["toolCalls"]> {
+    if (!Array.isArray(value)) return [];
+    return value.slice(0, 20).flatMap((item, index) => {
+        if (!item || typeof item !== "object") return [];
+        const record = item as Record<string, unknown>;
+        const fn = record.function && typeof record.function === "object" ? (record.function as Record<string, unknown>) : record;
+        const name = typeof fn.name === "string" ? fn.name.trim() : "";
+        if (!name) return [];
+        const rawArguments = fn.arguments;
+        const argumentsText = typeof rawArguments === "string" ? rawArguments : JSON.stringify(rawArguments || {});
+        return [{ id: typeof record.id === "string" ? record.id : `call_${index}_${nanoid()}`, name, arguments: argumentsText, ...(typeof record.thoughtSignature === "string" ? { thoughtSignature: record.thoughtSignature } : {}) }];
+    });
 }
