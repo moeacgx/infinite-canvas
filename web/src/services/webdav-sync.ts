@@ -1,6 +1,7 @@
 "use client";
 
 import type { WebdavSyncConfig } from "@/stores/use-config-store";
+import { useUserStore } from "@/stores/use-user-store";
 
 export const WEBDAV_MANIFEST_FILE_NAME = "manifest.json";
 const WEBDAV_REQUEST_TIMEOUT_MS = 120000;
@@ -95,6 +96,8 @@ function proxyHeaders(target: string, method: string, headers: Headers) {
         "x-webdav-target": target,
         "x-webdav-method": method,
     });
+    const token = useUserStore.getState().token;
+    if (token) proxyHeaders.set("Authorization", `Bearer ${token}`);
     copyProxyHeader(headers, proxyHeaders, "Authorization", "x-webdav-authorization");
     copyProxyHeader(headers, proxyHeaders, "Depth", "x-webdav-depth");
     copyProxyHeader(headers, proxyHeaders, "Destination", "x-webdav-destination");

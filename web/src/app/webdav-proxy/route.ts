@@ -1,47 +1,120 @@
-import { NextRequest } from "next/server";
+import { request as httpRequest, type IncomingMessage } from "node:http";
+import { request as httpsRequest } from "node:https";
+
+import type { NextRequest } from "next/server";
+
+import { createPinnedLookup, resolvePublicProxyTarget } from "@/lib/server/webdav-proxy-security";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const WEBDAV_PROXY_TIMEOUT_MS = 120000;
+const AUTH_TIMEOUT_MS = 10000;
+const MAX_REQUEST_BYTES = 128 * 1024 * 1024;
+const MAX_RESPONSE_BYTES = 128 * 1024 * 1024;
+const ALLOWED_METHODS = new Set(["GET", "HEAD", "PUT", "MKCOL", "PROPFIND"]);
+const BODYLESS_METHODS = new Set(["GET", "HEAD", "MKCOL", "PROPFIND"]);
 
 export async function POST(request: NextRequest) {
+    if (!(await hasAuthenticatedUser(request))) return new Response("请先登录后再使用 WebDAV 服务端转发", { status: 401 });
+
     const target = request.headers.get("x-webdav-target") || "";
     const method = (request.headers.get("x-webdav-method") || "GET").toUpperCase();
-    if (!target) return new Response("Missing x-webdav-target", { status: 400 });
+    if (!target) return new Response("缺少 WebDAV 目标地址", { status: 400 });
+    if (!ALLOWED_METHODS.has(method)) return new Response("不支持该 WebDAV 请求方法", { status: 405, headers: { Allow: Array.from(ALLOWED_METHODS).join(", ") } });
 
-    let url: URL;
+    let resolvedTarget;
     try {
-        url = new URL(target);
-    } catch {
-        return new Response("Invalid x-webdav-target", { status: 400 });
+        resolvedTarget = await resolvePublicProxyTarget(target);
+    } catch (error) {
+        return new Response(error instanceof Error ? error.message : "WebDAV 目标地址无效", { status: 400 });
     }
-    if (url.protocol !== "http:" && url.protocol !== "https:") return new Response("Unsupported WebDAV target", { status: 400 });
 
     const headers = new Headers();
     copyHeader(request, headers, "x-webdav-authorization", "Authorization");
     copyHeader(request, headers, "x-webdav-depth", "Depth");
-    copyHeader(request, headers, "x-webdav-destination", "Destination");
-    copyHeader(request, headers, "x-webdav-overwrite", "Overwrite");
     copyHeader(request, headers, "x-webdav-content-type", "Content-Type");
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), WEBDAV_PROXY_TIMEOUT_MS);
+    const abortFromClient = () => controller.abort();
+    request.signal.addEventListener("abort", abortFromClient, { once: true });
     try {
-        const body = method === "GET" || method === "HEAD" ? undefined : await request.arrayBuffer();
-        console.log(`[webdav-proxy] ${method} ${url.href} ${body?.byteLength || 0}B`);
-        const response = await fetch(url, { method, headers, body: body?.byteLength ? body : undefined, signal: controller.signal });
-        console.log(`[webdav-proxy] ${method} ${url.href} -> ${response.status}`);
-        return new Response(method === "HEAD" ? null : response.body, {
-            status: response.status,
-            headers: responseHeaders(response.headers),
+        const declaredLength = Number(request.headers.get("content-length") || 0);
+        if (declaredLength > MAX_REQUEST_BYTES) return new Response("WebDAV 请求体过大", { status: 413 });
+        const body = BODYLESS_METHODS.has(method) ? undefined : await request.arrayBuffer();
+        if (body && body.byteLength > MAX_REQUEST_BYTES) return new Response("WebDAV 请求体过大", { status: 413 });
+
+        const response = await requestWebdav(resolvedTarget, method, headers, body, controller.signal);
+        if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400) {
+            response.destroy();
+            return new Response("WebDAV 服务端转发不允许重定向，请直接填写最终地址", { status: 502 });
+        }
+        const responseBody = method === "HEAD" ? null : await readLimitedResponse(response);
+        if (method === "HEAD") response.destroy();
+        return new Response(responseBody, {
+            status: response.statusCode || 502,
+            headers: responseHeaders(response.headers, responseBody?.byteLength),
         });
     } catch (error) {
-        if (error instanceof Error && error.name === "AbortError") return new Response("WebDAV proxy timeout", { status: 504 });
-        return new Response(error instanceof Error ? error.message : "WebDAV proxy error", { status: 502 });
+        if (controller.signal.aborted) return new Response("WebDAV 服务端转发超时或已取消", { status: 504 });
+        console.error("WebDAV proxy request failed", error instanceof Error ? error.message : error);
+        return new Response(error instanceof Error && error.message === "WebDAV 响应体过大" ? error.message : "WebDAV 服务端转发失败", { status: 502 });
+    } finally {
+        clearTimeout(timer);
+        request.signal.removeEventListener("abort", abortFromClient);
+    }
+}
+
+async function hasAuthenticatedUser(request: NextRequest) {
+    const authorization = request.headers.get("authorization") || "";
+    if (!authorization.startsWith("Bearer ")) return false;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), AUTH_TIMEOUT_MS);
+    try {
+        const apiBaseUrl = (process.env.API_BASE_URL || "http://127.0.0.1:8080").replace(/\/$/, "");
+        const response = await fetch(`${apiBaseUrl}/api/auth/me`, { headers: { Authorization: authorization }, redirect: "manual", signal: controller.signal });
+        if (!response.ok) return false;
+        const payload = (await response.json()) as { code?: number; data?: { role?: string } | null };
+        return payload.code === 0 && Boolean(payload.data?.role && payload.data.role !== "guest");
+    } catch {
+        return false;
     } finally {
         clearTimeout(timer);
     }
+}
+
+function requestWebdav(target: Awaited<ReturnType<typeof resolvePublicProxyTarget>>, method: string, headers: Headers, body: ArrayBuffer | undefined, signal: AbortSignal) {
+    return new Promise<IncomingMessage>((resolve, reject) => {
+        const requestImpl = target.url.protocol === "https:" ? httpsRequest : httpRequest;
+        const upstream = requestImpl(
+            target.url,
+            {
+                method,
+                headers: Object.fromEntries(headers.entries()),
+                lookup: createPinnedLookup(target.addresses),
+                signal,
+            },
+            resolve,
+        );
+        upstream.once("error", reject);
+        upstream.end(body?.byteLength ? Buffer.from(body) : undefined);
+    });
+}
+
+async function readLimitedResponse(response: IncomingMessage) {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for await (const chunk of response) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        total += buffer.byteLength;
+        if (total > MAX_RESPONSE_BYTES) {
+            response.destroy();
+            throw new Error("WebDAV 响应体过大");
+        }
+        chunks.push(buffer);
+    }
+    return Buffer.concat(chunks, total);
 }
 
 function copyHeader(request: NextRequest, headers: Headers, from: string, to: string) {
@@ -49,11 +122,12 @@ function copyHeader(request: NextRequest, headers: Headers, from: string, to: st
     if (value) headers.set(to, value);
 }
 
-function responseHeaders(headers: Headers) {
+function responseHeaders(headers: IncomingMessage["headers"], contentLength?: number) {
     const result = new Headers();
     ["content-type", "etag", "last-modified", "dav"].forEach((key) => {
-        const value = headers.get(key);
-        if (value) result.set(key, value);
+        const value = headers[key];
+        if (typeof value === "string") result.set(key, value);
     });
+    if (typeof contentLength === "number") result.set("content-length", String(contentLength));
     return result;
 }
