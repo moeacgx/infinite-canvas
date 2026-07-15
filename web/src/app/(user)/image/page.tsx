@@ -19,6 +19,7 @@ import { formatBytes, formatDuration, getDataUrlByteSize, readImageMeta } from "
 import { requestEdit, requestGeneration } from "@/services/api/image";
 import { deleteStoredImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
+import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
 import type { ReferenceImage } from "@/types/image";
 
 type GeneratedImage = {
@@ -76,7 +77,11 @@ export default function ImagePage() {
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
+    const agentCommand = useWorkbenchAgentStore((state) => state.imageCommand);
+    const consumeAgentCommand = useWorkbenchAgentStore((state) => state.consumeImage);
+    const generateRef = useRef<() => Promise<void>>(async () => undefined);
     const [prompt, setPrompt] = useState("");
+    const [pendingAgentRun, setPendingAgentRun] = useState<{ id: string; prompt?: string } | null>(null);
     const [references, setReferences] = useState<ReferenceImage[]>([]);
     const [results, setResults] = useState<GenerationResult[]>([]);
     const [logs, setLogs] = useState<GenerationLog[]>([]);
@@ -104,6 +109,20 @@ export default function ImagePage() {
     useEffect(() => {
         void refreshLogs();
     }, []);
+
+    useEffect(() => {
+        if (!agentCommand) return;
+        if (typeof agentCommand.prompt === "string") setPrompt(agentCommand.prompt);
+        if (agentCommand.run) setPendingAgentRun({ id: agentCommand.id, prompt: agentCommand.prompt });
+        consumeAgentCommand(agentCommand.id);
+    }, [agentCommand, consumeAgentCommand]);
+
+    useEffect(() => {
+        if (!pendingAgentRun) return;
+        if (typeof pendingAgentRun.prompt === "string" && prompt !== pendingAgentRun.prompt) return;
+        setPendingAgentRun(null);
+        void generateRef.current();
+    }, [pendingAgentRun, prompt]);
 
     const addReferences = async (files?: FileList | null) => {
         const imageFiles = Array.from(files || []).filter((file) => file.type.startsWith("image/"));
@@ -327,6 +346,8 @@ export default function ImagePage() {
             // runGenerationSlot 已经把结果状态更新为 failed
         }
     };
+
+    generateRef.current = generate;
 
     return (
         <div className="flex h-full flex-col overflow-hidden bg-stone-50 text-stone-900 dark:bg-stone-950 dark:text-stone-100">

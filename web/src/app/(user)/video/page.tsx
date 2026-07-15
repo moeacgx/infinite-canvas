@@ -18,6 +18,7 @@ import { deleteStoredMedia, resolveMediaUrl, uploadMediaFile } from "@/services/
 import { resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { createVideoGenerationTask, pollVideoGenerationTask, storeGeneratedVideo, type VideoGenerationTask } from "@/services/api/video";
 import { useAssetStore } from "@/stores/use-asset-store";
+import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
 import { useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { ReferenceImage } from "@/types/image";
@@ -79,7 +80,11 @@ export default function VideoPage() {
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
+    const agentCommand = useWorkbenchAgentStore((state) => state.videoCommand);
+    const consumeAgentCommand = useWorkbenchAgentStore((state) => state.consumeVideo);
+    const generateRef = useRef<() => Promise<void>>(async () => undefined);
     const [prompt, setPrompt] = useState("");
+    const [pendingAgentRun, setPendingAgentRun] = useState<{ id: string; prompt?: string } | null>(null);
     const [references, setReferences] = useState<ReferenceImage[]>([]);
     const [videoReferences, setVideoReferences] = useState<ReferenceVideo[]>([]);
     const [audioReferences, setAudioReferences] = useState<ReferenceAudio[]>([]);
@@ -108,6 +113,20 @@ export default function VideoPage() {
     useEffect(() => {
         void refreshLogs();
     }, []);
+
+    useEffect(() => {
+        if (!agentCommand) return;
+        if (typeof agentCommand.prompt === "string") setPrompt(agentCommand.prompt);
+        if (agentCommand.run) setPendingAgentRun({ id: agentCommand.id, prompt: agentCommand.prompt });
+        consumeAgentCommand(agentCommand.id);
+    }, [agentCommand, consumeAgentCommand]);
+
+    useEffect(() => {
+        if (!pendingAgentRun) return;
+        if (typeof pendingAgentRun.prompt === "string" && prompt !== pendingAgentRun.prompt) return;
+        setPendingAgentRun(null);
+        void generateRef.current();
+    }, [pendingAgentRun, prompt]);
 
     const addReferences = async (files?: FileList | null) => {
         const selectedFiles = Array.from(files || []);
@@ -188,6 +207,8 @@ export default function VideoPage() {
             setRunning(false);
         }
     };
+
+    generateRef.current = generate;
 
     const buildRequestSnapshot = () => {
         const text = prompt.trim();

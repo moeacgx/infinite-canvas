@@ -1,17 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { App, Button, Input, Segmented, Tooltip } from "antd";
 import copyToClipboard from "copy-to-clipboard";
 import { Copy, FolderOpen, History, KeyRound, Link2, LoaderCircle, PlugZap, Plus, RefreshCw, RotateCcw, Terminal, Trash2 } from "lucide-react";
 import { motion } from "motion/react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
+import { isSiteTool, normalizeSitePath, runSiteTool, SITE_TOOL_LABELS } from "@/lib/agent/agent-site-tools";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { useCanvasAgentStore, type AgentAttachment, type AgentChatItem, type AgentEventLog, type AgentPanelTab, type AgentPendingToolCall, type AgentThreadSummary } from "../stores/use-canvas-agent-store";
 import { summarizeCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "../utils/canvas-agent-ops";
+import { normalizeLocalAgentEndpoint, normalizeLocalAgentToken, removeAgentCredentialsFromUrl } from "../utils/canvas-agent-security";
 import { AgentChatComposer, AgentChatMessage, AgentPanelTabs, AgentPendingToolCard, AgentWorkingMessage, type CanvasAgentChatAttachment } from "./canvas-agent-chat-ui";
 
 const PANEL_MOTION_SECONDS = 0.5;
@@ -45,6 +47,7 @@ export function CanvasLocalAgentPanel({ snapshot, canUndoOps, collapsed, embedde
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const user = useUserStore((state) => state.user);
     const { message, modal } = App.useApp();
+    const router = useRouter();
     const searchParams = useSearchParams();
     const { width, url, token, connected, enabled, prompt, attachments, sending, waiting, messages, eventLogs, threads, activeThreadId, workspacePath, loadingThreads, activeTab, confirmTools, activity, connectError, pendingTool, setAgentState, addMessage: pushMessage, addEventLog: pushEventLog, clearEventLogs } = useCanvasAgentStore();
     const [resizing, setResizing] = useState(false);
@@ -60,6 +63,11 @@ export function CanvasLocalAgentPanel({ snapshot, canUndoOps, collapsed, embedde
     const clientIdRef = useRef(typeof crypto === "undefined" ? `${Date.now()}` : crypto.randomUUID());
     const endpoint = useMemo(() => url.trim().replace(/\/$/, ""), [url]);
     const urlAgentAutoConnect = searchParams.has("agentUrl") && searchParams.has("agentToken");
+
+    useEffect(() => {
+        if (!urlAgentAutoConnect) return;
+        window.history.replaceState(window.history.state, "", removeAgentCredentialsFromUrl(window.location.href));
+    }, [urlAgentAutoConnect]);
     const loadThreads = useCallback(async () => {
         const projectId = snapshotRef.current.projectId;
         if ((!connectedRef.current && !useCanvasAgentStore.getState().connected) || !projectId) return;
@@ -104,7 +112,7 @@ export function CanvasLocalAgentPanel({ snapshot, canUndoOps, collapsed, embedde
     useEffect(() => {
         if (!enabled || !token.trim()) return;
         localStorage.setItem("canvas-agent-url", endpoint);
-        localStorage.setItem("canvas-agent-token", token);
+        sessionStorage.setItem("canvas-agent-token", token);
         const clientId = clientIdRef.current;
         const source = new EventSource(`${endpoint}/events?token=${encodeURIComponent(token)}&clientId=${encodeURIComponent(clientId)}`);
         source.addEventListener("hello", () => {
@@ -250,16 +258,40 @@ export function CanvasLocalAgentPanel({ snapshot, canUndoOps, collapsed, embedde
     };
 
     const runToolCall = async (endpoint: string, token: string, payload: AgentPendingToolCall) => {
+        if (isSiteTool(payload.name)) {
+            try {
+                setAgentState({ activity: SITE_TOOL_LABELS[payload.name], waiting: true });
+                addEventLog(toolName(payload.name), payload, payload);
+                const result = await runSiteTool(payload.name, payload.input || {}, (path) => router.push(path));
+                await postToolResult(endpoint, token, clientIdRef.current, { requestId: payload.requestId, result });
+                setAgentState({ activity: "工具完成", waiting: true });
+                addEventLog(`${toolName(payload.name)}完成`, result, result);
+                addMessage({ role: "tool", title: `${toolName(payload.name)}完成`, text: siteToolSummary(payload.name, result), detail: { requestId: payload.requestId, name: payload.name, input: payload.input, result } });
+            } catch (error) {
+                const text = error instanceof Error ? error.message : "站点工具执行失败";
+                setAgentState({ activity: "工具失败", waiting: false });
+                addMessage({ role: "tool", title: "工具失败", text, detail: payload });
+                await postToolResult(endpoint, token, clientIdRef.current, { requestId: payload.requestId, error: text });
+            }
+            return;
+        }
         try {
-            const input: { ops?: CanvasAgentOp[] } = payload.input || {};
-            setAgentState({ activity: payload.name === "canvas_apply_ops" ? "执行画布操作" : "读取画布", waiting: true });
+            const input: { ops?: CanvasAgentOp[]; path?: string } = payload.input || {};
+            setAgentState({ activity: payload.name === "canvas_apply_ops" ? "执行画布操作" : payload.name === "site_navigate" ? "跳转页面" : "读取画布", waiting: true });
             addEventLog(toolName(payload.name), payload, payload);
-            const result = payload.name === "canvas_apply_ops" ? onApplyOpsRef.current(input.ops || []) : snapshotRef.current;
+            let result: unknown;
+            if (payload.name === "site_navigate") {
+                const path = normalizeSitePath(input.path);
+                router.push(path);
+                result = { ok: true, path };
+            } else {
+                result = payload.name === "canvas_apply_ops" ? onApplyOpsRef.current(input.ops || []) : snapshotRef.current;
+            }
             await postToolResult(endpoint, token, clientIdRef.current, { requestId: payload.requestId, result });
             if (payload.name === "canvas_apply_ops") void postState(endpoint, token, clientIdRef.current, result as CanvasAgentSnapshot);
             setAgentState({ activity: "工具完成", waiting: true });
             addEventLog(`${toolName(payload.name)}完成`, result, result);
-            addMessage({ role: "tool", title: `${toolName(payload.name)}完成`, text: payload.name === "canvas_apply_ops" ? summarizeCanvasAgentOps(input.ops || []) || "画布操作" : "已完成", detail: { requestId: payload.requestId, name: payload.name, input, result } });
+            addMessage({ role: "tool", title: `${toolName(payload.name)}完成`, text: payload.name === "canvas_apply_ops" ? summarizeCanvasAgentOps(input.ops || []) || "画布操作" : payload.name === "site_navigate" ? `已跳转到 ${input.path || "/"}` : "已完成", detail: { requestId: payload.requestId, name: payload.name, input, result } });
         } catch (error) {
             const message = error instanceof Error ? error.message : "画布操作失败";
             setAgentState({ activity: "工具失败", waiting: false });
@@ -300,26 +332,15 @@ export function CanvasLocalAgentPanel({ snapshot, canUndoOps, collapsed, embedde
         }
         const urlToken = searchParams.get("agentToken") || "";
         const urlEndpoint = searchParams.get("agentUrl") || "";
-        const discovered = urlToken ? null : await discoverAgentConfig(endpoint || DEFAULT_AGENT_URL);
-        const nextEndpoint = (urlEndpoint || discovered?.url || endpoint || DEFAULT_AGENT_URL).trim().replace(/\/$/, "");
-        const nextToken = (urlToken || token.trim() || discovered?.token || "").trim();
-        if (!nextEndpoint) {
-            const text = "请填写本地 Agent 地址";
-            setAgentState({ connectError: text });
-            if (!headless) message.warning(text);
-            return;
-        }
-        if (!nextToken) {
-            const text = "没有发现本地 Agent，请先在 Codex 使用插件或手动启动 Canvas Agent";
-            setAgentState({ connectError: text });
-            if (!headless) message.warning(text);
-            return;
-        }
+        let nextEndpoint = "";
+        let nextToken = "";
         try {
-            const parsed = new URL(nextEndpoint);
-            if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("invalid protocol");
-        } catch {
-            const text = "本地 Agent 地址格式不正确";
+            const discoveryEndpoint = normalizeLocalAgentEndpoint(urlEndpoint || endpoint || DEFAULT_AGENT_URL);
+            const discovered = urlToken ? null : await discoverAgentConfig(discoveryEndpoint);
+            nextEndpoint = normalizeLocalAgentEndpoint(urlEndpoint || discovered?.url || discoveryEndpoint);
+            nextToken = normalizeLocalAgentToken(urlToken || token.trim() || discovered?.token || "");
+        } catch (error) {
+            const text = error instanceof Error ? error.message : "本地 Agent 连接参数不正确";
             setAgentState({ connectError: text });
             if (!headless) message.warning(text);
             return;
@@ -327,10 +348,6 @@ export function CanvasLocalAgentPanel({ snapshot, canUndoOps, collapsed, embedde
         errorLoggedRef.current = false;
         setAgentState({ url: nextEndpoint, token: nextToken, enabled: true, connected: false, activity: "连接中", connectError: "", activeTab: "setup" });
     };
-
-    useEffect(() => {
-        if (urlAgentAutoConnect && confirmTools) setAgentState({ confirmTools: false });
-    }, [confirmTools, setAgentState, urlAgentAutoConnect]);
 
     useEffect(() => {
         if (!autoConnect || autoConnectRef.current || enabled || connected) return;
@@ -881,6 +898,8 @@ function isConnectionErrorMessage(item: AgentChatItem) {
 }
 
 function toolName(name: string) {
+    if (isSiteTool(name)) return SITE_TOOL_LABELS[name];
+    if (name === "site_navigate") return "页面跳转";
     if (name === "canvas_apply_ops") return "画布操作";
     if (name === "canvas_get_state") return "读取画布";
     if (name === "canvas_get_selection") return "读取选区";
@@ -905,6 +924,17 @@ function toolName(name: string) {
     if (name === "canvas_set_viewport") return "调整视口";
     if (name === "canvas_run_generation") return "触发生成";
     return name;
+}
+
+function siteToolSummary(name: string, result: unknown) {
+    const total = objectField(result, "total");
+    if (name === "canvas_list_projects" && typeof total === "number") return `读取到 ${total} 个画布`;
+    if (name === "prompts_search" && typeof total === "number") return `找到 ${total} 条提示词`;
+    if (name === "assets_list" && typeof total === "number") return `读取到 ${total} 条素材`;
+    if (name === "assets_add") return "素材已添加";
+    if (name.endsWith("_get_config")) return "配置已读取";
+    if (name.endsWith("_generate")) return String(objectField(result, "note") || "已提交到工作台");
+    return "工具调用完成";
 }
 
 function isReadTool(name: string) {
