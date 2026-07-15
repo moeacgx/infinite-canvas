@@ -1,0 +1,32 @@
+{
+  "name": "infinite-canvas",
+  "version": "0.1.0",
+  "description": "Use Codex to read and operate Infinite Canvas through the local Canvas Agent MCP server.",
+  "author": {
+    "name": "moeacgx",
+    "url": "https://canvas.maolaoapi.com/"
+  },
+  "homepage": "https://canvas.maolaoapi.com/",
+  "repository": "https://github.com/moeacgx/infinite-canvas",
+  "license": "AGPL-3.0",
+  "keywords": ["infinite-canvas", "canvas", "mcp", "agent"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Infinite Canvas",
+    "shortDescription": "Use Codex to operate the current Infinite Canvas board.",
+    "longDescription": "Connects Codex to the local Canvas Agent MCP server so Codex can inspect the current Infinite Canvas board, create nodes, connect flows, and trigger generation through the web canvas confirmation flow.",
+    "developerName": "moeacgx",
+    "category": "Productivity",
+    "capabilities": ["Canvas", "MCP", "Creative Workflow"],
+    "websiteURL": "https://canvas.maolaoapi.com/",
+    "defaultPrompt": [
+      "打开 Infinite Canvas",
+      "读取当前画布并总结节点结构",
+      "根据选中节点创建一组生图提示词"
+    ],
+    "brandColor": "#2563EB",
+    "composerIcon": "./assets/icon.svg",
+    "logo": "./assets/icon.svg"
+  }
+}

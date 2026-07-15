@@ -533,7 +533,7 @@ export function resolveModelChannel(config: AiConfig, value: string) {
 }
 
 export function resolveModelRequestConfig(config: AiConfig, value: string): AiConfig {
-    if (config.channelMode !== "local") return { ...config, model: modelOptionName(value) };
+    if (config.channelMode !== "local") return { ...config, model: modelOptionName(value), apiFormat: "openai" };
     const channel = resolveModelChannel(config, value);
     return {
         ...config,

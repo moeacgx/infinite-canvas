@@ -24,6 +24,7 @@ test("切换本地直连和 New API 时分别保存模型选择", () => {
     assert.match(storeSource, /newApiModelState: ModelSelectionState/);
     assert.match(storeSource, /setChannelMode:[\s\S]*withLocalChannels/);
     assert.match(storeSource, /mode === "newapi"[\s\S]*newApiModelState/);
+    assert.match(storeSource, /config\.channelMode !== "local"[\s\S]*apiFormat: "openai"/);
 });
 
 test("配置弹窗可管理 OpenAI 与 Gemini 本地渠道", () => {
