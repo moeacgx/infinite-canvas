@@ -3,7 +3,8 @@ import { request as httpsRequest } from "node:https";
 
 import type { NextRequest } from "next/server";
 
-import { hasAuthenticatedUser } from "@/lib/server/authenticated-user";
+import { readAuthenticatedUser } from "@/lib/server/authenticated-user";
+import { ChannelProxyLimiter, type ChannelProxyLease } from "@/lib/server/channel-proxy-limiter";
 import { assertAllowedChannelPort, decodeChannelHeaders } from "@/lib/server/channel-proxy-security";
 import { createPinnedLookup, resolvePublicProxyTarget } from "@/lib/server/webdav-proxy-security";
 
@@ -16,15 +17,20 @@ const MAX_RESPONSE_BYTES = 256 * 1024 * 1024;
 const MAX_ACTIVE_REQUESTS = 32;
 const ALLOWED_METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]);
 let activeRequests = 0;
+const userLimiter = new ChannelProxyLimiter();
 
 export async function POST(request: NextRequest) {
-    if (!(await hasAuthenticatedUser(request))) return new Response("请先登录后再使用本地渠道服务端转发", { status: 401 });
+    const user = await readAuthenticatedUser(request);
+    if (!user) return new Response("请先登录后再使用本地渠道服务端转发", { status: 401 });
     if (activeRequests >= MAX_ACTIVE_REQUESTS) return new Response("渠道服务端转发繁忙，请稍后重试", { status: 503 });
+    const limited = userLimiter.acquire(user.id);
+    if (!limited.lease) return new Response(limited.error || "渠道服务端转发受限", { status: 429 });
+    const lease = limited.lease;
 
     const rawTarget = request.headers.get("x-channel-target") || "";
     const method = (request.headers.get("x-channel-method") || "GET").toUpperCase();
-    if (!rawTarget || rawTarget.length > 8192) return new Response("缺少或超长的渠道目标地址", { status: 400 });
-    if (!ALLOWED_METHODS.has(method)) return new Response("不支持该渠道请求方法", { status: 405 });
+    if (!rawTarget || rawTarget.length > 8192) return releaseResponse(lease, "缺少或超长的渠道目标地址", 400);
+    if (!ALLOWED_METHODS.has(method)) return releaseResponse(lease, "不支持该渠道请求方法", 405);
 
     let target: Awaited<ReturnType<typeof resolvePublicProxyTarget>>;
     let headers: Headers;
@@ -33,7 +39,7 @@ export async function POST(request: NextRequest) {
         assertAllowedChannelPort(target.url);
         headers = decodeChannelHeaders(request.headers.get("x-channel-headers"));
     } catch (error) {
-        return new Response(error instanceof Error ? error.message : "渠道目标地址无效", { status: 400 });
+        return releaseResponse(lease, error instanceof Error ? error.message : "渠道目标地址无效", 400);
     }
 
     const contentType = request.headers.get("content-type");
@@ -41,12 +47,12 @@ export async function POST(request: NextRequest) {
     headers.delete("content-length");
 
     const declaredLength = Number(request.headers.get("content-length") || 0);
-    if (declaredLength > MAX_REQUEST_BYTES) return new Response("渠道请求体过大", { status: 413 });
+    if (declaredLength > MAX_REQUEST_BYTES) return releaseResponse(lease, "渠道请求体过大", 413);
     let body: ArrayBuffer | undefined;
     try {
         body = method === "GET" || method === "HEAD" ? undefined : await readLimitedRequestBody(request);
     } catch {
-        return new Response("渠道请求体过大", { status: 413 });
+        return releaseResponse(lease, "渠道请求体过大", 413);
     }
 
     activeRequests += 1;
@@ -62,6 +68,7 @@ export async function POST(request: NextRequest) {
         clearTimeout(timer);
         request.signal.removeEventListener("abort", abortFromClient);
         activeRequests = Math.max(0, activeRequests - 1);
+        lease.release();
     };
     try {
         const response = await requestChannel(target, method, headers, body, controller.signal);
@@ -80,7 +87,7 @@ export async function POST(request: NextRequest) {
             return new Response(null, { status, headers: responseHeaders(response.headers) });
         }
         handedToStream = true;
-        return new Response(createLimitedResponseStream(response, cleanup), { status, headers: responseHeaders(response.headers) });
+        return new Response(createLimitedResponseStream(response, cleanup, lease), { status, headers: responseHeaders(response.headers) });
     } catch (error) {
         if (controller.signal.aborted) return new Response("渠道服务端转发超时或已取消", { status: 504 });
         console.error("Channel proxy request failed", error instanceof Error ? error.message : error);
@@ -123,7 +130,7 @@ function requestChannel(target: Awaited<ReturnType<typeof resolvePublicProxyTarg
     });
 }
 
-function createLimitedResponseStream(response: IncomingMessage, release: () => void) {
+function createLimitedResponseStream(response: IncomingMessage, release: () => void, lease: ChannelProxyLease) {
     let total = 0;
     let released = false;
     const finish = () => {
@@ -135,9 +142,9 @@ function createLimitedResponseStream(response: IncomingMessage, release: () => v
         start(controller) {
             response.on("data", (chunk: Buffer) => {
                 total += chunk.byteLength;
-                if (total > MAX_RESPONSE_BYTES) {
+                if (total > MAX_RESPONSE_BYTES || !lease.addBytes(chunk.byteLength)) {
                     response.destroy();
-                    controller.error(new Error("渠道响应体过大"));
+                    controller.error(new Error(total > MAX_RESPONSE_BYTES ? "渠道响应体过大" : "渠道转发流量已达上限"));
                     finish();
                     return;
                 }
@@ -162,6 +169,11 @@ function createLimitedResponseStream(response: IncomingMessage, release: () => v
             finish();
         },
     });
+}
+
+function releaseResponse(lease: ChannelProxyLease, body: string, status: number) {
+    lease.release();
+    return new Response(body, { status });
 }
 
 function responseHeaders(headers: IncomingHttpHeaders) {
