@@ -3,13 +3,13 @@ import { request as httpsRequest } from "node:https";
 
 import type { NextRequest } from "next/server";
 
+import { hasAuthenticatedUser } from "@/lib/server/authenticated-user";
 import { createPinnedLookup, resolvePublicProxyTarget } from "@/lib/server/webdav-proxy-security";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const WEBDAV_PROXY_TIMEOUT_MS = 120000;
-const AUTH_TIMEOUT_MS = 10000;
 const MAX_REQUEST_BYTES = 128 * 1024 * 1024;
 const MAX_RESPONSE_BYTES = 128 * 1024 * 1024;
 const ALLOWED_METHODS = new Set(["GET", "HEAD", "PUT", "MKCOL", "PROPFIND"]);
@@ -63,24 +63,6 @@ export async function POST(request: NextRequest) {
     } finally {
         clearTimeout(timer);
         request.signal.removeEventListener("abort", abortFromClient);
-    }
-}
-
-async function hasAuthenticatedUser(request: NextRequest) {
-    const authorization = request.headers.get("authorization") || "";
-    if (!authorization.startsWith("Bearer ")) return false;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), AUTH_TIMEOUT_MS);
-    try {
-        const apiBaseUrl = (process.env.API_BASE_URL || "http://127.0.0.1:8080").replace(/\/$/, "");
-        const response = await fetch(`${apiBaseUrl}/api/auth/me`, { headers: { Authorization: authorization }, redirect: "manual", signal: controller.signal });
-        if (!response.ok) return false;
-        const payload = (await response.json()) as { code?: number; data?: { role?: string } | null };
-        return payload.code === 0 && Boolean(payload.data?.role && payload.data.role !== "guest");
-    } catch {
-        return false;
-    } finally {
-        clearTimeout(timer);
     }
 }
 
