@@ -1,15 +1,31 @@
 "use client";
 
 import { App, Button, Form, Input, Modal, Progress, Segmented, Select } from "antd";
-import { Cloud, RefreshCw, Wifi } from "lucide-react";
+import { CircleAlert, Cloud, Plus, RefreshCw, Trash2, Wifi } from "lucide-react";
 import { useState } from "react";
 
 import { ModelPicker } from "@/components/model-picker";
-import { fetchImageModels } from "@/services/api/image";
+import { fetchChannelModels, fetchImageModels } from "@/services/api/image";
 import { syncAppDataToWebdav, type AppSyncDomainKey, type AppSyncProgressEvent } from "@/services/app-sync";
 import { testWebdavConnection, WEBDAV_MANIFEST_FILE_NAME } from "@/services/webdav-sync";
 import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from "@/lib/audio-generation";
-import { applyFetchedModelsToConfig, channelModeAllowed, isNewApiConfig, resolveAllowedChannelMode, useConfigStore, useEffectiveConfig, type AiConfig, type ChannelMode, type ModelCapability } from "@/stores/use-config-store";
+import {
+    applyFetchedModelsToConfig,
+    channelModeAllowed,
+    createModelChannel,
+    defaultBaseUrlForApiFormat,
+    isNewApiConfig,
+    modelOptionLabel,
+    resolveAllowedChannelMode,
+    useConfigStore,
+    useEffectiveConfig,
+    withLocalChannels,
+    type AiConfig,
+    type ApiCallFormat,
+    type ChannelMode,
+    type ModelCapability,
+    type ModelChannel,
+} from "@/stores/use-config-store";
 
 type ModelGroup = {
     capability: ModelCapability;
@@ -36,6 +52,11 @@ const modelGroups: ModelGroup[] = [
     { capability: "audio", modelKey: "audioModel", modelsKey: "audioModels", defaultLabel: "默认音频模型", optionsLabel: "音频模型可选项" },
 ];
 
+const apiFormatOptions: Array<{ label: string; value: ApiCallFormat }> = [
+    { label: "OpenAI", value: "openai" },
+    { label: "Gemini", value: "gemini" },
+];
+
 const webdavDomainKeys: AppSyncDomainKey[] = ["canvas", "assets", "image-workbench", "video-workbench"];
 const webdavDomainLabels: Record<AppSyncDomainKey, string> = {
     canvas: "画布",
@@ -56,7 +77,7 @@ function createWebdavDomainProgress(): Record<AppSyncDomainKey, WebdavDomainProg
 
 export function AppConfigModal() {
     const { message } = App.useApp();
-    const [loadingModels, setLoadingModels] = useState(false);
+    const [loadingChannelId, setLoadingChannelId] = useState("");
     const [testingWebdav, setTestingWebdav] = useState(false);
     const [syncingWebdav, setSyncingWebdav] = useState(false);
     const [webdavSyncStatus, setWebdavSyncStatus] = useState("");
@@ -64,6 +85,7 @@ export function AppConfigModal() {
     const config = useConfigStore((state) => state.config);
     const webdav = useConfigStore((state) => state.webdav);
     const updateConfig = useConfigStore((state) => state.updateConfig);
+    const setChannelMode = useConfigStore((state) => state.setChannelMode);
     const updateWebdavConfig = useConfigStore((state) => state.updateWebdavConfig);
     const isConfigOpen = useConfigStore((state) => state.isConfigOpen);
     const shouldPromptContinue = useConfigStore((state) => state.shouldPromptContinue);
@@ -74,14 +96,15 @@ export function AppConfigModal() {
     const modelChannel = publicSettings?.modelChannel;
     const channelModeOptions = buildChannelModeOptions(modelChannel);
     const effectiveMode = resolveAllowedChannelMode(config.channelMode, modelChannel);
-    const modelConfig = effectiveMode === "remote" ? effectiveConfig : config;
-    const modelOptions = config.models.map((model) => ({ label: model, value: model }));
+    const localConfig = withLocalChannels(config, config.channels);
+    const modelConfig = effectiveMode === "remote" ? effectiveConfig : effectiveMode === "local" ? localConfig : config;
+    const modelOptions = modelConfig.models.map((model) => ({ label: modelOptionLabel(modelConfig, model), value: model }));
     const webdavReady = Boolean(webdav.url.trim());
 
     const finishConfig = () => {
         setConfigDialogOpen(false);
         if (!effectiveMode) return;
-        if (effectiveMode === "local" && (!config.baseUrl.trim() || !config.apiKey.trim())) return;
+        if (effectiveMode === "local" && !localConfig.channels.some((channel) => channel.baseUrl.trim() && channel.apiKey.trim() && channel.models.length)) return;
         if (effectiveMode === "newapi" && (!config.baseUrl.trim() || !config.newApiGroup.trim())) return;
         if (!modelConfig.imageModel.trim() || !modelConfig.videoModel.trim() || !modelConfig.textModel.trim()) return;
         if (effectiveMode !== config.channelMode) updateConfig("channelMode", effectiveMode);
@@ -89,14 +112,73 @@ export function AppConfigModal() {
         clearPromptContinue();
     };
 
+    const saveConfig = (nextConfig: AiConfig) => applyConfigPatch(updateConfig, config, nextConfig);
+
+    const updateChannels = (channels: ModelChannel[]) => saveConfig(withLocalChannels({ ...config, channelMode: "local" }, channels));
+
+    const updateChannel = (id: string, patch: Partial<ModelChannel>) => {
+        updateChannels(config.channels.map((channel) => (channel.id === id ? { ...channel, ...patch, models: patch.models ? uniqueModels(patch.models) : channel.models } : channel)));
+    };
+
+    const updateChannelApiFormat = (channel: ModelChannel, apiFormat: ApiCallFormat) => {
+        const baseUrl = !channel.baseUrl.trim() || channel.baseUrl.trim() === defaultBaseUrlForApiFormat(channel.apiFormat) ? defaultBaseUrlForApiFormat(apiFormat) : channel.baseUrl;
+        updateChannel(channel.id, { apiFormat, baseUrl });
+    };
+
+    const addChannel = () => updateChannels([...config.channels, createModelChannel({ name: `渠道 ${config.channels.length + 1}` })]);
+
+    const deleteChannel = (id: string) => {
+        if (config.channels.length <= 1) {
+            message.warning("至少保留一个本地渠道");
+            return;
+        }
+        updateChannels(config.channels.filter((channel) => channel.id !== id));
+    };
+
+    const refreshChannel = async (channel: ModelChannel) => {
+        if (!channel.baseUrl.trim() || !channel.apiKey.trim()) {
+            message.error("请先填写该渠道的 Base URL 和 API Key");
+            return;
+        }
+        setLoadingChannelId(channel.id);
+        try {
+            const models = await fetchChannelModels(channel);
+            updateChannels(config.channels.map((item) => (item.id === channel.id ? { ...item, models } : item)));
+            message.success(`${channel.name} 模型列表已更新`);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "读取模型失败");
+        } finally {
+            setLoadingChannelId("");
+        }
+    };
+
     const refreshModels = async () => {
         if (!effectiveMode || effectiveMode === "remote") return;
+        if (effectiveMode === "local") {
+            const runnable = config.channels.filter((channel) => channel.baseUrl.trim() && channel.apiKey.trim());
+            if (!runnable.length) {
+                message.error("请先填写至少一个渠道的 Base URL 和 API Key");
+                return;
+            }
+            setLoadingChannelId("all");
+            try {
+                const entries = await Promise.all(runnable.map(async (channel) => [channel.id, await fetchChannelModels(channel)] as const));
+                const modelMap = new Map(entries);
+                updateChannels(config.channels.map((channel) => (modelMap.has(channel.id) ? { ...channel, models: modelMap.get(channel.id) || [] } : channel)));
+                message.success("全部本地渠道模型列表已更新");
+            } catch (error) {
+                message.error(error instanceof Error ? error.message : "读取模型失败");
+            } finally {
+                setLoadingChannelId("");
+            }
+            return;
+        }
         const fetchConfig = { ...config, channelMode: effectiveMode };
         if (!isModelFetchConfigReady(fetchConfig)) {
             message.error(effectiveMode === "newapi" ? "请先填写 Base URL 和分组" : "请先填写 Base URL 和 API Key");
             return;
         }
-        setLoadingModels(true);
+        setLoadingChannelId("newapi");
         try {
             const models = await fetchImageModels(fetchConfig);
             const nextConfig = applyFetchedModelsToConfig(fetchConfig, models);
@@ -105,14 +187,19 @@ export function AppConfigModal() {
         } catch (error) {
             message.error(error instanceof Error ? error.message : "读取模型失败");
         } finally {
-            setLoadingModels(false);
+            setLoadingChannelId("");
         }
     };
 
     const updateCapabilityModels = (group: ModelGroup, models: string[]) => {
         const next = uniqueModels(models);
+        const targetConfig = effectiveMode === "local" ? localConfig : config;
         updateConfig(group.modelsKey, next);
-        if (!next.includes(config[group.modelKey])) updateConfig(group.modelKey, next[0] || "");
+        if (!next.includes(targetConfig[group.modelKey])) updateConfig(group.modelKey, next[0] || "");
+    };
+
+    const changeChannelMode = (mode: ChannelMode) => {
+        setChannelMode(mode);
     };
 
     const testWebdav = async () => {
@@ -189,57 +276,93 @@ export function AppConfigModal() {
                 <Form layout="vertical" requiredMark={false}>
                     {channelModeOptions.length ? (
                         <Form.Item label="渠道模式" className="mb-5">
-                            <Segmented block size="middle" value={effectiveMode} onChange={(value) => updateConfig("channelMode", value as AiConfig["channelMode"])} options={channelModeOptions} />
+                            <Segmented block size="middle" value={effectiveMode} onChange={(value) => changeChannelMode(value as ChannelMode)} options={channelModeOptions} />
                         </Form.Item>
                     ) : (
                         <div className="mb-5 rounded-lg border border-stone-200 p-3 text-sm text-stone-500 dark:border-stone-800">管理员未开放可用渠道，请联系管理员在后台设置中开启至少一种渠道。</div>
                     )}
-                    {!effectiveMode ? null : effectiveMode === "local" || effectiveMode === "newapi" ? (
+                    {!effectiveMode ? null : effectiveMode === "local" ? (
+                        <>
+                            <div className="mb-3 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
+                                <CircleAlert className="mt-0.5 size-4 shrink-0" />
+                                <span>浏览器直连要求接口支持 CORS/OPTIONS；HTTPS 页面不能直连 HTTP 地址。网络受限时请改用后端渠道。</span>
+                            </div>
+                            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                                <div>
+                                    <div className="text-sm font-semibold">本地直连渠道</div>
+                                    <div className="mt-1 text-xs text-stone-500">可同时配置多个 OpenAI 或 Gemini 接口，同名模型也能按渠道区分。</div>
+                                </div>
+                                <div className="flex gap-2">
+                                    <Button size="small" loading={loadingChannelId === "all"} onClick={() => void refreshModels()}>
+                                        拉取全部模型
+                                    </Button>
+                                    <Button size="small" icon={<Plus className="size-4" />} onClick={addChannel}>
+                                        新增渠道
+                                    </Button>
+                                </div>
+                            </div>
+                            <div className="mb-5 grid gap-3">
+                                {config.channels.map((channel) => (
+                                    <div key={channel.id} className="rounded-lg border border-stone-200 p-3 dark:border-stone-800">
+                                        <div className="grid gap-3 md:grid-cols-2">
+                                            <Form.Item label="渠道名称" className="mb-0">
+                                                <Input value={channel.name} onChange={(event) => updateChannel(channel.id, { name: event.target.value })} />
+                                            </Form.Item>
+                                            <Form.Item label="调用格式" className="mb-0">
+                                                <Segmented block value={channel.apiFormat} options={apiFormatOptions} onChange={(value) => updateChannelApiFormat(channel, value as ApiCallFormat)} />
+                                            </Form.Item>
+                                            <Form.Item label="Base URL" className="mb-0">
+                                                <Input value={channel.baseUrl} onChange={(event) => updateChannel(channel.id, { baseUrl: event.target.value })} />
+                                            </Form.Item>
+                                            <Form.Item label="API Key" className="mb-0">
+                                                <Input.Password value={channel.apiKey} onChange={(event) => updateChannel(channel.id, { apiKey: event.target.value })} />
+                                            </Form.Item>
+                                        </div>
+                                        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                                            <span className="text-xs text-stone-500">已保存 {channel.models.length} 个模型</span>
+                                            <div className="flex gap-2">
+                                                <Button size="small" loading={loadingChannelId === channel.id} onClick={() => void refreshChannel(channel)}>
+                                                    拉取模型
+                                                </Button>
+                                                <Button size="small" danger icon={<Trash2 className="size-4" />} disabled={config.channels.length <= 1} onClick={() => deleteChannel(channel.id)}>
+                                                    删除
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </>
+                    ) : effectiveMode === "newapi" ? (
                         <>
                             <div className="grid gap-4 md:grid-cols-2">
-                                <Form.Item
-                                    label="Base URL"
-                                    extra={
-                                        effectiveMode === "local"
-                                            ? "浏览器直连要求接口支持 CORS/OPTIONS；HTTPS 页面不能直连 HTTP 地址。若出现网络错误，可改用后端渠道。"
-                                            : "跨域免 Key 请求要求接口允许当前站点来源并支持携带 Cookie。"
-                                    }
-                                    className="mb-4"
-                                >
+                                <Form.Item label="Base URL" extra="跨域免 Key 请求要求接口允许当前站点来源并支持携带 Cookie。" className="mb-4">
                                     <Input value={config.baseUrl} onChange={(event) => updateConfig("baseUrl", event.target.value)} />
                                 </Form.Item>
-                                {effectiveMode === "newapi" ? (
-                                    <Form.Item label="New API 默认分组" extra="未单独配置能力分组时使用。" className="mb-4">
-                                        <Input value={config.newApiGroup} onChange={(event) => updateConfig("newApiGroup", event.target.value)} />
-                                    </Form.Item>
-                                ) : (
-                                    <Form.Item label="API Key" className="mb-4">
-                                        <Input.Password value={config.apiKey} onChange={(event) => updateConfig("apiKey", event.target.value)} />
-                                    </Form.Item>
-                                )}
+                                <Form.Item label="New API 默认分组" extra="未单独配置能力分组时使用。" className="mb-4">
+                                    <Input value={config.newApiGroup} onChange={(event) => updateConfig("newApiGroup", event.target.value)} />
+                                </Form.Item>
                             </div>
-                            {effectiveMode === "newapi" ? (
-                                <div className="grid gap-4 md:grid-cols-4">
-                                    <Form.Item label="文本分组" className="mb-4">
-                                        <Input placeholder="默认分组" value={config.newApiTextGroup} onChange={(event) => updateConfig("newApiTextGroup", event.target.value)} />
-                                    </Form.Item>
-                                    <Form.Item label="生图分组" className="mb-4">
-                                        <Input placeholder="默认分组" value={config.newApiImageGroup} onChange={(event) => updateConfig("newApiImageGroup", event.target.value)} />
-                                    </Form.Item>
-                                    <Form.Item label="音频分组" className="mb-4">
-                                        <Input placeholder="默认分组" value={config.newApiAudioGroup} onChange={(event) => updateConfig("newApiAudioGroup", event.target.value)} />
-                                    </Form.Item>
-                                    <Form.Item label="视频分组" className="mb-4">
-                                        <Input placeholder="默认分组" value={config.newApiVideoGroup} onChange={(event) => updateConfig("newApiVideoGroup", event.target.value)} />
-                                    </Form.Item>
-                                </div>
-                            ) : null}
+                            <div className="grid gap-4 md:grid-cols-4">
+                                <Form.Item label="文本分组" className="mb-4">
+                                    <Input placeholder="默认分组" value={config.newApiTextGroup} onChange={(event) => updateConfig("newApiTextGroup", event.target.value)} />
+                                </Form.Item>
+                                <Form.Item label="生图分组" className="mb-4">
+                                    <Input placeholder="默认分组" value={config.newApiImageGroup} onChange={(event) => updateConfig("newApiImageGroup", event.target.value)} />
+                                </Form.Item>
+                                <Form.Item label="音频分组" className="mb-4">
+                                    <Input placeholder="默认分组" value={config.newApiAudioGroup} onChange={(event) => updateConfig("newApiAudioGroup", event.target.value)} />
+                                </Form.Item>
+                                <Form.Item label="视频分组" className="mb-4">
+                                    <Input placeholder="默认分组" value={config.newApiVideoGroup} onChange={(event) => updateConfig("newApiVideoGroup", event.target.value)} />
+                                </Form.Item>
+                            </div>
                             <div className="mb-5 flex items-center justify-between gap-3 rounded-lg border border-stone-200 px-3 py-2 dark:border-stone-800">
                                 <div className="min-w-0">
                                     <div className="text-sm font-medium">模型列表</div>
                                     <div className="mt-1 text-xs text-stone-500">当前已保存 {config.models.length} 个模型</div>
                                 </div>
-                                <Button size="small" loading={loadingModels} onClick={() => void refreshModels()}>
+                                <Button size="small" loading={loadingChannelId === "newapi"} onClick={() => void refreshModels()}>
                                     拉取模型列表
                                 </Button>
                             </div>
@@ -264,8 +387,8 @@ export function AppConfigModal() {
                                             showSearch
                                             allowClear
                                             maxTagCount="responsive"
-                                            placeholder={config.models.length ? `请选择${group.optionsLabel}` : "请先拉取模型列表"}
-                                            value={config[group.modelsKey]}
+                                            placeholder={modelConfig.models.length ? `请选择${group.optionsLabel}` : "请先拉取模型列表"}
+                                            value={modelConfig[group.modelsKey]}
                                             options={modelOptions}
                                             onChange={(models) => updateCapabilityModels(group, models)}
                                         />

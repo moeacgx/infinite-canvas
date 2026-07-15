@@ -69,8 +69,8 @@ test("New API launch params accept optional capability groups", () => {
 test("New API requests route to capability specific groups", () => {
     assert.match(source, /export function resolveNewApiGroup/);
     assert.match(imageSource, /resolveNewApiGroup/);
-    assert.match(imageSource, /aiRequestConfig\(config,\s*"application\/json",\s*undefined,\s*"image"\)/);
-    assert.match(imageSource, /aiRequestConfig\(config,\s*"application\/json",\s*undefined,\s*"text"\)/);
+    assert.match(imageSource, /aiRequestConfig\((?:config|requestConfig),\s*"application\/json",\s*undefined,\s*"image"\)/);
+    assert.match(imageSource, /aiRequestConfig\((?:config|requestConfig),\s*"application\/json",\s*undefined,\s*"text"\)/);
     assert.match(videoSource, /aiRequestConfig\(config,[\s\S]*"video"/);
     assert.match(audioSource, /resolveNewApiGroup\(config,\s*"audio"\)/);
 });
@@ -83,7 +83,8 @@ test("New API model refresh keeps capability model lists tied to capability grou
     assert.match(source, /suggestedAudioModels/);
     assert.match(source, /channelMode === "newapi"[\s\S]*imageModels:\s*config\.imageModels[\s\S]*videoModels:\s*config\.videoModels[\s\S]*textModels:\s*config\.textModels[\s\S]*audioModels:\s*config\.audioModels/);
     assert.match(source, /Array\.isArray\(models\)\s*\?\s*normalizeModelList\(models\)\s*:\s*filterModelsByCapability\(allModels,\s*capability\)/);
-    assert.doesNotMatch(source, /available\.has\(model\) && modelMatchesCapability\(model,\s*capability\)/);
+    const newApiCapabilityMerge = source.match(/function resolveNextCapabilityModels[\s\S]*?\n}/)?.[0] || "";
+    assert.doesNotMatch(newApiCapabilityMerge, /modelMatchesCapability\(model,\s*capability\)/);
     assert.match(imageSource, /textModels,\s*imageModels,\s*videoModels,\s*audioModels/);
     assert.match(imageSource, /async function fetchNewApiGroupModels/);
     assert.match(imageSource, /resolveNewApiGroup\(config,\s*"text"\)/);
@@ -96,9 +97,9 @@ test("New API model refresh keeps capability model lists tied to capability grou
 test("image and chat requests reject empty models before calling New API", () => {
     assert.match(imageSource, /function assertImageModel/);
     assert.match(imageSource, /if \(!model\.trim\(\)\) throw new Error\("请先选择模型"\)/);
-    assert.match(imageSource, /requestGeneration[\s\S]*assertImageModel\(model\)/);
-    assert.match(imageSource, /requestEdit[\s\S]*assertImageModel\(model\)/);
-    assert.match(imageSource, /requestImageQuestion[\s\S]*assertImageModel\(config\.model\)/);
+    assert.match(imageSource, /requestGeneration[\s\S]*assertImageModel\(requestConfig\.model\)/);
+    assert.match(imageSource, /requestEdit[\s\S]*assertImageModel\(requestConfig\.model\)/);
+    assert.match(imageSource, /requestImageQuestion[\s\S]*assertImageModel\(requestConfig\.model\)/);
 });
 
 test("image generation and edits use the selected image model instead of stale generic model", () => {
@@ -109,8 +110,8 @@ test("image generation and edits use the selected image model instead of stale g
     assert.match(source, /defaultConfig\[defaultModelKey\(capability\)\]/);
     assert.doesNotMatch(source, /imageModel:\s*config\.imageModel \|\| config\.model/);
     assert.match(imageSource, /resolveCapabilityModel/);
-    assert.match(imageSource, /requestGeneration[\s\S]*const model = resolveCapabilityModel\(config,\s*"image"\)[\s\S]*assertImageModel\(model\)[\s\S]*model,/);
-    assert.match(imageSource, /requestEdit[\s\S]*const model = resolveCapabilityModel\(config,\s*"image"\)[\s\S]*assertImageModel\(model\)[\s\S]*formData\.set\("model",\s*model\)/);
+    assert.match(imageSource, /requestGeneration[\s\S]*resolveModelRequestConfig\(config,\s*resolveCapabilityModel\(config,\s*"image"\)\)[\s\S]*model:\s*requestConfig\.model/);
+    assert.match(imageSource, /requestEdit[\s\S]*resolveModelRequestConfig\(config,\s*resolveCapabilityModel\(config,\s*"image"\)\)[\s\S]*formData\.set\("model",\s*requestConfig\.model\)/);
     assert.doesNotMatch(imageSource, /resolveCapabilityModel\(config,\s*"image",\s*config\.model\)/);
     assert.doesNotMatch(imageSource, /requestGeneration[\s\S]{0,500}model:\s*config\.model/);
     assert.doesNotMatch(imageSource, /requestEdit[\s\S]{0,500}formData\.set\("model",\s*config\.model\)/);
@@ -151,7 +152,7 @@ test("New API image generation submits async task and polls result", () => {
     assert.match(imageSource, /type ImageTaskResponse/);
     assert.match(imageSource, /requestNewApiImageTask/);
     assert.match(imageSource, /aiApiUrl\(config,\s*"\/images\/tasks"\)/);
-    assert.match(imageSource, /requestGeneration[\s\S]*isNewApiConfig\(config\)[\s\S]*requestNewApiImageTask\(config,\s*payload\)/);
+    assert.match(imageSource, /requestGeneration[\s\S]*isNewApiConfig\(requestConfig\)[\s\S]*requestNewApiImageTask\(requestConfig,\s*payload(?:,|\))/);
     assert.match(imageSource, /waitForNewApiImageTask/);
     assert.match(imageSource, /\/images\/tasks\/\$\{encodeURIComponent\(taskId\)\}/);
     assert.match(imageSource, /task\.status === "succeeded"/);
@@ -164,7 +165,7 @@ test("New API image generation submits async task and polls result", () => {
 
 test("New API image edits submit async task and polls result", () => {
     assert.match(imageSource, /requestNewApiImageTask/);
-    assert.match(imageSource, /requestEdit[\s\S]*isNewApiConfig\(config\)[\s\S]*requestNewApiImageTask\(config,\s*formData,\s*\{ action:\s*"edits" \}\)/);
+    assert.match(imageSource, /requestEdit[\s\S]*isNewApiConfig\(requestConfig\)[\s\S]*requestNewApiImageTask\(requestConfig,\s*formData,\s*\{ action:\s*"edits" \}(?:,|\))/);
 });
 
 test("Admin public UI switches hide login entry and credit balance displays", () => {

@@ -5,7 +5,7 @@ import { readAxiosError } from "@/services/api/ai-utils";
 import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
 import { boolConfig, buildSeedancePromptText, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceVideoReferenceError, SEEDANCE_REFERENCE_LIMITS } from "@/lib/seedance-video";
-import { buildApiUrl, isNewApiConfig, resolveNewApiGroup, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import { buildApiUrl, isNewApiConfig, resolveCapabilityModel, resolveModelRequestConfig, resolveNewApiGroup, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
@@ -31,7 +31,7 @@ type SeedancePayload = {
 };
 
 export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string };
-export type VideoGenerationTask = { id: string; provider: "openai" | "seedance"; model: string };
+export type VideoGenerationTask = { id: string; provider: "openai" | "seedance"; model: string; channelModel?: string };
 export type VideoGenerationTaskState = { status: "pending" } | { status: "completed"; result: VideoGenerationResult } | { status: "failed"; error: string };
 type RequestOptions = { signal?: AbortSignal };
 
@@ -86,20 +86,24 @@ export async function requestVideoGeneration(config: AiConfig, prompt: string, r
 }
 
 export async function createVideoGenerationTask(config: AiConfig, prompt: string, references: ReferenceImage[] = [], videoReferences: ReferenceVideo[] = [], audioReferences: ReferenceAudio[] = [], options?: RequestOptions): Promise<VideoGenerationTask> {
-    const model = (config.model || config.videoModel).trim();
-    assertVideoConfig(config, model);
-    if (isSeedanceVideoConfig({ ...config, model })) {
-        return createSeedanceTask(config, model, prompt, references, videoReferences, audioReferences, options);
+    const channelModel = resolveCapabilityModel(config, "video", config.model || config.videoModel);
+    const requestConfig = resolveModelRequestConfig(config, channelModel);
+    const model = requestConfig.model.trim();
+    assertVideoConfig(requestConfig, model);
+    if (requestConfig.apiFormat === "gemini") throw new Error("Gemini 调用格式暂不支持视频生成，请为视频模型选择 OpenAI 格式渠道");
+    if (isSeedanceVideoConfig({ ...requestConfig, model })) {
+        return createSeedanceTask(requestConfig, model, prompt, references, videoReferences, audioReferences, options, channelModel);
     }
     if (videoReferences.length || audioReferences.length) {
         throw new Error("当前视频接口不支持参考视频或参考音频，请切换到 Seedance 2.0 / 火山 Agent Plan 模型，或移除参考素材");
     }
-    return createOpenAIVideoTask(config, model, prompt, references, options);
+    return createOpenAIVideoTask(requestConfig, model, prompt, references, options, channelModel);
 }
 
 export async function pollVideoGenerationTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
-    assertVideoConfig(config, task.model);
-    return task.provider === "seedance" ? pollSeedanceTask(config, task, options) : pollOpenAIVideoTask(config, task, options);
+    const requestConfig = resolveModelRequestConfig(config, task.channelModel || task.model);
+    assertVideoConfig(requestConfig, task.model);
+    return task.provider === "seedance" ? pollSeedanceTask(requestConfig, task, options) : pollOpenAIVideoTask(requestConfig, task, options);
 }
 
 export async function storeGeneratedVideo(result: VideoGenerationResult): Promise<UploadedFile> {
@@ -108,7 +112,7 @@ export async function storeGeneratedVideo(result: VideoGenerationResult): Promis
     throw new Error("视频接口没有返回可播放的视频");
 }
 
-async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], options?: RequestOptions): Promise<VideoGenerationTask> {
+async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], options?: RequestOptions, channelModel?: string): Promise<VideoGenerationTask> {
     const body = new FormData();
     body.append("model", model);
     body.append("prompt", prompt);
@@ -121,7 +125,7 @@ async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: st
     try {
         const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), body, { ...aiRequestConfig(config, undefined, undefined, "video"), signal: options?.signal })).data);
         if (!created.id) throw new Error("视频接口没有返回任务 ID");
-        return { id: created.id, provider: "openai", model };
+        return { id: created.id, provider: "openai", model, ...(channelModel ? { channelModel } : {}) };
     } catch (error) {
         throw new Error(readAxiosError(error, "视频任务创建失败"));
     }
@@ -144,7 +148,16 @@ async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask, 
     }
 }
 
-async function createSeedanceTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationTask> {
+async function createSeedanceTask(
+    config: AiConfig,
+    model: string,
+    prompt: string,
+    references: ReferenceImage[],
+    videoReferences: ReferenceVideo[],
+    audioReferences: ReferenceAudio[],
+    options?: RequestOptions,
+    channelModel?: string,
+): Promise<VideoGenerationTask> {
     if (audioReferences.length && !references.length && !videoReferences.length) {
         throw new Error("Seedance 参考音频不能单独使用，请同时添加参考图或参考视频");
     }
@@ -163,13 +176,13 @@ async function createSeedanceTask(config: AiConfig, model: string, prompt: strin
     };
 
     if (isNewApiConfig(config)) {
-        return requestNewApiSeedanceGeneration(config, model, prompt, payload, options);
+        return requestNewApiSeedanceGeneration(config, model, prompt, payload, options, channelModel);
     }
 
     try {
         const created = unwrapSeedanceTask((await axios.post<ApiEnvelope<SeedanceTask>>(seedanceApiUrl(config), payload, { ...aiRequestConfig(config, "application/json", undefined, "video"), signal: options?.signal })).data);
         if (!created.id) throw new Error("Seedance 接口没有返回任务 ID");
-        return { id: created.id, provider: "seedance", model };
+        return { id: created.id, provider: "seedance", model, ...(channelModel ? { channelModel } : {}) };
     } catch (error) {
         throw new Error(readAxiosError(error, "Seedance 任务创建失败"));
     }
@@ -192,7 +205,7 @@ async function pollSeedanceTask(config: AiConfig, task: VideoGenerationTask, opt
     }
 }
 
-async function requestNewApiSeedanceGeneration(config: AiConfig, model: string, prompt: string, payload: SeedancePayload, options?: RequestOptions) {
+async function requestNewApiSeedanceGeneration(config: AiConfig, model: string, prompt: string, payload: SeedancePayload, options?: RequestOptions, channelModel?: string) {
     const body = {
         model,
         prompt,
@@ -211,7 +224,7 @@ async function requestNewApiSeedanceGeneration(config: AiConfig, model: string, 
     try {
         const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), body, { ...aiRequestConfig(config, "application/json", undefined, "video"), signal: options?.signal })).data);
         if (!created.id) throw new Error("Seedance 接口没有返回任务 ID");
-        return { id: created.id, provider: "openai" as const, model };
+        return { id: created.id, provider: "openai" as const, model, ...(channelModel ? { channelModel } : {}) };
     } catch (error) {
         throw new Error(readAxiosError(error, "Seedance 任务创建失败"));
     }

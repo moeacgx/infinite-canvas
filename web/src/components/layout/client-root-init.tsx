@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { App } from "antd";
 
 import { fetchImageModels } from "@/services/api/image";
-import { applyFetchedModelsToConfig, channelModeAllowed, type AiConfig, useConfigStore } from "@/stores/use-config-store";
+import { applyFetchedModelsToConfig, channelModeAllowed, type AiConfig, useConfigStore, withLocalChannels } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
 export function ClientRootInit({ children }: { children: ReactNode }) {
@@ -17,6 +17,7 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     const loadPublicSettings = useConfigStore((state) => state.loadPublicSettings);
     const publicSettings = useConfigStore((state) => state.publicSettings);
     const updateConfig = useConfigStore((state) => state.updateConfig);
+    const setChannelMode = useConfigStore((state) => state.setChannelMode);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const isLoginPage = pathname === "/login" || pathname === "/admin/login";
 
@@ -60,7 +61,7 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
                 message.error("后台未允许 New API 免 Key，请联系管理员进行配置");
                 return;
             }
-            updateConfig("channelMode", "newapi");
+            setChannelMode("newapi");
             updateConfig("baseUrl", baseUrl || "");
             updateConfig("newApiGroup", newApiGroup);
             updateConfig("newApiTextGroup", newApiTextGroup);
@@ -86,11 +87,17 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
             message.error("后台未允许本地直连，请联系管理员进行配置");
             return;
         }
-        updateConfig("channelMode", "local");
-        if (baseUrl) updateConfig("baseUrl", baseUrl);
-        if (apiKey) updateConfig("apiKey", apiKey);
+        setChannelMode("local");
+        const currentConfig = useConfigStore.getState().config;
+        const channels = currentConfig.channels.length ? [...currentConfig.channels] : [];
+        const firstChannel = channels[0];
+        if (firstChannel) channels[0] = { ...firstChannel, ...(baseUrl ? { baseUrl } : {}), ...(apiKey ? { apiKey } : {}) };
+        const nextConfig = withLocalChannels({ ...currentConfig, ...(baseUrl ? { baseUrl } : {}), ...(apiKey ? { apiKey } : {}) }, channels);
+        (Object.keys(nextConfig) as Array<keyof AiConfig>).forEach((key) => {
+            if (currentConfig[key] !== nextConfig[key]) updateConfig(key, nextConfig[key]);
+        });
         openConfigDialog(false);
-    }, [message, openConfigDialog, publicSettings, updateConfig]);
+    }, [message, openConfigDialog, publicSettings, setChannelMode, updateConfig]);
 
     return <>{children}</>;
 }

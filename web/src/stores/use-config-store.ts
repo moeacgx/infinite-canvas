@@ -3,14 +3,28 @@
 import { useMemo } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { nanoid } from "nanoid";
 
 import { apiGet } from "@/services/api/request";
 import type { AdminPublicSettings } from "@/services/api/admin";
+
+export type ApiCallFormat = "openai" | "gemini";
+
+export type ModelChannel = {
+    id: string;
+    name: string;
+    baseUrl: string;
+    apiKey: string;
+    apiFormat: ApiCallFormat;
+    models: string[];
+};
 
 export type AiConfig = {
     channelMode: "remote" | "local" | "newapi";
     baseUrl: string;
     apiKey: string;
+    apiFormat: ApiCallFormat;
+    channels: ModelChannel[];
     newApiGroup: string;
     newApiTextGroup: string;
     newApiImageGroup: string;
@@ -53,6 +67,9 @@ export type WebdavSyncConfig = {
 export const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
 export type ModelCapability = "image" | "video" | "text" | "audio";
 export type ChannelMode = AiConfig["channelMode"];
+const CHANNEL_MODEL_SEPARATOR = "::";
+const OPENAI_BASE_URL = "https://api.openai.com";
+const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 export type FetchedModelLists = {
     models: string[];
     imageModels?: string[];
@@ -61,10 +78,34 @@ export type FetchedModelLists = {
     audioModels?: string[];
 };
 
+export type ModelSelectionState = {
+    model: string;
+    imageModel: string;
+    videoModel: string;
+    textModel: string;
+    audioModel: string;
+    models: string[];
+    imageModels: string[];
+    videoModels: string[];
+    textModels: string[];
+    audioModels: string[];
+};
+
 export const defaultConfig: AiConfig = {
     channelMode: "local",
-    baseUrl: "https://api.openai.com",
+    baseUrl: OPENAI_BASE_URL,
     apiKey: "",
+    apiFormat: "openai",
+    channels: [
+        {
+            id: "default",
+            name: "默认渠道",
+            baseUrl: OPENAI_BASE_URL,
+            apiKey: "",
+            apiFormat: "openai",
+            models: [],
+        },
+    ],
     newApiGroup: "",
     newApiTextGroup: "",
     newApiImageGroup: "",
@@ -106,12 +147,15 @@ export const defaultWebdavSyncConfig: WebdavSyncConfig = {
 
 type ConfigStore = {
     config: AiConfig;
+    localModelState: ModelSelectionState;
+    newApiModelState: ModelSelectionState;
     webdav: WebdavSyncConfig;
     publicSettings: AdminPublicSettings | null;
     isPublicSettingsLoading: boolean;
     isConfigOpen: boolean;
     shouldPromptContinue: boolean;
     updateConfig: <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
+    setChannelMode: (mode: ChannelMode) => void;
     updateWebdavConfig: <K extends keyof WebdavSyncConfig>(key: K, value: WebdavSyncConfig[K]) => void;
     loadPublicSettings: () => Promise<void>;
     isAiConfigReady: (config: AiConfig, model: string) => boolean;
@@ -214,12 +258,12 @@ function preferredModel(models: string[], predicate: (model: string) => boolean)
 }
 
 function isVideoModelName(model: string) {
-    const value = model.toLowerCase();
+    const value = modelOptionName(model).toLowerCase();
     return value.includes("seedance") || value.includes("video") || value.includes("sora") || value.includes("veo") || value.includes("kling") || value.includes("wan") || value.includes("hailuo");
 }
 
 function isImageModelName(model: string) {
-    const value = model.toLowerCase();
+    const value = modelOptionName(model).toLowerCase();
     return (
         !isVideoModelName(model) &&
         !isAudioModelName(model) &&
@@ -237,7 +281,7 @@ function isImageModelName(model: string) {
 }
 
 function isAudioModelName(model: string) {
-    const value = model.toLowerCase();
+    const value = modelOptionName(model).toLowerCase();
     return value.includes("audio") || value.includes("tts") || value.includes("speech") || value.includes("voice") || value.includes("music") || value.includes("sound");
 }
 
@@ -283,7 +327,8 @@ function isAiConfigReady(config: AiConfig, model: string) {
     if (!model.trim()) return false;
     if (config.channelMode === "remote") return true;
     if (config.channelMode === "newapi") return Boolean(config.baseUrl.trim() && config.newApiGroup.trim());
-    return Boolean(config.baseUrl.trim() && config.apiKey.trim());
+    const requestConfig = resolveModelRequestConfig(config, model);
+    return Boolean(requestConfig.model.trim() && requestConfig.baseUrl.trim() && requestConfig.apiKey.trim());
 }
 
 export function isNewApiConfig(config: AiConfig) {
@@ -302,6 +347,8 @@ export const useConfigStore = create<ConfigStore>()(
     persist(
         (set, get) => ({
             config: defaultConfig,
+            localModelState: modelSelectionState(defaultConfig),
+            newApiModelState: emptyModelSelectionState(),
             webdav: defaultWebdavSyncConfig,
             publicSettings: null,
             isPublicSettingsLoading: false,
@@ -314,6 +361,26 @@ export const useConfigStore = create<ConfigStore>()(
                         [key]: value,
                     },
                 })),
+            setChannelMode: (mode) =>
+                set((state) => {
+                    const localModelState = state.config.channelMode === "local" ? modelSelectionState(withLocalChannels(state.config, state.config.channels)) : state.localModelState;
+                    const newApiModelState = state.config.channelMode === "newapi" ? modelSelectionState(state.config) : state.newApiModelState;
+                    if (mode === "local") {
+                        return {
+                            localModelState,
+                            newApiModelState,
+                            config: withLocalChannels({ ...state.config, ...localModelState, channelMode: "local" }, state.config.channels),
+                        };
+                    }
+                    if (mode === "newapi") {
+                        return {
+                            localModelState,
+                            newApiModelState,
+                            config: { ...state.config, ...newApiModelState, channelMode: "newapi" },
+                        };
+                    }
+                    return { localModelState, newApiModelState, config: { ...state.config, channelMode: "remote" } };
+                }),
             updateWebdavConfig: (key, value) =>
                 set((state) => ({
                     webdav: {
@@ -337,27 +404,41 @@ export const useConfigStore = create<ConfigStore>()(
         }),
         {
             name: CONFIG_STORE_KEY,
-            partialize: (state) => ({ config: state.config, webdav: state.webdav }),
+            partialize: (state) => ({ config: state.config, localModelState: state.localModelState, newApiModelState: state.newApiModelState, webdav: state.webdav }),
             merge: (persisted, current) => {
                 const persistedState = (persisted || {}) as Partial<ConfigStore>;
                 const persistedConfig = (persistedState.config || {}) as Partial<AiConfig>;
                 const persistedWebdav = (persistedState.webdav || {}) as Partial<WebdavSyncConfig>;
                 const config = { ...defaultConfig, ...persistedConfig };
+                const channels = normalizeChannels({
+                    ...config,
+                    channels: Array.isArray(persistedConfig.channels) ? persistedConfig.channels : [],
+                });
+                const normalizedConfig = config.channelMode === "local" ? withLocalChannels({ ...config, channels }, channels) : { ...config, channels };
+                const inferredLocalState =
+                    config.channelMode === "local" || (config.channelMode === "remote" && !config.newApiGroup)
+                        ? modelSelectionState(withLocalChannels({ ...config, channels }, channels))
+                        : modelSelectionState(withLocalChannels({ ...defaultConfig, channels }, channels));
+                const inferredNewApiState = config.channelMode === "newapi" || (config.channelMode === "remote" && Boolean(config.newApiGroup)) ? modelSelectionState(config) : emptyModelSelectionState();
                 return {
                     ...current,
+                    localModelState: normalizeModelSelectionState(persistedState.localModelState, inferredLocalState),
+                    newApiModelState: normalizeModelSelectionState(persistedState.newApiModelState, inferredNewApiState),
                     webdav: { ...defaultWebdavSyncConfig, ...persistedWebdav },
                     config: {
-                        ...config,
+                        ...normalizedConfig,
                         channelMode: config.channelMode || "remote",
+                        apiFormat: normalizeApiFormat(config.apiFormat),
+                        channels,
                         newApiGroup: config.newApiGroup || "",
                         newApiTextGroup: config.newApiTextGroup || "",
                         newApiImageGroup: config.newApiImageGroup || "",
                         newApiVideoGroup: config.newApiVideoGroup || "",
                         newApiAudioGroup: config.newApiAudioGroup || "",
-                        imageModel: config.imageModel || defaultConfig.imageModel,
-                        videoModel: config.videoModel || "grok-imagine-video",
-                        textModel: config.textModel || config.model,
-                        audioModel: config.audioModel || defaultConfig.audioModel,
+                        imageModel: normalizedConfig.imageModel || defaultConfig.imageModel,
+                        videoModel: normalizedConfig.videoModel || "grok-imagine-video",
+                        textModel: normalizedConfig.textModel || normalizedConfig.model,
+                        audioModel: normalizedConfig.audioModel || defaultConfig.audioModel,
                         audioVoice: config.audioVoice || defaultConfig.audioVoice,
                         audioFormat: config.audioFormat || defaultConfig.audioFormat,
                         audioSpeed: config.audioSpeed || defaultConfig.audioSpeed,
@@ -367,10 +448,10 @@ export const useConfigStore = create<ConfigStore>()(
                         videoGenerateAudio: config.videoGenerateAudio || "true",
                         videoWatermark: config.videoWatermark || "false",
                         canvasImageCount: config.canvasImageCount || "3",
-                        imageModels: Array.isArray(persistedConfig.imageModels) ? normalizeModelList(config.imageModels) : filterModelsByCapability(config.models, "image"),
-                        videoModels: Array.isArray(persistedConfig.videoModels) ? normalizeModelList(config.videoModels) : filterModelsByCapability(config.models, "video"),
-                        textModels: Array.isArray(persistedConfig.textModels) ? normalizeModelList(config.textModels) : filterModelsByCapability(config.models, "text"),
-                        audioModels: Array.isArray(persistedConfig.audioModels) ? normalizeModelList(config.audioModels) : filterModelsByCapability(config.models, "audio"),
+                        imageModels: config.channelMode === "local" ? normalizedConfig.imageModels : Array.isArray(persistedConfig.imageModels) ? normalizeModelList(config.imageModels) : filterModelsByCapability(config.models, "image"),
+                        videoModels: config.channelMode === "local" ? normalizedConfig.videoModels : Array.isArray(persistedConfig.videoModels) ? normalizeModelList(config.videoModels) : filterModelsByCapability(config.models, "video"),
+                        textModels: config.channelMode === "local" ? normalizedConfig.textModels : Array.isArray(persistedConfig.textModels) ? normalizeModelList(config.textModels) : filterModelsByCapability(config.models, "text"),
+                        audioModels: config.channelMode === "local" ? normalizedConfig.audioModels : Array.isArray(persistedConfig.audioModels) ? normalizeModelList(config.audioModels) : filterModelsByCapability(config.models, "audio"),
                     },
                 };
             },
@@ -396,6 +477,187 @@ export function useEffectiveConfig() {
     const config = useConfigStore((state) => state.config);
     const modelChannel = useConfigStore((state) => state.publicSettings?.modelChannel || null);
     return useMemo(() => resolveEffectiveConfig(config, modelChannel), [config, modelChannel]);
+}
+
+export function createModelChannel(channel?: Partial<ModelChannel>): ModelChannel {
+    const apiFormat = normalizeApiFormat(channel?.apiFormat);
+    return {
+        id: channel?.id?.trim() || nanoid(),
+        name: channel?.name?.trim() || "新渠道",
+        baseUrl: channel?.baseUrl?.trim() || defaultBaseUrlForApiFormat(apiFormat),
+        apiKey: channel?.apiKey || "",
+        apiFormat,
+        models: uniqueRawModels(channel?.models || []),
+    };
+}
+
+export function defaultBaseUrlForApiFormat(apiFormat: ApiCallFormat) {
+    return apiFormat === "gemini" ? GEMINI_BASE_URL : OPENAI_BASE_URL;
+}
+
+export function encodeChannelModel(channelId: string, model: string) {
+    return `${channelId}${CHANNEL_MODEL_SEPARATOR}${modelOptionName(model).trim()}`;
+}
+
+export function decodeChannelModel(value: string) {
+    const index = value.indexOf(CHANNEL_MODEL_SEPARATOR);
+    if (index < 0) return null;
+    return { channelId: value.slice(0, index), model: value.slice(index + CHANNEL_MODEL_SEPARATOR.length) };
+}
+
+export function isChannelModelValue(value: string) {
+    return Boolean(decodeChannelModel(value));
+}
+
+export function modelOptionName(value: string) {
+    return decodeChannelModel(value)?.model || value;
+}
+
+export function modelOptionLabel(config: AiConfig, value: string) {
+    const decoded = decodeChannelModel(value);
+    if (!decoded) return value;
+    const channel = (config.channels || []).find((item) => item.id === decoded.channelId);
+    return channel ? `${decoded.model}（${channel.name}）` : decoded.model;
+}
+
+export function modelOptionsFromChannels(channels: ModelChannel[]) {
+    return uniqueModelOptions(channels.flatMap((channel) => channel.models.map((model) => encodeChannelModel(channel.id, model))));
+}
+
+export function resolveModelChannel(config: AiConfig, value: string) {
+    const decoded = decodeChannelModel(value);
+    const model = decoded?.model || value;
+    const channels = config.channels || [];
+    const matched = decoded ? channels.find((channel) => channel.id === decoded.channelId) : channels.find((channel) => channel.models.includes(model));
+    return matched || channels[0] || createModelChannel({ id: "default", name: "默认渠道", baseUrl: config.baseUrl, apiKey: config.apiKey, apiFormat: config.apiFormat, models: config.models.map(modelOptionName) });
+}
+
+export function resolveModelRequestConfig(config: AiConfig, value: string): AiConfig {
+    if (config.channelMode !== "local") return { ...config, model: modelOptionName(value) };
+    const channel = resolveModelChannel(config, value);
+    return {
+        ...config,
+        model: modelOptionName(value),
+        baseUrl: channel.baseUrl,
+        apiKey: channel.apiKey,
+        apiFormat: channel.apiFormat,
+    };
+}
+
+export function withLocalChannels(config: AiConfig, inputChannels: ModelChannel[]): AiConfig {
+    const channels = inputChannels.map((channel) => ({
+        id: channel.id?.trim() || nanoid(),
+        name: channel.name ?? "",
+        baseUrl: channel.baseUrl ?? "",
+        apiKey: channel.apiKey ?? "",
+        apiFormat: normalizeApiFormat(channel.apiFormat),
+        models: uniqueRawModels(channel.models || []),
+    }));
+    const models = modelOptionsFromChannels(channels);
+    const capabilityLists = {
+        imageModels: nextLocalCapabilityModels(config.imageModels, models, "image"),
+        videoModels: nextLocalCapabilityModels(config.videoModels, models, "video"),
+        textModels: nextLocalCapabilityModels(config.textModels, models, "text"),
+        audioModels: nextLocalCapabilityModels(config.audioModels, models, "audio"),
+    };
+    return {
+        ...config,
+        channels,
+        baseUrl: channels[0]?.baseUrl ?? config.baseUrl,
+        apiKey: channels[0]?.apiKey ?? config.apiKey,
+        apiFormat: channels[0]?.apiFormat ?? config.apiFormat,
+        models,
+        ...capabilityLists,
+        model: nextLocalDefault(config.model, capabilityLists.textModels),
+        imageModel: nextLocalDefault(config.imageModel, capabilityLists.imageModels),
+        videoModel: nextLocalDefault(config.videoModel, capabilityLists.videoModels),
+        textModel: nextLocalDefault(config.textModel, capabilityLists.textModels),
+        audioModel: nextLocalDefault(config.audioModel, capabilityLists.audioModels),
+    };
+}
+
+function normalizeChannels(config: AiConfig) {
+    const channels = (config.channels || []).map((channel, index) =>
+        createModelChannel({
+            ...channel,
+            id: channel.id || (index === 0 ? "default" : `channel-${index + 1}`),
+            name: channel.name || (index === 0 ? "默认渠道" : `渠道 ${index + 1}`),
+        }),
+    );
+    if (channels.length) return channels;
+    return [
+        createModelChannel({
+            id: "default",
+            name: "默认渠道",
+            baseUrl: config.baseUrl || OPENAI_BASE_URL,
+            apiKey: config.apiKey || "",
+            apiFormat: config.apiFormat,
+            models: uniqueRawModels([...(config.models || []), config.model, config.imageModel, config.videoModel, config.textModel, config.audioModel]),
+        }),
+    ];
+}
+
+function nextLocalCapabilityModels(current: string[], models: string[], capability: ModelCapability) {
+    const available = new Set(models);
+    const kept = uniqueModelOptions(current.map((model) => normalizeLocalModelOption(model, models)).filter((model) => available.has(model) && modelMatchesCapability(model, capability)));
+    return kept.length ? kept : filterModelsByCapability(models, capability);
+}
+
+function normalizeLocalModelOption(value: string, models: string[]) {
+    if (models.includes(value)) return value;
+    const rawModel = modelOptionName(value);
+    return models.find((model) => modelOptionName(model) === rawModel) || "";
+}
+
+function nextLocalDefault(current: string, models: string[]) {
+    return normalizeLocalModelOption(current, models) || models[0] || "";
+}
+
+function normalizeApiFormat(value: unknown): ApiCallFormat {
+    return value === "gemini" ? "gemini" : "openai";
+}
+
+function uniqueRawModels(models: string[]) {
+    return Array.from(new Set((models || []).map((model) => modelOptionName(model).trim()).filter(Boolean)));
+}
+
+function uniqueModelOptions(models: string[]) {
+    return Array.from(new Set((models || []).map((model) => model.trim()).filter(Boolean)));
+}
+
+function modelSelectionState(config: AiConfig): ModelSelectionState {
+    return {
+        model: config.model,
+        imageModel: config.imageModel,
+        videoModel: config.videoModel,
+        textModel: config.textModel,
+        audioModel: config.audioModel,
+        models: [...config.models],
+        imageModels: [...config.imageModels],
+        videoModels: [...config.videoModels],
+        textModels: [...config.textModels],
+        audioModels: [...config.audioModels],
+    };
+}
+
+function emptyModelSelectionState(): ModelSelectionState {
+    return { model: "", imageModel: "", videoModel: "", textModel: "", audioModel: "", models: [], imageModels: [], videoModels: [], textModels: [], audioModels: [] };
+}
+
+function normalizeModelSelectionState(value: ModelSelectionState | undefined, fallback: ModelSelectionState): ModelSelectionState {
+    if (!value) return fallback;
+    return {
+        model: value.model || "",
+        imageModel: value.imageModel || "",
+        videoModel: value.videoModel || "",
+        textModel: value.textModel || "",
+        audioModel: value.audioModel || "",
+        models: normalizeModelList(value.models || []),
+        imageModels: normalizeModelList(value.imageModels || []),
+        videoModels: normalizeModelList(value.videoModels || []),
+        textModels: normalizeModelList(value.textModels || []),
+        audioModels: normalizeModelList(value.audioModels || []),
+    };
 }
 
 export function buildApiUrl(baseUrl: string, path: string) {

@@ -1,9 +1,10 @@
 import axios from "axios";
 import { nanoid } from "nanoid";
 
-import type { AiConfig } from "@/stores/use-config-store";
+import { resolveCapabilityModel, resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
 import type { Skill } from "@/services/api/skills";
 import { aiApiUrl, aiRequestConfig, refreshRemoteUser, readAxiosError } from "@/services/api/ai-utils";
+import { streamGeminiChat, type GeminiChatMessage, type GeminiFunctionTool } from "@/services/api/gemini";
 import { parseAgentStreamChunk } from "./agent-stream";
 import { buildToolDefinitions } from "./skill-definitions";
 import { executeSkill, type SkillResult } from "./skill-executor";
@@ -12,7 +13,7 @@ export type AgentMessage = {
     id: string;
     role: "user" | "assistant" | "tool" | "system";
     content: string | null;
-    toolCalls?: Array<{ id: string; name: string; arguments: string }>;
+    toolCalls?: Array<{ id: string; name: string; arguments: string; thoughtSignature?: string }>;
     toolCallId?: string;
     skillResults?: SkillResult[];
     isStreaming?: boolean;
@@ -34,13 +35,7 @@ const AGENT_SYSTEM_PROMPT = `你是一个多功能 AI 助手，可以通过 Skil
 /**
  * Run the agent loop: send chat completion with tools, handle tool calls, recurse.
  */
-export async function runAgent(
-    config: AiConfig,
-    messages: AgentMessage[],
-    enabledSkills: Skill[],
-    callbacks: AgentCallbacks,
-    signal?: AbortSignal,
-): Promise<void> {
+export async function runAgent(config: AiConfig, messages: AgentMessage[], enabledSkills: Skill[], callbacks: AgentCallbacks, signal?: AbortSignal): Promise<void> {
     const tools = enabledSkills.length > 0 ? buildToolDefinitions(enabledSkills) : undefined;
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
@@ -58,13 +53,7 @@ export async function runAgent(
         callbacks.onMessageCreate(assistantMsg);
 
         // Stream chat completion
-        const result = await streamChatCompletion(
-            config,
-            apiMessages,
-            tools,
-            (text) => callbacks.onMessageUpdate(assistantId, { content: text }),
-            signal,
-        );
+        const result = await streamChatCompletion(config, apiMessages, tools, (text) => callbacks.onMessageUpdate(assistantId, { content: text }), signal);
 
         // Update final message
         callbacks.onMessageUpdate(assistantId, {
@@ -158,6 +147,7 @@ function buildApiMessages(config: AiConfig, messages: AgentMessage[]) {
                     id: tc.id,
                     type: "function",
                     function: { name: tc.name, arguments: tc.arguments },
+                    ...(tc.thoughtSignature ? { thoughtSignature: tc.thoughtSignature } : {}),
                 })),
             });
         } else {
@@ -172,26 +162,30 @@ function buildApiMessages(config: AiConfig, messages: AgentMessage[]) {
 
 type StreamResult = {
     content: string;
-    toolCalls?: Array<{ id: string; name: string; arguments: string }>;
+    toolCalls?: Array<{ id: string; name: string; arguments: string; thoughtSignature?: string }>;
 };
 
-async function streamChatCompletion(
-    config: AiConfig,
-    messages: Array<Record<string, unknown>>,
-    tools: ReturnType<typeof buildToolDefinitions> | undefined,
-    onDelta: (fullText: string) => void,
-    signal?: AbortSignal,
-): Promise<StreamResult> {
+async function streamChatCompletion(config: AiConfig, messages: Array<Record<string, unknown>>, tools: ReturnType<typeof buildToolDefinitions> | undefined, onDelta: (fullText: string) => void, signal?: AbortSignal): Promise<StreamResult> {
+    const requestConfig = resolveModelRequestConfig(config, resolveCapabilityModel(config, "text", config.model || config.textModel));
+    if (requestConfig.apiFormat === "gemini") {
+        try {
+            const result = await streamGeminiChat({ ...requestConfig, systemPrompt: "" }, messages as GeminiChatMessage[], tools as GeminiFunctionTool[] | undefined, onDelta, { signal });
+            return { content: result.content, toolCalls: result.toolCalls.length ? result.toolCalls : undefined };
+        } catch (error) {
+            if (signal?.aborted) throw new Error("已取消");
+            throw new Error(readAxiosError(error, "对话请求失败"));
+        }
+    }
     let buffer = "";
     let content = "";
     let processedLength = 0;
     const toolCallAccumulator = new Map<number, { id: string; name: string; arguments: string }>();
 
-    const model = config.model || config.textModel || "gpt-4o";
+    const model = requestConfig.model || "gpt-4o";
 
     try {
         await axios.post(
-            aiApiUrl(config, "/chat/completions"),
+            aiApiUrl(requestConfig, "/chat/completions"),
             {
                 model,
                 messages,
@@ -199,7 +193,7 @@ async function streamChatCompletion(
                 ...(tools?.length ? { tools } : {}),
             },
             {
-                ...aiRequestConfig(config, "application/json", undefined, "text"),
+                ...aiRequestConfig(requestConfig, "application/json", undefined, "text"),
                 responseType: "text",
                 signal,
                 onDownloadProgress: (event) => {
