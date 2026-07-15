@@ -54,6 +54,7 @@ export async function POST(request: NextRequest) {
     } catch {
         return releaseResponse(lease, "渠道请求体过大", 413);
     }
+    if (body?.byteLength && !lease.addBytes(body.byteLength)) return releaseResponse(lease, "当前账号本小时的渠道转发流量已达上限", 429);
 
     activeRequests += 1;
     let handedToStream = false;

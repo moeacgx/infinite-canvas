@@ -285,7 +285,7 @@ export function AppConfigModal() {
                         <>
                             <div className="mb-3 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
                                 <CircleAlert className="mt-0.5 size-4 shrink-0" />
-                                <span>浏览器直连要求接口支持 CORS/OPTIONS；HTTPS 页面不能直连 HTTP 地址。网络受限时请改用后端渠道。</span>
+                                <span>默认由浏览器直连；遇到 CORS/OPTIONS、证书或混合内容网络错误时，会自动改用本站服务端安全转发（需登录，不转发 localhost/内网地址）。转发时 API Key 会发送到当前部署的服务器，请只在信任本站时使用。</span>
                             </div>
                             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                                 <div>
