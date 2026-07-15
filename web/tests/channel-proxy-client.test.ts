@@ -10,10 +10,12 @@ test("本地 GET 网络错误可回退，remote/New API 与取消请求不回退
     assert.equal(isRetryableChannelNetworkFailure({ channelMode: "local", method: "GET", code: "ERR_CANCELED", aborted: true }), false);
 });
 
-test("有预检保证的本地写请求才自动重试，避免重复扣费", () => {
-    assert.equal(isRetryableChannelNetworkFailure({ channelMode: "local", method: "POST", code: "ERR_NETWORK", headers: { Authorization: "Bearer key" } }), true);
-    assert.equal(isRetryableChannelNetworkFailure({ channelMode: "local", method: "POST", code: "ERR_NETWORK", headers: { "Content-Type": "application/json" } }), true);
+test("本地写请求网络错误不自动重放，避免重复生成和扣费", () => {
+    assert.equal(isRetryableChannelNetworkFailure({ channelMode: "local", method: "POST", code: "ERR_NETWORK", headers: { Authorization: "Bearer key" } }), false);
+    assert.equal(isRetryableChannelNetworkFailure({ channelMode: "local", method: "POST", code: "ERR_NETWORK", headers: { "Content-Type": "application/json" } }), false);
     assert.equal(isRetryableChannelNetworkFailure({ channelMode: "local", method: "POST", code: "ERR_NETWORK", headers: { "Content-Type": "text/plain" } }), false);
+    assert.equal(isRetryableChannelNetworkFailure({ channelMode: "local", method: "PUT", code: "ERR_NETWORK", headers: { Authorization: "Bearer key" } }), false);
+    assert.equal(isRetryableChannelNetworkFailure({ channelMode: "local", method: "DELETE", code: "ERR_NETWORK", headers: { Authorization: "Bearer key" } }), false);
     assert.equal(isRetryableChannelNetworkFailure({ channelMode: "local", method: "POST", code: "ERR_NETWORK", hasResponse: true, headers: { Authorization: "Bearer key" } }), false);
 });
 
