@@ -72,10 +72,17 @@ export function refreshRemoteUser(config: AiConfig) {
 }
 
 /**
+ * 判断请求是否由调用方主动取消。
+ */
+export function isRequestCanceled(error: unknown, signal?: AbortSignal) {
+    return Boolean(signal?.aborted) || axios.isCancel(error) || (error instanceof DOMException && error.name === "AbortError");
+}
+
+/**
  * 从 axios 错误中提取可读信息。
  */
 export function readAxiosError(error: unknown, fallback: string) {
-    if (axios.isCancel(error)) return "请求已取消";
+    if (isRequestCanceled(error)) return "请求已取消";
     if (axios.isAxiosError<{ error?: { message?: string }; msg?: string; code?: number }>(error)) {
         const responseData = error.response?.data;
         const message = responseData?.error?.message || responseData?.msg;
@@ -88,7 +95,6 @@ export function readAxiosError(error: unknown, fallback: string) {
             pageProtocol: typeof window === "undefined" ? undefined : window.location.protocol,
         });
     }
-    if (error instanceof DOMException && error.name === "AbortError") return "请求已取消";
     return error instanceof Error ? error.message : fallback;
 }
 

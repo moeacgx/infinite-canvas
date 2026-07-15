@@ -1,7 +1,7 @@
 import axios from "axios";
 
 import { dataUrlToFile } from "@/lib/image-utils";
-import { readAxiosError } from "@/services/api/ai-utils";
+import { isRequestCanceled, readAxiosError } from "@/services/api/ai-utils";
 import { channelAxiosRequest } from "@/services/api/channel-request";
 import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
@@ -322,7 +322,8 @@ async function videoResultFromUrl(url: string, options?: RequestOptions): Promis
         const response = await axios.get<Blob>(url, { responseType: "blob", signal: options?.signal });
         await assertVideoBlob(response.data);
         return { blob: response.data };
-    } catch {
+    } catch (error) {
+        if (isRequestCanceled(error, options?.signal)) throw error;
         return { url, mimeType: "video/mp4" };
     }
 }
