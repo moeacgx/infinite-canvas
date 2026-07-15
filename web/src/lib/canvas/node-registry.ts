@@ -47,6 +47,10 @@ export function isRegisteredNodeType(type: string) {
     return definitions.has(type);
 }
 
+export function isKnownNodeType(type: string) {
+    return isBuiltinNodeType(type) || definitions.has(type);
+}
+
 export function getRegisteredNodeSpec(type: string) {
     const definition = definitions.get(type);
     if (!definition) return null;

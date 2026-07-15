@@ -50,7 +50,7 @@ import { buildCanvasResourceReferences, buildNodeMentionReferences } from "../ut
 import { findContainingGroupId, findGroupDropTarget, snapNodesIntoGroup } from "../utils/canvas-group";
 import { applyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "../utils/canvas-agent-ops";
 import { buildNodeContext } from "@/lib/canvas/plugin-node-context";
-import { getNodeDefinition, isBuiltinNodeType, listNodeDefinitions, useNodeRegistryVersion } from "@/lib/canvas/node-registry";
+import { getNodeDefinition, isBuiltinNodeType, isKnownNodeType, listNodeDefinitions, useNodeRegistryVersion } from "@/lib/canvas/node-registry";
 import type { CanvasPluginHost } from "@/types/canvas-plugin";
 import {
     CanvasNodeType,
@@ -130,6 +130,12 @@ function createCanvasNode(type: CanvasNodeTypeId, position: Position, metadata?:
         height: spec.height,
         metadata: { ...spec.metadata, ...metadata },
     };
+}
+
+function shouldOpenCopiedNodePanel(node: CanvasNodeData) {
+    const definition = getNodeDefinition(node.type);
+    if (!isKnownNodeType(node.type) || node.type === CanvasNodeType.Group || definition?.hidePanel) return false;
+    return definition?.Panel ? Boolean(definition.autoOpenPanel) : true;
 }
 
 export default function CanvasPage() {
@@ -1001,7 +1007,7 @@ function InfiniteCanvasPage() {
         setNodes((prev) => [...prev, next]);
         setSelectedNodeIds(new Set([id]));
         setSelectedConnectionId(null);
-        if (next.type !== CanvasNodeType.Group) setDialogNodeId(id);
+        setDialogNodeId(shouldOpenCopiedNodePanel(next) ? id : null);
     }, []);
 
     const copySelectedNodes = useCallback(() => {
@@ -1081,7 +1087,8 @@ function InfiniteCanvasPage() {
         setSelectedNodeIds(new Set(pastedNodes.map((node) => node.id)));
         setSelectedConnectionId(null);
         setContextMenu(null);
-        setDialogNodeId(pastedNodes[0]?.type === CanvasNodeType.Group ? null : pastedNodes[0]?.id || null);
+        const firstPastedNode = pastedNodes[0];
+        setDialogNodeId(firstPastedNode && shouldOpenCopiedNodePanel(firstPastedNode) ? firstPastedNode.id : null);
         return true;
     }, [getCanvasCenter]);
 
@@ -1280,8 +1287,11 @@ function InfiniteCanvasPage() {
                 setDialogNodeId(null);
             } else if (definition?.Panel) {
                 if (definition.autoOpenPanel) setDialogNodeId(clickedNodeId);
-            } else if (clickedNode) {
+                else setDialogNodeId(null);
+            } else if (clickedNode && isKnownNodeType(clickedNode.type)) {
                 setDialogNodeId(clickedNodeId);
+            } else {
+                setDialogNodeId(null);
             }
         }
     }, []);
@@ -2715,7 +2725,9 @@ function InfiniteCanvasPage() {
                             mentionReferences={mentionReferencesByNodeId.get(node.id) || []}
                             pluginHost={pluginHost}
                             renderPanel={(panelNode) => {
-                                const PluginPanel = getNodeDefinition(panelNode.type)?.Panel;
+                                const definition = getNodeDefinition(panelNode.type);
+                                if (!isBuiltinNodeType(panelNode.type) && !definition) return null;
+                                const PluginPanel = definition?.Panel;
                                 if (PluginPanel) return <CanvasPluginErrorBoundary pluginType={panelNode.type} resetKey={PluginPanel}><PluginPanel ctx={buildNodeContext(pluginHost, panelNode, theme, viewport.k)} onClose={() => setDialogNodeId(null)} /></CanvasPluginErrorBoundary>;
                                 return panelNode.type === CanvasNodeType.Config ? (
                                     <CanvasConfigComposer
