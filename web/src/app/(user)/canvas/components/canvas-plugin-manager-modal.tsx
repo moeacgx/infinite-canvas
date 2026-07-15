@@ -5,7 +5,7 @@ import { App, Button, Input, Modal, Popconfirm, Switch, Tabs } from "antd";
 import { AlertTriangle, Download, Puzzle, RefreshCw, Trash2 } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
-import { installPluginFromUrl, setPluginEnabled, uninstallPlugin, updatePlugin } from "@/lib/canvas/plugin-loader";
+import { installPluginFromUrl, setPluginEnabled, uninstallPlugin, unsafeCanvasPluginsEnabled, updatePlugin } from "@/lib/canvas/plugin-loader";
 import { fetchOfficialPlugins, type OfficialPluginEntry } from "@/lib/canvas/plugin-registry";
 import { usePluginStore, type InstalledPlugin } from "@/stores/use-plugin-store";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -43,7 +43,7 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
         if (!target) return;
         setInstalling(true);
         try {
-            const plugin = await installPluginFromUrl(target);
+            const plugin = await installPluginFromUrl(target, { unsafeRemote: true });
             message.success(`已安装 ${plugin.name}`);
             setUrl("");
         } catch (error) {
@@ -149,7 +149,7 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
                     <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
                     <span>插件代码会在当前页面执行，并可访问浏览器中的画布和配置数据。只安装可信来源。</span>
                 </div>
-                <Tabs defaultActiveKey="official" items={[{ key: "official", label: "官方插件", children: officialContent }, { key: "installed", label: `已安装 ${plugins.length || ""}`, children: installedContent }, { key: "url", label: "URL 安装", children: urlContent }]} />
+                <Tabs defaultActiveKey="official" items={[{ key: "official", label: "官方插件", children: officialContent }, { key: "installed", label: `已安装 ${plugins.length || ""}`, children: installedContent }, ...(unsafeCanvasPluginsEnabled ? [{ key: "url", label: "URL 安装（危险）", children: urlContent }] : [])]} />
             </div>
         </Modal>
     );
