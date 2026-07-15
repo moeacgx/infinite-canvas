@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ArrowUp, LoaderCircle } from "lucide-react";
+import { ArrowUp, LoaderCircle, Square } from "lucide-react";
 import { Button } from "antd";
 
 import { ModelPicker } from "@/components/model-picker";
@@ -25,11 +25,12 @@ type CanvasNodePromptPanelProps = {
     onPromptChange: (nodeId: string, prompt: string) => void;
     onConfigChange: (nodeId: string, patch: Partial<CanvasNodeData["metadata"]>) => void;
     onGenerate: (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => void;
+    onStop: (nodeId: string) => void;
     mentionReferences?: CanvasResourceReference[];
     onImageSettingsOpenChange?: (open: boolean) => void;
 };
 
-export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfigChange, onGenerate, mentionReferences = [], onImageSettingsOpenChange }: CanvasNodePromptPanelProps) {
+export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfigChange, onGenerate, onStop, mentionReferences = [], onImageSettingsOpenChange }: CanvasNodePromptPanelProps) {
     const globalConfig = useEffectiveConfig();
     const modelCosts = useConfigStore((state) => state.publicSettings?.modelChannel.modelCosts);
     const showCreditBalance = useConfigStore((state) => state.publicSettings?.ui?.showCreditBalance === true);
@@ -106,15 +107,32 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                         <ModelPicker config={config} value={config.model} onChange={(model) => onConfigChange(node.id, { model })} capability="text" onMissingConfig={() => openConfigDialog(true)} />
                     )}
                 </div>
-                <Button type="primary" className="!h-10 !min-w-16 shrink-0 !rounded-full !px-3" disabled={isRunning || !prompt.trim()} onClick={submit} aria-label="生成">
+                <Button
+                    type="primary"
+                    className="!h-10 !min-w-16 shrink-0 !rounded-full !px-3"
+                    danger={isRunning}
+                    disabled={!isRunning && !prompt.trim()}
+                    onClick={() => (isRunning ? onStop(node.id) : submit())}
+                    aria-label={isRunning ? "停止生成" : "生成"}
+                >
                     <span className="flex items-center gap-1.5">
-                        {showCreditBalance ? (
-                            <span className="inline-flex items-center gap-1 text-xs font-medium tabular-nums">
-                                <CreditSymbol />
-                                {credits.toLocaleString()}
-                            </span>
-                        ) : null}
-                        {isRunning ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
+                        {isRunning ? (
+                            <>
+                                <LoaderCircle className="size-4 animate-spin" />
+                                <Square className="size-3.5 fill-current" />
+                                <span className="text-xs font-medium">停止</span>
+                            </>
+                        ) : (
+                            <>
+                                {showCreditBalance ? (
+                                    <span className="inline-flex items-center gap-1 text-xs font-medium tabular-nums">
+                                        <CreditSymbol />
+                                        {credits.toLocaleString()}
+                                    </span>
+                                ) : null}
+                                <ArrowUp className="size-4" />
+                            </>
+                        )}
                     </span>
                 </Button>
             </div>

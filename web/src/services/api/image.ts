@@ -27,6 +27,7 @@ type ImageTaskResponse = {
     result?: ImageApiResponse;
     error?: string | { message?: string };
 };
+type RequestOptions = { signal?: AbortSignal };
 
 const QUALITY_BASE: Record<string, number> = {
     low: 1024,
@@ -177,7 +178,7 @@ function parseStreamChunk(chunk: string, onDelta: (value: string) => void) {
     if (deltaText) onDelta(deltaText);
 }
 
-export async function requestGeneration(config: AiConfig, prompt: string) {
+export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions) {
     const model = resolveCapabilityModel(config, "image");
     assertImageModel(model);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
@@ -193,11 +194,12 @@ export async function requestGeneration(config: AiConfig, prompt: string) {
         output_format: IMAGE_OUTPUT_FORMAT,
     };
     if (isNewApiConfig(config)) {
-        return requestNewApiImageTask(config, payload);
+        return requestNewApiImageTask(config, payload, undefined, options);
     }
     try {
         const response = await axios.post<ImageApiResponse>(aiApiUrl(config, "/images/generations"), payload, {
             ...aiRequestConfig(config, "application/json", undefined, "image"),
+            signal: options?.signal,
         });
         const images = await parseImagePayload(response.data);
         refreshRemoteUser(config);
@@ -207,12 +209,12 @@ export async function requestGeneration(config: AiConfig, prompt: string) {
     }
 }
 
-async function requestNewApiImageTask(config: AiConfig, payload: Record<string, unknown> | FormData, params?: Record<string, string>) {
+async function requestNewApiImageTask(config: AiConfig, payload: Record<string, unknown> | FormData, params?: Record<string, string>, options?: RequestOptions) {
     try {
-        const created = (await axios.post<ImageTaskResponse>(aiApiUrl(config, "/images/tasks"), payload, aiRequestConfig(config, payload instanceof FormData ? undefined : "application/json", params, "image"))).data;
+        const created = (await axios.post<ImageTaskResponse>(aiApiUrl(config, "/images/tasks"), payload, { ...aiRequestConfig(config, payload instanceof FormData ? undefined : "application/json", params, "image"), signal: options?.signal })).data;
         const taskId = created.task_id;
         if (!taskId) throw new Error("图片任务没有返回任务 ID");
-        const task = await waitForNewApiImageTask(config, taskId);
+        const task = await waitForNewApiImageTask(config, taskId, options);
         if (!task.result) throw new Error("图片任务成功但没有返回结果");
         const images = await parseImagePayload(task.result, config);
         refreshRemoteUser(config);
@@ -222,13 +224,13 @@ async function requestNewApiImageTask(config: AiConfig, payload: Record<string, 
     }
 }
 
-async function waitForNewApiImageTask(config: AiConfig, taskId: string) {
+async function waitForNewApiImageTask(config: AiConfig, taskId: string, options?: RequestOptions) {
     for (let attempt = 0; attempt < NEW_API_IMAGE_TASK_MAX_ATTEMPTS; attempt += 1) {
-        const task = (await axios.get<ImageTaskResponse>(aiApiUrl(config, `/images/tasks/${encodeURIComponent(taskId)}`), aiRequestConfig(config, undefined, undefined, "image"))).data;
+        const task = (await axios.get<ImageTaskResponse>(aiApiUrl(config, `/images/tasks/${encodeURIComponent(taskId)}`), { ...aiRequestConfig(config, undefined, undefined, "image"), signal: options?.signal })).data;
         if (task.status === "succeeded") return task;
         if (task.status === "failed") throw new Error(readImageTaskError(task.error) || "图片生成失败");
         if (attempt === NEW_API_IMAGE_TASK_MAX_ATTEMPTS - 1) throw new Error("图片生成超时，请稍后重试");
-        await delay(NEW_API_IMAGE_TASK_POLL_INTERVAL_MS);
+        await delay(NEW_API_IMAGE_TASK_POLL_INTERVAL_MS, options?.signal);
     }
     throw new Error("图片生成超时，请稍后重试");
 }
@@ -238,11 +240,22 @@ function readImageTaskError(error: ImageTaskResponse["error"]) {
     return error?.message || "";
 }
 
-function delay(ms: number) {
-    return new Promise((resolve) => window.setTimeout(resolve, ms));
+function delay(ms: number, signal?: AbortSignal) {
+    return new Promise<void>((resolve, reject) => {
+        if (signal?.aborted) return reject(new DOMException("请求已取消", "AbortError"));
+        const timer = window.setTimeout(() => {
+            signal?.removeEventListener("abort", onAbort);
+            resolve();
+        }, ms);
+        const onAbort = () => {
+            window.clearTimeout(timer);
+            reject(new DOMException("请求已取消", "AbortError"));
+        };
+        signal?.addEventListener("abort", onAbort, { once: true });
+    });
 }
 
-export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], mask?: ReferenceImage) {
+export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], mask?: ReferenceImage, options?: RequestOptions) {
     const model = resolveCapabilityModel(config, "image");
     assertImageModel(model);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
@@ -266,11 +279,11 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     if (mask) formData.set("mask", dataUrlToFile(mask));
 
     if (isNewApiConfig(config)) {
-        return requestNewApiImageTask(config, formData, { action: "edits" });
+        return requestNewApiImageTask(config, formData, { action: "edits" }, options);
     }
 
     try {
-        const response = await axios.post<ImageApiResponse>(aiApiUrl(config, "/images/edits"), formData, aiRequestConfig(config, undefined, undefined, "image"));
+        const response = await axios.post<ImageApiResponse>(aiApiUrl(config, "/images/edits"), formData, { ...aiRequestConfig(config, undefined, undefined, "image"), signal: options?.signal });
         const images = await parseImagePayload(response.data);
         refreshRemoteUser(config);
         return images;
@@ -279,7 +292,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     }
 }
 
-export async function requestImageQuestion(config: AiConfig, messages: ChatCompletionMessage[], onDelta: (text: string) => void) {
+export async function requestImageQuestion(config: AiConfig, messages: ChatCompletionMessage[], onDelta: (text: string) => void, options?: RequestOptions) {
     assertImageModel(config.model);
     let buffer = "";
     let answer = "";
@@ -295,6 +308,7 @@ export async function requestImageQuestion(config: AiConfig, messages: ChatCompl
             },
             {
                 ...aiRequestConfig(config, "application/json", undefined, "text"),
+                signal: options?.signal,
                 responseType: "text",
                 onDownloadProgress: (event) => {
                     const responseText = String(event.event?.target?.responseText || "");

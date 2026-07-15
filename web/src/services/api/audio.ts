@@ -6,6 +6,8 @@ import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { buildApiUrl, isNewApiConfig, resolveNewApiGroup, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
+type RequestOptions = { signal?: AbortSignal };
+
 function aiApiUrl(config: AiConfig, path: string) {
     return config.channelMode === "remote" ? `/api/v1${path}` : buildApiUrl(config.baseUrl, path);
 }
@@ -40,7 +42,7 @@ function refreshRemoteUser(config: AiConfig) {
     if (config.channelMode === "remote") void useUserStore.getState().hydrateUser();
 }
 
-export async function requestAudioGeneration(config: AiConfig, prompt: string): Promise<Blob> {
+export async function requestAudioGeneration(config: AiConfig, prompt: string, options?: RequestOptions): Promise<Blob> {
     const model = (config.model || config.audioModel).trim();
     assertAudioConfig(config, model);
     const format = normalizeAudioFormatValue(config.audioFormat);
@@ -57,7 +59,7 @@ export async function requestAudioGeneration(config: AiConfig, prompt: string): 
                 speed: Number(normalizeAudioSpeedValue(config.audioSpeed)),
                 ...(instructions ? { instructions } : {}),
             },
-            { ...aiRequestConfig(config), responseType: "blob" },
+            { ...aiRequestConfig(config), responseType: "blob", signal: options?.signal },
         );
         await assertAudioBlob(response.data);
         refreshRemoteUser(config);
