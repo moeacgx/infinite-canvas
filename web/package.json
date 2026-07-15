@@ -7,7 +7,7 @@
         "dev": "next dev --webpack -H 0.0.0.0 -p 3000",
         "build": "next build",
         "start": "next start",
-        "test:unit": "node --experimental-transform-types --import ./tests/register-ts-loader.mjs --test \"tests/*.test.ts\" \"src/stores/*.test.mjs\"",
+        "test:unit": "node --experimental-transform-types --import ./tests/register-ts-loader.mjs --test \"tests/*.test.ts\" \"tests/*.test.mjs\" \"src/stores/*.test.mjs\"",
         "format": "prettier --write .",
         "format:check": "prettier --check ."
     },

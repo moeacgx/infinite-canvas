@@ -2,7 +2,7 @@
 
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
-type Props = { pluginType: string; children: ReactNode; fallback?: ReactNode };
+type Props = { pluginType: string; resetKey?: unknown; children: ReactNode; fallback?: ReactNode };
 type State = { error: Error | null };
 
 export class CanvasPluginErrorBoundary extends Component<Props, State> {
@@ -17,7 +17,7 @@ export class CanvasPluginErrorBoundary extends Component<Props, State> {
     }
 
     componentDidUpdate(previous: Props) {
-        if (previous.pluginType !== this.props.pluginType && this.state.error) this.setState({ error: null });
+        if ((previous.pluginType !== this.props.pluginType || previous.resetKey !== this.props.resetKey) && this.state.error) this.setState({ error: null });
     }
 
     render() {

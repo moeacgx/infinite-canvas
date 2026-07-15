@@ -435,7 +435,7 @@ function NodeContent(props: NodeContentRendererProps) {
     const definition = getNodeDefinition(props.node.type);
     if (definition?.Content && props.pluginContext) {
         const PluginContent = definition.Content;
-        return <CanvasPluginErrorBoundary pluginType={props.node.type}><PluginContent ctx={props.pluginContext} /></CanvasPluginErrorBoundary>;
+        return <CanvasPluginErrorBoundary pluginType={props.node.type} resetKey={PluginContent}><PluginContent ctx={props.pluginContext} /></CanvasPluginErrorBoundary>;
     }
     return <MissingPluginContent theme={props.theme} type={props.node.type} />;
 }

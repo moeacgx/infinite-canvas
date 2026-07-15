@@ -26,3 +26,9 @@ test("插件节点和源码具备资源边界且激活失败会回滚", () => {
     assert.match(loader, /value >= 48 && value <= 8192/);
     assert.match(loader, /unregisterPluginNodes\(plugin\.id\)/);
 });
+
+test("插件跳转、启用失败和清理异常不会越过安全边界", () => {
+    assert.match(loader, /normalizePluginUrl\(response\.url \|\| url, options\)/);
+    assert.match(loader, /setEnabled\(record\.id, false\)/);
+    assert.match(loader, /finally\s*\{[\s\S]*unregisterPluginNodes\(pluginId\)/);
+});

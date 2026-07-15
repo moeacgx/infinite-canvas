@@ -2703,7 +2703,7 @@ function InfiniteCanvasPage() {
                             pluginHost={pluginHost}
                             renderPanel={(panelNode) => {
                                 const PluginPanel = getNodeDefinition(panelNode.type)?.Panel;
-                                if (PluginPanel) return <CanvasPluginErrorBoundary pluginType={panelNode.type}><PluginPanel ctx={buildNodeContext(pluginHost, panelNode, theme, viewport.k)} onClose={() => setDialogNodeId(null)} /></CanvasPluginErrorBoundary>;
+                                if (PluginPanel) return <CanvasPluginErrorBoundary pluginType={panelNode.type} resetKey={PluginPanel}><PluginPanel ctx={buildNodeContext(pluginHost, panelNode, theme, viewport.k)} onClose={() => setDialogNodeId(null)} /></CanvasPluginErrorBoundary>;
                                 return panelNode.type === CanvasNodeType.Config ? (
                                     <CanvasConfigComposer
                                         value={panelNode.metadata?.composerContent ?? panelNode.metadata?.prompt ?? ""}

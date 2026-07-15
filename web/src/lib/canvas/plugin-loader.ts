@@ -52,18 +52,23 @@ export function activatePlugin(plugin: CanvasPlugin) {
         if (plugin.css) disposers.push(runtime.injectCSS(plugin.css, plugin.id));
         const cleanup = plugin.setup?.(runtime);
         if (typeof cleanup === "function") disposers.push(cleanup);
-        if (disposers.length) cleanups.set(plugin.id, () => [...disposers].reverse().forEach((dispose) => dispose()));
+        if (disposers.length) cleanups.set(plugin.id, () => disposePluginResources(plugin.id, disposers));
     } catch (error) {
-        [...disposers].reverse().forEach((dispose) => dispose());
+        disposePluginResources(plugin.id, disposers);
         unregisterPluginNodes(plugin.id);
         throw error;
     }
 }
 
 export function deactivatePlugin(pluginId: string) {
-    cleanups.get(pluginId)?.();
+    const cleanup = cleanups.get(pluginId);
     cleanups.delete(pluginId);
-    unregisterPluginNodes(pluginId);
+    try {
+        cleanup?.();
+    } finally {
+        // 插件自己的 cleanup 即使异常，也不能阻止节点定义被卸载。
+        unregisterPluginNodes(pluginId);
+    }
 }
 
 function normalizePluginUrl(rawUrl: string, options?: { unsafeRemote?: boolean; development?: boolean }) {
@@ -82,11 +87,13 @@ async function fetchPluginSource(rawUrl: string, options?: { unsafeRemote?: bool
     const url = normalizePluginUrl(rawUrl, options);
     const response = await fetch(url, { headers: { accept: "text/javascript, application/javascript, text/plain;q=0.8" } });
     if (!response.ok) throw new Error(`下载失败 (HTTP ${response.status})`);
+    // fetch 默认跟随跳转，必须对最终地址再次应用同一信任策略。
+    const resolvedUrl = normalizePluginUrl(response.url || url, options);
     const declaredSize = Number(response.headers.get("content-length")) || 0;
     if (declaredSize > MAX_PLUGIN_SOURCE_BYTES) throw new Error("插件源码超过 2MB 限制");
     const source = await response.text();
     if (new Blob([source]).size > MAX_PLUGIN_SOURCE_BYTES) throw new Error("插件源码超过 2MB 限制");
-    return { source, url };
+    return { source, url: resolvedUrl };
 }
 
 function withCacheBust(url: string) {
@@ -107,10 +114,20 @@ export async function updatePlugin(record: InstalledPlugin) {
 
 export async function setPluginEnabled(record: InstalledPlugin, enabled: boolean) {
     if (enabled && !record.official && !record.local && !unsafeCanvasPluginsEnabled) throw new Error("第三方插件功能未启用");
-    usePluginStore.getState().setEnabled(record.id, enabled);
-    if (!enabled) return deactivatePlugin(record.id);
-    const source = record.local ? (await fetchPluginSource(withCacheBust(record.url))).source : record.source;
-    activatePlugin(await evaluatePluginSource(source));
+    if (!enabled) {
+        usePluginStore.getState().setEnabled(record.id, false);
+        deactivatePlugin(record.id);
+        return;
+    }
+    try {
+        const source = record.local ? (await fetchPluginSource(withCacheBust(record.url))).source : record.source;
+        activatePlugin(await evaluatePluginSource(source));
+        usePluginStore.getState().setEnabled(record.id, true);
+    } catch (error) {
+        usePluginStore.getState().setEnabled(record.id, false);
+        deactivatePlugin(record.id);
+        throw error;
+    }
 }
 
 export function uninstallPlugin(id: string) {
@@ -138,6 +155,8 @@ export async function ensurePluginsLoaded() {
                     const source = record.local ? (await fetchPluginSource(withCacheBust(record.url))).source : record.source;
                     activatePlugin(await evaluatePluginSource(source));
                 } catch (error) {
+                    usePluginStore.getState().setEnabled(record.id, false);
+                    deactivatePlugin(record.id);
                     console.error(`[plugin] 加载失败：${record.id}`, error);
                 }
             }),
@@ -196,4 +215,14 @@ function validPluginNodeSize(value: unknown) {
 
 function escapeRegExp(value: string) {
     return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function disposePluginResources(pluginId: string, disposers: Array<() => void>) {
+    [...disposers].reverse().forEach((dispose) => {
+        try {
+            dispose();
+        } catch (error) {
+            console.error(`[plugin] 清理失败：${pluginId}`, error);
+        }
+    });
 }
