@@ -1,0 +1,47 @@
+name: Publish Official Plugins
+
+# 构建官方插件并把产物发布到本仓库的 plugins-dist 孤儿分支。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-plugins
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: plugins/canvas/registry/package-lock.json
+
+      - name: 安装构建依赖
+        working-directory: plugins/canvas/registry
+        run: npm ci --no-audit --no-fund
+
+      - name: 构建官方插件
+        working-directory: plugins/canvas/registry
+        run: npm run build
+
+      - name: 发布 plugins-dist 分支
+        working-directory: plugins/canvas/registry/dist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -q -b plugins-dist
+          git add -A
+          git commit -q -m "publish official plugins @ ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" plugins-dist

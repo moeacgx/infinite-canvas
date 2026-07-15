@@ -8,3 +8,6 @@ data/
 *.tsbuildinfo
 .DS_Store
 .idea
+web/public/plugins/
+plugins/canvas/*/dist/
+plugins/canvas/*/node_modules/
