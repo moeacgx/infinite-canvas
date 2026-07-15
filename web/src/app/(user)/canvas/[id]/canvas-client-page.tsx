@@ -18,6 +18,7 @@ import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { useAssetStore } from "@/stores/use-asset-store";
+import { useCanvasAgentStore } from "@/stores/use-agent-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { cropDataUrl, splitDataUrl, upscaleDataUrl } from "../utils/canvas-image-data";
 import { fitNodeSize, nodeSizeFromRatio } from "../utils/canvas-node-size";
@@ -27,7 +28,6 @@ import { ActiveConnectionPath, ConnectionPath } from "../components/canvas-conne
 import { CanvasConfigComposer } from "../components/canvas-config-composer";
 import { CanvasConfigNodePanel } from "../components/canvas-config-node-panel";
 import { CanvasAssistantPanel } from "../components/canvas-assistant-panel";
-import { CanvasLocalAgentPanel } from "../components/canvas-local-agent-panel";
 import { CanvasPluginManagerModal } from "../components/canvas-plugin-manager-modal";
 import { CanvasPluginErrorBoundary } from "../components/canvas-plugin-error-boundary";
 import { CanvasNodeContextMenu } from "../components/canvas-context-menu";
@@ -294,6 +294,10 @@ function InfiniteCanvasPage() {
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
     const cleanupAssetImages = useAssetStore((state) => state.cleanupImages);
+    const localAgentOpen = useCanvasAgentStore((state) => state.panelOpen);
+    const openLocalAgent = useCanvasAgentStore((state) => state.openPanel);
+    const toggleLocalAgent = useCanvasAgentStore((state) => state.togglePanel);
+    const setAgentCanvasContext = useCanvasAgentStore((state) => state.setCanvasContext);
     const nodeRegistryVersion = useNodeRegistryVersion((state) => state.version);
     const hydrated = useCanvasStore((state) => state.hydrated);
     const createProject = useCanvasStore((state) => state.createProject);
@@ -343,7 +347,6 @@ function InfiniteCanvasPage() {
     const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
     const [assistantCollapsed, setAssistantCollapsed] = useState(true);
     const [assistantMounted, setAssistantMounted] = useState(false);
-    const [localAgentOpen, setLocalAgentOpen] = useState(false);
     const [agentUndoSnapshot, setAgentUndoSnapshot] = useState<CanvasAgentSnapshot | null>(null);
     const [pluginManagerOpen, setPluginManagerOpen] = useState(false);
     const [titleEditing, setTitleEditing] = useState(false);
@@ -475,8 +478,8 @@ function InfiniteCanvasPage() {
     }, [hydrated, openProject, projectId, router]);
 
     useEffect(() => {
-        if (projectLoaded && searchParams.has("agentUrl") && searchParams.has("agentToken")) setLocalAgentOpen(true);
-    }, [projectLoaded, searchParams]);
+        if (projectLoaded && searchParams.has("agentUrl") && searchParams.has("agentToken")) openLocalAgent();
+    }, [openLocalAgent, projectLoaded, searchParams]);
 
     useEffect(() => {
         if (!projectLoaded || applyingHistoryRef.current || historyPausedRef.current) return;
@@ -840,6 +843,16 @@ function InfiniteCanvasPage() {
         setAgentUndoSnapshot(null);
         return agentUndoSnapshot;
     }, [agentUndoSnapshot]);
+    useEffect(() => {
+        setAgentCanvasContext({ snapshot: agentSnapshot, canUndoOps: Boolean(agentUndoSnapshot), applyOps: applyAgentOps, undoOps: undoAgentOps });
+    }, [agentSnapshot, agentUndoSnapshot, applyAgentOps, setAgentCanvasContext, undoAgentOps]);
+    useEffect(
+        () => () => {
+            const current = useCanvasAgentStore.getState().canvasContext;
+            if (current?.snapshot.projectId === projectId) setAgentCanvasContext(null);
+        },
+        [projectId, setAgentCanvasContext],
+    );
     const pluginHost = useMemo<CanvasPluginHost>(
         () => ({
             getNode: (id) => nodesRef.current.find((node) => node.id === id) || null,
@@ -2616,7 +2629,7 @@ function InfiniteCanvasPage() {
                     onUndo={undoCanvas}
                     onRedo={redoCanvas}
                     localAgentOpen={localAgentOpen}
-                    onToggleLocalAgent={() => setLocalAgentOpen((value) => !value)}
+                    onToggleLocalAgent={toggleLocalAgent}
                     onOpenPlugins={() => setPluginManagerOpen(true)}
                     assistantCollapsed={assistantCollapsed}
                     onExpandAssistant={() => {
@@ -2932,14 +2945,6 @@ function InfiniteCanvasPage() {
                 <AssetPickerModal open={assetPickerOpen} defaultTab={assetPickerTab} onInsert={handleAssetInsert} onClose={() => setAssetPickerOpen(false)} />
                 <CanvasPluginManagerModal open={pluginManagerOpen} onClose={() => setPluginManagerOpen(false)} />
             </section>
-            <CanvasLocalAgentPanel
-                snapshot={agentSnapshot}
-                canUndoOps={Boolean(agentUndoSnapshot)}
-                collapsed={!localAgentOpen}
-                autoConnect={searchParams.has("agentUrl") && searchParams.has("agentToken")}
-                onApplyOps={applyAgentOps}
-                onUndoOps={undoAgentOps}
-            />
             {assistantMounted ? (
                 <CanvasAssistantPanel
                     nodes={nodes}

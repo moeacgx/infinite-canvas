@@ -66,11 +66,12 @@ export function CanvasLocalAgentPanel({ snapshot, canUndoOps, collapsed, embedde
 
     useEffect(() => {
         if (!urlAgentAutoConnect) return;
+        setAgentState({ panelOpen: true });
         window.history.replaceState(window.history.state, "", removeAgentCredentialsFromUrl(window.location.href));
-    }, [urlAgentAutoConnect]);
+    }, [setAgentState, urlAgentAutoConnect]);
     const loadThreads = useCallback(async () => {
         const projectId = snapshotRef.current.projectId;
-        if ((!connectedRef.current && !useCanvasAgentStore.getState().connected) || !projectId) return;
+        if (!connectedRef.current && !useCanvasAgentStore.getState().connected) return;
         setAgentState({ loadingThreads: true });
         try {
             const data = await fetchAgentJson<AgentThreadsResponse>(endpoint, token, `/agent/codex/threads?canvasId=${encodeURIComponent(projectId)}`);
@@ -243,8 +244,22 @@ export function CanvasLocalAgentPanel({ snapshot, canUndoOps, collapsed, embedde
         setAgentState({ attachments: attachments.filter((item) => item.id !== id) });
     };
 
+    const stopTurn = async () => {
+        if (!waiting && !sending) return;
+        try {
+            const data = await fetchAgentJson<{ ok?: boolean }>(endpoint, token, "/agent/codex/interrupt", { method: "POST" });
+            if (!data.ok) throw new Error("当前没有可停止的 Codex 任务");
+            setAgentState({ activity: "已停止", waiting: false, sending: false });
+            addEventLog("用户停止", "已请求中断当前 Codex turn");
+        } catch (error) {
+            const text = error instanceof Error ? error.message : "停止失败";
+            addMessage({ role: "error", title: "停止失败", text });
+            addEventLog("停止失败", error);
+        }
+    };
+
     const handleToolCall = async (endpoint: string, token: string, payload: AgentPendingToolCall) => {
-        if (confirmToolsRef.current && payload.name === "canvas_apply_ops") {
+        if (requiresToolConfirmation(payload, confirmToolsRef.current)) {
             if (pendingToolRef.current) {
                 await postToolResult(endpoint, token, clientIdRef.current, { requestId: payload.requestId, error: "仍有待确认的画布工具调用" });
                 return;
@@ -285,6 +300,7 @@ export function CanvasLocalAgentPanel({ snapshot, canUndoOps, collapsed, embedde
                 router.push(path);
                 result = { ok: true, path };
             } else {
+                if (!snapshotRef.current.projectId) throw new Error("当前没有打开画布，请先进入一个画布项目");
                 result = payload.name === "canvas_apply_ops" ? onApplyOpsRef.current(input.ops || []) : snapshotRef.current;
             }
             await postToolResult(endpoint, token, clientIdRef.current, { requestId: payload.requestId, result });
@@ -302,7 +318,7 @@ export function CanvasLocalAgentPanel({ snapshot, canUndoOps, collapsed, embedde
 
     const rejectPendingTool = async () => {
         if (!pendingTool) return;
-        await postToolResult(endpoint, token, clientIdRef.current, { requestId: pendingTool.requestId, error: "用户取消了画布工具调用" });
+        await postToolResult(endpoint, token, clientIdRef.current, { requestId: pendingTool.requestId, error: "用户取消了工具调用" });
         setAgentState({ activity: "已取消", waiting: false });
         addMessage({ role: "tool", title: "拒绝执行", text: toolName(pendingTool.name), detail: { requestId: pendingTool.requestId, name: pendingTool.name, input: pendingTool.input } });
         pendingToolRef.current = null;
@@ -350,10 +366,10 @@ export function CanvasLocalAgentPanel({ snapshot, canUndoOps, collapsed, embedde
     };
 
     useEffect(() => {
-        if (!autoConnect || autoConnectRef.current || enabled || connected) return;
+        if ((!autoConnect && !urlAgentAutoConnect) || autoConnectRef.current || enabled || connected) return;
         autoConnectRef.current = true;
         void toggleAgentConnection();
-    }, [autoConnect, connected, enabled]);
+    }, [autoConnect, connected, enabled, urlAgentAutoConnect]);
 
     function clearAgentSession(patch: Parameters<typeof setAgentState>[0] = {}) {
         setAgentState({
@@ -372,7 +388,7 @@ export function CanvasLocalAgentPanel({ snapshot, canUndoOps, collapsed, embedde
 
     const startNewThread = async () => {
         const projectId = snapshotRef.current.projectId;
-        if (!connected || !projectId) return;
+        if (!connected) return;
         setAgentState({ loadingThreads: true });
         try {
             const data = await fetchAgentJson<AgentThreadResponse>(endpoint, token, "/agent/codex/threads/new", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ canvasId: projectId }) });
@@ -388,7 +404,7 @@ export function CanvasLocalAgentPanel({ snapshot, canUndoOps, collapsed, embedde
 
     const resumeThread = async (threadId: string) => {
         const projectId = snapshotRef.current.projectId;
-        if (!connected || !projectId || !threadId) return;
+        if (!connected || !threadId) return;
         setAgentState({ loadingThreads: true });
         try {
             const data = await fetchAgentJson<AgentThreadResponse>(endpoint, token, `/agent/codex/threads/${encodeURIComponent(threadId)}/resume`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ canvasId: projectId }) });
@@ -404,7 +420,7 @@ export function CanvasLocalAgentPanel({ snapshot, canUndoOps, collapsed, embedde
 
     const deleteThread = async (threadId: string) => {
         const projectId = snapshotRef.current.projectId;
-        if (!connected || !projectId || !threadId) return;
+        if (!connected || !threadId) return;
         setAgentState({ loadingThreads: true });
         try {
             await fetchAgentJson(endpoint, token, `/agent/codex/threads/${encodeURIComponent(threadId)}/delete`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ canvasId: projectId }) });
@@ -572,6 +588,7 @@ export function CanvasLocalAgentPanel({ snapshot, canUndoOps, collapsed, embedde
                         theme={theme}
                         onPromptChange={(prompt) => setAgentState({ prompt })}
                         onSubmit={sendPrompt}
+                        onStop={stopTurn}
                         onAddFiles={addAttachments}
                         onRemoveAttachment={removeAttachment}
                         left={attachments.length ? <span className="text-[11px]" style={{ color: theme.node.muted }}>{formatBytes(attachmentPayloadBytes(attachments))} / 30MB</span> : null}
@@ -935,6 +952,13 @@ function siteToolSummary(name: string, result: unknown) {
     if (name.endsWith("_get_config")) return "配置已读取";
     if (name.endsWith("_generate")) return String(objectField(result, "note") || "已提交到工作台");
     return "工具调用完成";
+}
+
+function requiresToolConfirmation(payload: AgentPendingToolCall, confirmCanvasTools: boolean) {
+    if (payload.name === "canvas_apply_ops") return confirmCanvasTools;
+    if (payload.name === "assets_add") return true;
+    if (payload.name === "workbench_image_generate" || payload.name === "workbench_video_generate") return payload.input?.run !== false;
+    return false;
 }
 
 function isReadTool(name: string) {

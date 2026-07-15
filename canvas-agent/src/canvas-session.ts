@@ -43,7 +43,8 @@ export class CanvasSession {
     }
 
     updateState(body: unknown, clientId?: string) {
-        this.canvasState = { ...((body && typeof body === "object" && !Array.isArray(body) ? body : {}) as Record<string, unknown>), clientId } as CanvasSnapshot;
+        const value = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
+        this.canvasState = typeof value.projectId === "string" && value.projectId.trim() ? ({ ...value, clientId } as CanvasSnapshot) : null;
     }
 
     resolveResult(body: { requestId?: string; error?: string; result?: unknown }) {
@@ -65,8 +66,7 @@ export class CanvasSession {
             if (!this.clients.size) throw new Error("当前没有已连接网页");
             return await this.requestCanvasTool(tool, input);
         }
-        const readTool = ["canvas_get_state", "canvas_get_selection", "canvas_export_snapshot"].includes(tool);
-        if (readTool && (!this.clients.size || !this.canvasState)) throw new Error("当前没有已连接画布");
+        if (!this.clients.size || !this.canvasState) throw new Error("当前没有已连接画布");
         if (tool === "canvas_get_state" || tool === "canvas_export_snapshot") return compactCanvasState(this.canvasState);
         if (tool === "canvas_get_selection") {
             const ids = new Set(this.canvasState?.selectedNodeIds || []);
