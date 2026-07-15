@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { Suspense, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { App, Button } from "antd";
 import { Download, FileUp, Plus } from "lucide-react";
@@ -16,6 +16,14 @@ import { useCanvasUiStore } from "./stores/use-canvas-ui-store";
 import { exportCanvasProjects } from "./utils/canvas-export";
 
 export default function CanvasPage() {
+    return (
+        <Suspense fallback={null}>
+            <CanvasContent />
+        </Suspense>
+    );
+}
+
+function CanvasContent() {
     const { message } = App.useApp();
     const router = useRouter();
     const searchParams = useSearchParams();
