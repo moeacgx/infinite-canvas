@@ -23,8 +23,13 @@ export function loadConfig(create = false): CanvasAgentConfig {
 }
 
 export function saveConfig(config: CanvasAgentConfig) {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true });
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+    fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { encoding: "utf8", mode: 0o600 });
+    try {
+        // 避免旧配置沿用过宽权限；Windows 不支持时忽略即可。
+        fs.chmodSync(CONFIG_DIR, 0o700);
+        fs.chmodSync(CONFIG_FILE, 0o600);
+    } catch {}
 }
 
 export function ensureSiteWorkspace(config: CanvasAgentConfig) {

@@ -15,6 +15,7 @@ export enum CanvasNodeType {
     Config = "config",
     Video = "video",
     Audio = "audio",
+    Group = "group",
 }
 
 export type CanvasNodeStatus = "idle" | "success" | "loading" | "error";
@@ -57,6 +58,7 @@ export type CanvasNodeMetadata = {
     mimeType?: string;
     bytes?: number;
     durationMs?: number;
+    groupId?: string;
 };
 
 export type CanvasNodeData = {

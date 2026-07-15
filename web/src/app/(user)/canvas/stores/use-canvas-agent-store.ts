@@ -2,6 +2,14 @@ import { create } from "zustand";
 
 import type { CanvasAgentOp } from "../utils/canvas-agent-ops";
 
+function readStoredAgentToken() {
+    if (typeof window === "undefined") return "";
+    const token = sessionStorage.getItem("canvas-agent-token") || localStorage.getItem("canvas-agent-token") || "";
+    if (token) sessionStorage.setItem("canvas-agent-token", token);
+    localStorage.removeItem("canvas-agent-token");
+    return token;
+}
+
 export type AgentChatRole = "user" | "assistant" | "system" | "tool" | "error";
 export type AgentAttachment = { id: string; name: string; type: string; size: number; url: string; dataUrl: string };
 export type AgentChatItem = { id: string; role: AgentChatRole; title?: string; text: string; meta?: string; detail?: unknown; attachments?: AgentAttachment[]; streamId?: string };
@@ -40,7 +48,7 @@ type CanvasAgentStore = {
 export const useCanvasAgentStore = create<CanvasAgentStore>((set) => ({
     width: typeof window === "undefined" ? 440 : Number(localStorage.getItem("canvas-agent-panel-width")) || 440,
     url: typeof window === "undefined" ? "http://127.0.0.1:17371" : localStorage.getItem("canvas-agent-url") || "http://127.0.0.1:17371",
-    token: typeof window === "undefined" ? "" : localStorage.getItem("canvas-agent-token") || "",
+    token: readStoredAgentToken(),
     connected: false,
     enabled: false,
     prompt: "",
