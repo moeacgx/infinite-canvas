@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent as ReactChangeEvent, DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { BookOpen, Bot, Group, Home, ImageIcon, Images, List, Menu, MessageSquare, Music2, Plus, Redo2, Settings2, Trash2, Undo2, Upload, Video, X } from "lucide-react";
+import { BookOpen, Bot, Group, Home, ImageIcon, Images, List, Menu, MessageSquare, Music2, Plus, Puzzle, Redo2, Settings2, Trash2, Undo2, Upload, Video, X } from "lucide-react";
 import { saveAs } from "file-saver";
 
 import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
@@ -28,6 +28,8 @@ import { CanvasConfigComposer } from "../components/canvas-config-composer";
 import { CanvasConfigNodePanel } from "../components/canvas-config-node-panel";
 import { CanvasAssistantPanel } from "../components/canvas-assistant-panel";
 import { CanvasLocalAgentPanel } from "../components/canvas-local-agent-panel";
+import { CanvasPluginManagerModal } from "../components/canvas-plugin-manager-modal";
+import { CanvasPluginErrorBoundary } from "../components/canvas-plugin-error-boundary";
 import { CanvasNodeContextMenu } from "../components/canvas-context-menu";
 import { CanvasNodeAngleDialog, type CanvasImageAngleParams } from "../components/canvas-node-angle-dialog";
 import { CanvasNodeCropDialog, type CanvasImageCropRect } from "../components/canvas-node-crop-dialog";
@@ -47,6 +49,9 @@ import { useCanvasStore } from "../stores/use-canvas-store";
 import { buildCanvasResourceReferences, buildNodeMentionReferences } from "../utils/canvas-resource-references";
 import { findContainingGroupId, findGroupDropTarget, snapNodesIntoGroup } from "../utils/canvas-group";
 import { applyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "../utils/canvas-agent-ops";
+import { buildNodeContext } from "@/lib/canvas/plugin-node-context";
+import { getNodeDefinition, isBuiltinNodeType, listNodeDefinitions, useNodeRegistryVersion } from "@/lib/canvas/node-registry";
+import type { CanvasPluginHost } from "@/types/canvas-plugin";
 import {
     CanvasNodeType,
     type CanvasAssistantImage,
@@ -55,6 +60,7 @@ import {
     type CanvasImageGenerationType,
     type CanvasNodeData,
     type CanvasNodeMetadata,
+    type CanvasNodeTypeId,
     type ConnectionHandle,
     type ContextMenuState,
     type Position,
@@ -108,7 +114,7 @@ const IMAGE_PROMPT_REVERSE_PRESET = `请根据参考图片反推一段适合用�
 2. 覆盖主体、构图、风格、光线、色彩、材质、镜头和氛围。
 3. 尽量写成可直接用于生图模型的完整提示词。`;
 
-function createCanvasNode(type: CanvasNodeType, position: Position, metadata?: CanvasNodeMetadata): CanvasNodeData {
+function createCanvasNode(type: CanvasNodeTypeId, position: Position, metadata?: CanvasNodeMetadata): CanvasNodeData {
     const spec = getNodeSpec(type);
     const id = `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
@@ -216,8 +222,10 @@ function ConnectionCreateOption({ theme, icon, title, description, onClick }: { 
     );
 }
 
-function NodeCreateMenu({ position, onCreate, onClose }: { position: Position; onCreate: (type: CanvasNodeType) => void; onClose: () => void }) {
+function NodeCreateMenu({ position, onCreate, onClose }: { position: Position; onCreate: (type: CanvasNodeTypeId) => void; onClose: () => void }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
+    useNodeRegistryVersion((state) => state.version);
+    const pluginNodes = listNodeDefinitions().filter((definition) => !isBuiltinNodeType(definition.type) && definition.showInCreateMenu !== false);
     return (
         <div
             className="absolute z-[120] w-[300px] rounded-[18px] border p-3 shadow-2xl backdrop-blur"
@@ -238,6 +246,8 @@ function NodeCreateMenu({ position, onCreate, onClose }: { position: Position; o
                 <ConnectionCreateOption theme={theme} icon={<Music2 className="size-5" />} title="音频" onClick={() => onCreate(CanvasNodeType.Audio)} />
                 <ConnectionCreateOption theme={theme} icon={<Settings2 className="size-5" />} title="生成配置" onClick={() => onCreate(CanvasNodeType.Config)} />
                 <ConnectionCreateOption theme={theme} icon={<Group className="size-5" />} title="组" onClick={() => onCreate(CanvasNodeType.Group)} />
+                {pluginNodes.length ? <div className="my-1 border-t" style={{ borderColor: theme.node.stroke }} /> : null}
+                {pluginNodes.map((definition) => <ConnectionCreateOption key={definition.type} theme={theme} icon={definition.icon || <Puzzle className="size-5" />} title={definition.title} description={definition.description} onClick={() => onCreate(definition.type)} />)}
             </div>
         </div>
     );
@@ -284,6 +294,7 @@ function InfiniteCanvasPage() {
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
     const cleanupAssetImages = useAssetStore((state) => state.cleanupImages);
+    const nodeRegistryVersion = useNodeRegistryVersion((state) => state.version);
     const hydrated = useCanvasStore((state) => state.hydrated);
     const createProject = useCanvasStore((state) => state.createProject);
     const openProject = useCanvasStore((state) => state.openProject);
@@ -334,6 +345,7 @@ function InfiniteCanvasPage() {
     const [assistantMounted, setAssistantMounted] = useState(false);
     const [localAgentOpen, setLocalAgentOpen] = useState(false);
     const [agentUndoSnapshot, setAgentUndoSnapshot] = useState<CanvasAgentSnapshot | null>(null);
+    const [pluginManagerOpen, setPluginManagerOpen] = useState(false);
     const [titleEditing, setTitleEditing] = useState(false);
     const [titleDraft, setTitleDraft] = useState("");
     const [historyState, setHistoryState] = useState({ canUndo: false, canRedo: false });
@@ -828,8 +840,38 @@ function InfiniteCanvasPage() {
         setAgentUndoSnapshot(null);
         return agentUndoSnapshot;
     }, [agentUndoSnapshot]);
+    const pluginHost = useMemo<CanvasPluginHost>(
+        () => ({
+            getNode: (id) => nodesRef.current.find((node) => node.id === id) || null,
+            getNodes: () => nodesRef.current,
+            getConnections: () => connectionsRef.current,
+            getUpstream: (nodeId) => {
+                const ids = new Set(connectionsRef.current.filter((connection) => connection.toNodeId === nodeId).map((connection) => connection.fromNodeId));
+                return nodesRef.current.filter((node) => ids.has(node.id));
+            },
+            getDownstream: (nodeId) => {
+                const ids = new Set(connectionsRef.current.filter((connection) => connection.fromNodeId === nodeId).map((connection) => connection.toNodeId));
+                return nodesRef.current.filter((node) => ids.has(node.id));
+            },
+            updateNode: (nodeId, patch) => setNodes((current) => current.map((node) => (node.id === nodeId ? { ...node, ...patch } : node))),
+            updateMetadata: (nodeId, patch) => setNodes((current) => current.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, ...patch } } : node))),
+            applyOps: (ops) => void applyAgentOps(ops),
+        }),
+        [applyAgentOps],
+    );
+    const pluginToolbarTools = useMemo(() => {
+        if (!toolbarNode) return [];
+        const toolbar = getNodeDefinition(toolbarNode.type)?.toolbar;
+        if (!toolbar) return [];
+        try {
+            return toolbar(buildNodeContext(pluginHost, toolbarNode, theme, viewport.k));
+        } catch (error) {
+            console.error(`[plugin] 节点工具栏渲染失败：${toolbarNode.type}`, error);
+            return [];
+        }
+    }, [nodeRegistryVersion, pluginHost, theme, toolbarNode, viewport.k]);
     const createNode = useCallback(
-        (type: CanvasNodeType, position?: Position) => {
+        (type: CanvasNodeTypeId, position?: Position) => {
             const targetPosition = position || getCanvasCenter();
             const configMetadata =
                 type === CanvasNodeType.Config
@@ -844,7 +886,9 @@ function InfiniteCanvasPage() {
             setNodes((prev) => [...prev, newNode]);
             setSelectedNodeIds(new Set([newNode.id]));
             setSelectedConnectionId(null);
-            if (type !== CanvasNodeType.Text && type !== CanvasNodeType.Audio && type !== CanvasNodeType.Group) setDialogNodeId(newNode.id);
+            const definition = getNodeDefinition(type);
+            const wantsPanel = definition?.hidePanel ? false : definition?.Panel ? Boolean(definition.autoOpenPanel) : isBuiltinNodeType(type) && type !== CanvasNodeType.Text && type !== CanvasNodeType.Audio && type !== CanvasNodeType.Group;
+            if (wantsPanel) setDialogNodeId(newNode.id);
         },
         [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.model, effectiveConfig.size, getCanvasCenter],
     );
@@ -1216,9 +1260,14 @@ function InfiniteCanvasPage() {
         dragRef.current.initialSelectedNodes = [];
         if (wasClick && clickedNodeId) {
             const clickedNode = nodesRef.current.find((node) => node.id === clickedNodeId);
+            const definition = clickedNode ? getNodeDefinition(clickedNode.type) : undefined;
             if (clickedNode?.type === CanvasNodeType.Text) {
                 setDialogNodeId((current) => (current === clickedNodeId ? current : null));
-            } else if (clickedNode?.type !== CanvasNodeType.Group) {
+            } else if (definition?.hidePanel || clickedNode?.type === CanvasNodeType.Group) {
+                setDialogNodeId(null);
+            } else if (definition?.Panel) {
+                if (definition.autoOpenPanel) setDialogNodeId(clickedNodeId);
+            } else if (clickedNode) {
                 setDialogNodeId(clickedNodeId);
             }
         }
@@ -2568,6 +2617,7 @@ function InfiniteCanvasPage() {
                     onRedo={redoCanvas}
                     localAgentOpen={localAgentOpen}
                     onToggleLocalAgent={() => setLocalAgentOpen((value) => !value)}
+                    onOpenPlugins={() => setPluginManagerOpen(true)}
                     assistantCollapsed={assistantCollapsed}
                     onExpandAssistant={() => {
                         setAssistantMounted(true);
@@ -2638,7 +2688,7 @@ function InfiniteCanvasPage() {
                             isConnectionTarget={connectionTargetNodeId === node.id}
                             isConnecting={Boolean(connectingParams)}
                             editRequestNonce={editingNodeId === node.id ? editRequestNonce : 0}
-                            showPanel={dialogNodeId === node.id && !selectionBox}
+                            showPanel={dialogNodeId === node.id && !selectionBox && !getNodeDefinition(node.type)?.hidePanel}
                             batchCount={batchChildCountById.get(node.id) || 0}
                             groupChildCount={groupChildCountById.get(node.id) || 0}
                             isGroupDropTarget={dropTargetGroupId === node.id}
@@ -2650,8 +2700,11 @@ function InfiniteCanvasPage() {
                             showImageInfo={showImageInfo}
                             resourceLabel={resourceReferenceByNodeId.get(node.id)}
                             mentionReferences={mentionReferencesByNodeId.get(node.id) || []}
-                            renderPanel={(panelNode) =>
-                                panelNode.type === CanvasNodeType.Config ? (
+                            pluginHost={pluginHost}
+                            renderPanel={(panelNode) => {
+                                const PluginPanel = getNodeDefinition(panelNode.type)?.Panel;
+                                if (PluginPanel) return <CanvasPluginErrorBoundary pluginType={panelNode.type}><PluginPanel ctx={buildNodeContext(pluginHost, panelNode, theme, viewport.k)} onClose={() => setDialogNodeId(null)} /></CanvasPluginErrorBoundary>;
+                                return panelNode.type === CanvasNodeType.Config ? (
                                     <CanvasConfigComposer
                                         value={panelNode.metadata?.composerContent ?? panelNode.metadata?.prompt ?? ""}
                                         inputs={configInputsById.get(panelNode.id) || []}
@@ -2672,8 +2725,8 @@ function InfiniteCanvasPage() {
                                             if (open) setToolbarNodeId(null);
                                         }}
                                     />
-                                )
-                            }
+                                );
+                            }}
                             renderNodeContent={(contentNode) => (
                                 <CanvasConfigNodePanel
                                     node={contentNode}
@@ -2766,6 +2819,7 @@ function InfiniteCanvasPage() {
                     onRetry={(node) => void handleRetryNode(node)}
                     onToggleFreeResize={(node) => toggleNodeFreeResize(node.id)}
                     onDelete={(node) => deleteNodes(new Set([node.id]))}
+                    extraTools={pluginToolbarTools}
                 />
 
                 <CanvasToolbar
@@ -2876,6 +2930,7 @@ function InfiniteCanvasPage() {
                 </Modal>
 
                 <AssetPickerModal open={assetPickerOpen} defaultTab={assetPickerTab} onInsert={handleAssetInsert} onClose={() => setAssetPickerOpen(false)} />
+                <CanvasPluginManagerModal open={pluginManagerOpen} onClose={() => setPluginManagerOpen(false)} />
             </section>
             <CanvasLocalAgentPanel
                 snapshot={agentSnapshot}
@@ -2923,6 +2978,7 @@ function CanvasTopBar({
     onRedo,
     localAgentOpen,
     onToggleLocalAgent,
+    onOpenPlugins,
     assistantCollapsed,
     onExpandAssistant,
 }: {
@@ -2944,6 +3000,7 @@ function CanvasTopBar({
     onRedo: () => void;
     localAgentOpen: boolean;
     onToggleLocalAgent: () => void;
+    onOpenPlugins: () => void;
     assistantCollapsed: boolean;
     onExpandAssistant: () => void;
 }) {
@@ -3039,6 +3096,15 @@ function CanvasTopBar({
                         }}
                     />
                     <span className="h-6 w-px" style={{ background: theme.toolbar.border }} />
+                    <Button
+                        type="text"
+                        className="!h-10 !rounded-xl !px-3 !font-medium"
+                        style={{ background: theme.toolbar.panel, color: theme.node.text, boxShadow: "0 10px 30px rgba(28,25,23,.10)" }}
+                        icon={<Puzzle className="size-4" />}
+                        onClick={onOpenPlugins}
+                    >
+                        扩展
+                    </Button>
                     <Button
                         type="text"
                         className="!h-10 !rounded-xl !px-3 !font-medium"

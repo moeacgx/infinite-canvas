@@ -18,11 +18,14 @@ export enum CanvasNodeType {
     Group = "group",
 }
 
+export type CanvasNodeTypeId = CanvasNodeType | (string & {});
+
 export type CanvasNodeStatus = "idle" | "success" | "loading" | "error";
 export type CanvasGenerationMode = "text" | "image" | "video" | "audio";
 export type CanvasImageGenerationType = "generation" | "edit";
 
 export type CanvasNodeMetadata = {
+    [key: string]: unknown;
     content?: string;
     composerContent?: string;
     prompt?: string;
@@ -63,7 +66,7 @@ export type CanvasNodeMetadata = {
 
 export type CanvasNodeData = {
     id: string;
-    type: CanvasNodeType;
+    type: CanvasNodeTypeId;
     title: string;
     position: Position;
     width: number;
@@ -79,7 +82,7 @@ export type CanvasConnection = {
 
 export type CanvasAssistantReference = {
     id: string;
-    type: CanvasNodeType;
+    type: CanvasNodeTypeId;
     title: string;
     dataUrl?: string;
     storageKey?: string;

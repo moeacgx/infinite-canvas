@@ -1,3 +1,11 @@
+# 构建随应用发布的官方画布插件。
+FROM node:22-bookworm-slim AS plugin-build
+
+WORKDIR /app/plugins/canvas
+COPY plugins/canvas ./
+WORKDIR /app/plugins/canvas/registry
+RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund && npm run build
+
 # 构建 Next.js 前端产物。
 FROM oven/bun:1.3.13 AS web-build
 
@@ -7,6 +15,7 @@ RUN --mount=type=cache,target=/root/.bun/install/cache bun install --frozen-lock
 COPY VERSION /app/VERSION
 COPY CHANGELOG.md /app/CHANGELOG.md
 COPY web ./
+COPY --from=plugin-build /app/plugins/canvas/registry/dist ./public/plugins
 RUN bun run build
 
 # 构建 Go 后端入口。

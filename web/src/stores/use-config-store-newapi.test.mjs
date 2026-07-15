@@ -54,6 +54,14 @@ test("Config modal filters channel modes from admin switches", () => {
     assert.match(configModalSource, /管理员未开放可用渠道/);
 });
 
+test("New API connection state is persisted independently from local channels", () => {
+    assert.match(source, /type NewApiConnectionState/);
+    assert.match(source, /newApiConnectionState:\s*savedNewApiConnection/);
+    assert.match(source, /config:\s*\{ \.\.\.state\.config, \.\.\.savedNewApiConnection, \.\.\.newApiModelState, channelMode: "newapi" \}/);
+    assert.match(configModalSource, /setChannelMode\(effectiveMode\)/);
+    assert.doesNotMatch(configModalSource, /updateConfig\("channelMode",\s*effectiveMode\)/);
+});
+
 test("New API launch params accept optional capability groups", () => {
     assert.match(source, /newApiTextGroup/);
     assert.match(source, /newApiImageGroup/);

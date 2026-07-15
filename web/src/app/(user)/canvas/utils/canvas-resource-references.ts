@@ -1,5 +1,6 @@
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
 import { seedanceReferenceLabel } from "@/lib/seedance-video";
+import { getNodeDefinition } from "@/lib/canvas/node-registry";
 import { CanvasNodeType, type CanvasConnection, type CanvasNodeData } from "../types";
 
 export type CanvasResourceKind = "image" | "video" | "audio" | "text";
@@ -59,7 +60,8 @@ function getConnectedConfigResourceNodes(nodeId: string, nodes: CanvasNodeData[]
 function labelResourceNodes(nodes: CanvasNodeData[], active: boolean) {
     const counts: Record<CanvasResourceKind, number> = { image: 0, video: 0, audio: 0, text: 0 };
     return nodes.flatMap((node): CanvasResourceReference[] => {
-        const kind = resourceKind(node);
+        const resource = nodeResource(node);
+        const kind = resource?.kind;
         if (!kind) return [];
         const index = counts[kind]++;
         const label = labelForKind(kind, index);
@@ -70,8 +72,8 @@ function labelResourceNodes(nodes: CanvasNodeData[], active: boolean) {
                 kind,
                 label,
                 title: node.title || label,
-                previewUrl: node.metadata?.content,
-                text: node.type === CanvasNodeType.Text ? node.metadata?.content || node.metadata?.prompt : undefined,
+                previewUrl: resource.url,
+                text: resource.text,
                 active,
             },
         ];
@@ -90,9 +92,22 @@ function isResourceNode(node: CanvasNodeData) {
 }
 
 function resourceKind(node: CanvasNodeData): CanvasResourceKind | null {
-    if (node.type === CanvasNodeType.Image && node.metadata?.content) return "image";
-    if (node.type === CanvasNodeType.Video && node.metadata?.content) return "video";
-    if (node.type === CanvasNodeType.Audio && node.metadata?.content) return "audio";
-    if (node.type === CanvasNodeType.Text && (node.metadata?.content || node.metadata?.prompt)) return "text";
+    return nodeResource(node)?.kind || null;
+}
+
+function nodeResource(node: CanvasNodeData) {
+    const pluginResource = getNodeDefinition(node.type)?.resource;
+    if (pluginResource) {
+        try {
+            return pluginResource(node);
+        } catch (error) {
+            console.error(`[plugin] 读取节点资源失败：${node.type}`, error);
+            return null;
+        }
+    }
+    if (node.type === CanvasNodeType.Image && node.metadata?.content) return { kind: "image" as const, url: node.metadata.content };
+    if (node.type === CanvasNodeType.Video && node.metadata?.content) return { kind: "video" as const, url: node.metadata.content };
+    if (node.type === CanvasNodeType.Audio && node.metadata?.content) return { kind: "audio" as const, url: node.metadata.content };
+    if (node.type === CanvasNodeType.Text && (node.metadata?.content || node.metadata?.prompt)) return { kind: "text" as const, text: node.metadata.content || node.metadata.prompt };
     return null;
 }

@@ -1,5 +1,6 @@
 import { CanvasNodeType } from "./types";
-import type { CanvasNodeMetadata } from "./types";
+import type { CanvasNodeMetadata, CanvasNodeTypeId } from "./types";
+import { getRegisteredNodeSpec } from "../../../lib/canvas/node-registry";
 
 type CanvasNodeSpec = {
     width: number;
@@ -44,6 +45,7 @@ export const NODE_SPECS = {
     },
 } satisfies Record<CanvasNodeType, CanvasNodeSpec>;
 
-export function getNodeSpec(type: CanvasNodeType) {
-    return NODE_SPECS[type];
+export function getNodeSpec(type: CanvasNodeTypeId) {
+    if ((Object.values(CanvasNodeType) as string[]).includes(type)) return NODE_SPECS[type as CanvasNodeType];
+    return getRegisteredNodeSpec(type) || { width: 340, height: 240, title: "扩展节点", metadata: {} };
 }

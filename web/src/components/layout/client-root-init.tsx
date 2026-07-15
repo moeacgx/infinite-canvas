@@ -8,6 +8,8 @@ import { App } from "antd";
 import { fetchImageModels } from "@/services/api/image";
 import { applyFetchedModelsToConfig, channelModeAllowed, type AiConfig, useConfigStore, withLocalChannels } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
+import { registerBuiltinNodes } from "@/app/(user)/canvas/components/canvas-builtin-nodes";
+import { ensurePluginsLoaded } from "@/lib/canvas/plugin-loader";
 
 export function ClientRootInit({ children }: { children: ReactNode }) {
     const { message } = App.useApp();
@@ -24,6 +26,11 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     useEffect(() => {
         void loadPublicSettings();
     }, [loadPublicSettings]);
+
+    useEffect(() => {
+        registerBuiltinNodes();
+        void ensurePluginsLoaded();
+    }, []);
 
     useEffect(() => {
         if (!isLoginPage) void hydrateUser();

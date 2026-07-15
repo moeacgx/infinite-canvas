@@ -1,16 +1,20 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ChevronRight, Group, Image as ImageIcon, Music2, RefreshCw, Star, Video } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes } from "@/lib/image-utils";
 import { isPlainEnterKey } from "@/lib/keyboard-event";
+import { getNodeDefinition } from "@/lib/canvas/node-registry";
+import { buildNodeContext } from "@/lib/canvas/plugin-node-context";
 import { useThemeStore } from "@/stores/use-theme-store";
+import type { CanvasNodeContext, CanvasPluginHost } from "@/types/canvas-plugin";
 import { CanvasResourceMentionTextarea } from "./canvas-resource-mention-textarea";
 import { CanvasNodeType, type CanvasNodeData, type Position } from "../types";
 import type { CanvasResourceReference } from "../utils/canvas-resource-references";
+import { CanvasPluginErrorBoundary } from "./canvas-plugin-error-boundary";
 
 type ResizeCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 const selectionBlue = "#2f80ff";
@@ -28,6 +32,7 @@ type CanvasNodeProps = {
     showImageInfo: boolean;
     resourceLabel?: CanvasResourceReference;
     mentionReferences?: CanvasResourceReference[];
+    pluginHost?: CanvasPluginHost;
     renderPanel?: (node: CanvasNodeData) => ReactNode;
     renderNodeContent?: (node: CanvasNodeData) => ReactNode;
     batchCount?: number;
@@ -72,6 +77,7 @@ type NodeContentRendererProps = {
     onToggleBatch?: () => void;
     onSetBatchPrimary?: () => void;
     groupChildCount: number;
+    pluginContext?: CanvasNodeContext | null;
 };
 
 export const CanvasNode = React.memo(function CanvasNode({
@@ -87,6 +93,7 @@ export const CanvasNode = React.memo(function CanvasNode({
     showImageInfo,
     resourceLabel,
     mentionReferences = [],
+    pluginHost,
     renderPanel,
     renderNodeContent,
     batchCount = 0,
@@ -113,6 +120,8 @@ export const CanvasNode = React.memo(function CanvasNode({
 }: CanvasNodeProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const [hovered, setHovered] = useState(false);
+    const definition = getNodeDefinition(data.type);
+    const pluginContext = useMemo(() => (pluginHost ? buildNodeContext(pluginHost, data, theme, scale, isSelected) : null), [data, isSelected, pluginHost, scale, theme]);
     const [isEditingContent, setIsEditingContent] = useState(false);
     const [isEditingTitle, setIsEditingTitle] = useState(false);
     const [titleDraft, setTitleDraft] = useState(data.title || "");
@@ -262,7 +271,7 @@ export const CanvasNode = React.memo(function CanvasNode({
             startTop: data.position.y,
             startWidth: data.width,
             startHeight: data.height,
-            keepRatio: (data.type === CanvasNodeType.Image && !data.metadata?.freeResize) || data.type === CanvasNodeType.Video,
+            keepRatio: definition?.keepAspectRatio?.(data) ?? ((data.type === CanvasNodeType.Image && !data.metadata?.freeResize) || data.type === CanvasNodeType.Video),
             ratio: (data.metadata?.naturalWidth || data.width) / (data.metadata?.naturalHeight || data.height || 1),
         };
         window.addEventListener("mousemove", handleResizeMove);
@@ -346,6 +355,10 @@ export const CanvasNode = React.memo(function CanvasNode({
                         onToggleBatch?.(data.id);
                         return;
                     }
+                    if (definition?.onDoubleClick && pluginContext) {
+                        if (definition.onDoubleClick(pluginContext)) event.stopPropagation();
+                        return;
+                    }
                     if (data.type === CanvasNodeType.Image && hasImageContent) {
                         event.stopPropagation();
                         onViewImage?.(data);
@@ -380,6 +393,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                         batchOpening={batchOpening}
                         batchRecovering={batchRecovering}
                         renderNodeContent={renderNodeContent}
+                        pluginContext={pluginContext}
                         mentionReferences={mentionReferences}
                         onContentChange={onContentChange}
                         onStopEditing={() => setIsEditingContent(false)}
@@ -403,7 +417,7 @@ export const CanvasNode = React.memo(function CanvasNode({
             </div>
 
             {!isGroup ? <ConnectionHandleDot side="left" visible={hovered || isSelected || isConnecting} onMouseDown={(event) => onConnectStart(event, data.id, "target")} /> : null}
-            {!isGroup ? <ConnectionHandleDot side="right" visible={data.type !== CanvasNodeType.Config && (hovered || isSelected || isConnecting)} onMouseDown={(event) => onConnectStart(event, data.id, "source")} /> : null}
+            {!isGroup ? <ConnectionHandleDot side="right" visible={(definition?.hasSourceHandle ?? true) && data.type !== CanvasNodeType.Config && (hovered || isSelected || isConnecting)} onMouseDown={(event) => onConnectStart(event, data.id, "source")} /> : null}
 
             {showPanel && !isGroup && renderPanel ? <div className="absolute left-1/2 top-full z-[70] w-[500px] -translate-x-1/2 pt-4">{renderPanel(data)}</div> : null}
         </div>
@@ -416,8 +430,14 @@ function NodeContent(props: NodeContentRendererProps) {
     if (props.node.metadata?.status === "loading") return <LoadingContent theme={props.theme} />;
     if (props.node.metadata?.status === "error") return <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} />;
 
-    const Renderer = nodeContentRenderers[props.node.type];
-    return Renderer ? <Renderer {...props} /> : <UnknownNodeContent theme={props.theme} />;
+    const Renderer = nodeContentRenderers[props.node.type as CanvasNodeType];
+    if (Renderer) return <Renderer {...props} />;
+    const definition = getNodeDefinition(props.node.type);
+    if (definition?.Content && props.pluginContext) {
+        const PluginContent = definition.Content;
+        return <CanvasPluginErrorBoundary pluginType={props.node.type}><PluginContent ctx={props.pluginContext} /></CanvasPluginErrorBoundary>;
+    }
+    return <MissingPluginContent theme={props.theme} type={props.node.type} />;
 }
 
 const nodeContentRenderers = {
@@ -428,6 +448,15 @@ const nodeContentRenderers = {
     [CanvasNodeType.Audio]: AudioNodeContent,
     [CanvasNodeType.Group]: GroupNodeContent,
 } satisfies Record<CanvasNodeType, (props: NodeContentRendererProps) => ReactNode>;
+
+function MissingPluginContent({ theme, type }: { theme: (typeof canvasThemes)[keyof typeof canvasThemes]; type: string }) {
+    return (
+        <div className="flex h-full w-full flex-col items-center justify-center gap-2 p-6 text-center" style={{ color: theme.node.muted }}>
+            <span className="text-sm font-medium">缺少扩展插件</span>
+            <span className="max-w-full break-all text-[11px] opacity-65">{type}</span>
+        </div>
+    );
+}
 
 function GroupNodeContent({ theme, groupChildCount }: NodeContentRendererProps) {
     return (

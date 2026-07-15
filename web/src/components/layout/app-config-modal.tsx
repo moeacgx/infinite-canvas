@@ -107,7 +107,7 @@ export function AppConfigModal() {
         if (effectiveMode === "local" && !localConfig.channels.some((channel) => channel.baseUrl.trim() && channel.apiKey.trim() && channel.models.length)) return;
         if (effectiveMode === "newapi" && (!config.baseUrl.trim() || !config.newApiGroup.trim())) return;
         if (!modelConfig.imageModel.trim() || !modelConfig.videoModel.trim() || !modelConfig.textModel.trim()) return;
-        if (effectiveMode !== config.channelMode) updateConfig("channelMode", effectiveMode);
+        if (effectiveMode !== config.channelMode) setChannelMode(effectiveMode);
         message.success(shouldPromptContinue ? "配置已保存，请继续刚才的请求" : "配置已保存");
         clearPromptContinue();
     };

@@ -3,6 +3,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
+import { getNodeDefinition } from "@/lib/canvas/node-registry";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasNodeType, type CanvasNodeData, type ViewportTransform } from "../types";
 
@@ -115,7 +116,7 @@ export function Minimap({ nodes, viewport, viewportSize, onViewportChange }: { n
             >
                 {nodes.map((node) => {
                     const pos = toMinimap(node.position.x, node.position.y);
-                    const color = node.type === CanvasNodeType.Image ? "#10b981" : node.type === CanvasNodeType.Video ? "#f97316" : node.type === CanvasNodeType.Audio ? "#a855f7" : node.type === CanvasNodeType.Config ? "#60a5fa" : node.type === CanvasNodeType.Group ? "#94a3b8" : theme.node.muted;
+                    const color = getNodeDefinition(node.type)?.minimapColor || (node.type === CanvasNodeType.Image ? "#10b981" : node.type === CanvasNodeType.Video ? "#f97316" : node.type === CanvasNodeType.Audio ? "#a855f7" : node.type === CanvasNodeType.Config ? "#60a5fa" : node.type === CanvasNodeType.Group ? "#94a3b8" : theme.node.muted);
                     return (
                         <div
                             key={node.id}

@@ -91,6 +91,8 @@ export type ModelSelectionState = {
     audioModels: string[];
 };
 
+export type NewApiConnectionState = Pick<AiConfig, "baseUrl" | "newApiGroup" | "newApiTextGroup" | "newApiImageGroup" | "newApiVideoGroup" | "newApiAudioGroup">;
+
 export const defaultConfig: AiConfig = {
     channelMode: "local",
     baseUrl: OPENAI_BASE_URL,
@@ -149,6 +151,7 @@ type ConfigStore = {
     config: AiConfig;
     localModelState: ModelSelectionState;
     newApiModelState: ModelSelectionState;
+    newApiConnectionState: NewApiConnectionState;
     webdav: WebdavSyncConfig;
     publicSettings: AdminPublicSettings | null;
     isPublicSettingsLoading: boolean;
@@ -349,6 +352,7 @@ export const useConfigStore = create<ConfigStore>()(
             config: defaultConfig,
             localModelState: modelSelectionState(defaultConfig),
             newApiModelState: emptyModelSelectionState(),
+            newApiConnectionState: newApiConnectionState(defaultConfig),
             webdav: defaultWebdavSyncConfig,
             publicSettings: null,
             isPublicSettingsLoading: false,
@@ -365,10 +369,12 @@ export const useConfigStore = create<ConfigStore>()(
                 set((state) => {
                     const localModelState = state.config.channelMode === "local" ? modelSelectionState(withLocalChannels(state.config, state.config.channels)) : state.localModelState;
                     const newApiModelState = state.config.channelMode === "newapi" ? modelSelectionState(state.config) : state.newApiModelState;
+                    const savedNewApiConnection = state.config.channelMode === "newapi" ? newApiConnectionState(state.config) : state.newApiConnectionState;
                     if (mode === "local") {
                         return {
                             localModelState,
                             newApiModelState,
+                            newApiConnectionState: savedNewApiConnection,
                             config: withLocalChannels({ ...state.config, ...localModelState, channelMode: "local" }, state.config.channels),
                         };
                     }
@@ -376,10 +382,11 @@ export const useConfigStore = create<ConfigStore>()(
                         return {
                             localModelState,
                             newApiModelState,
-                            config: { ...state.config, ...newApiModelState, channelMode: "newapi" },
+                            newApiConnectionState: savedNewApiConnection,
+                            config: { ...state.config, ...savedNewApiConnection, ...newApiModelState, channelMode: "newapi" },
                         };
                     }
-                    return { localModelState, newApiModelState, config: { ...state.config, channelMode: "remote" } };
+                    return { localModelState, newApiModelState, newApiConnectionState: savedNewApiConnection, config: { ...state.config, channelMode: "remote" } };
                 }),
             updateWebdavConfig: (key, value) =>
                 set((state) => ({
@@ -404,7 +411,7 @@ export const useConfigStore = create<ConfigStore>()(
         }),
         {
             name: CONFIG_STORE_KEY,
-            partialize: (state) => ({ config: state.config, localModelState: state.localModelState, newApiModelState: state.newApiModelState, webdav: state.webdav }),
+            partialize: (state) => ({ config: state.config, localModelState: state.localModelState, newApiModelState: state.newApiModelState, newApiConnectionState: state.newApiConnectionState, webdav: state.webdav }),
             merge: (persisted, current) => {
                 const persistedState = (persisted || {}) as Partial<ConfigStore>;
                 const persistedConfig = (persistedState.config || {}) as Partial<AiConfig>;
@@ -420,10 +427,12 @@ export const useConfigStore = create<ConfigStore>()(
                         ? modelSelectionState(withLocalChannels({ ...config, channels }, channels))
                         : modelSelectionState(withLocalChannels({ ...defaultConfig, channels }, channels));
                 const inferredNewApiState = config.channelMode === "newapi" || (config.channelMode === "remote" && Boolean(config.newApiGroup)) ? modelSelectionState(config) : emptyModelSelectionState();
+                const inferredNewApiConnection = newApiConnectionState(config);
                 return {
                     ...current,
                     localModelState: normalizeModelSelectionState(persistedState.localModelState, inferredLocalState),
                     newApiModelState: normalizeModelSelectionState(persistedState.newApiModelState, inferredNewApiState),
+                    newApiConnectionState: normalizeNewApiConnectionState(persistedState.newApiConnectionState, inferredNewApiConnection),
                     webdav: { ...defaultWebdavSyncConfig, ...persistedWebdav },
                     config: {
                         ...normalizedConfig,
@@ -642,6 +651,29 @@ function modelSelectionState(config: AiConfig): ModelSelectionState {
 
 function emptyModelSelectionState(): ModelSelectionState {
     return { model: "", imageModel: "", videoModel: "", textModel: "", audioModel: "", models: [], imageModels: [], videoModels: [], textModels: [], audioModels: [] };
+}
+
+function newApiConnectionState(config: Pick<AiConfig, keyof NewApiConnectionState>): NewApiConnectionState {
+    return {
+        baseUrl: config.baseUrl || "",
+        newApiGroup: config.newApiGroup || "",
+        newApiTextGroup: config.newApiTextGroup || "",
+        newApiImageGroup: config.newApiImageGroup || "",
+        newApiVideoGroup: config.newApiVideoGroup || "",
+        newApiAudioGroup: config.newApiAudioGroup || "",
+    };
+}
+
+function normalizeNewApiConnectionState(value: NewApiConnectionState | undefined, fallback: NewApiConnectionState): NewApiConnectionState {
+    if (!value) return fallback;
+    return {
+        baseUrl: value.baseUrl || fallback.baseUrl,
+        newApiGroup: value.newApiGroup || "",
+        newApiTextGroup: value.newApiTextGroup || "",
+        newApiImageGroup: value.newApiImageGroup || "",
+        newApiVideoGroup: value.newApiVideoGroup || "",
+        newApiAudioGroup: value.newApiAudioGroup || "",
+    };
 }
 
 function normalizeModelSelectionState(value: ModelSelectionState | undefined, fallback: ModelSelectionState): ModelSelectionState {

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { applyCanvasAgentOps, type CanvasAgentSnapshot } from "../src/app/(user)/canvas/utils/canvas-agent-ops.ts";
 import { CanvasNodeType, type CanvasNodeData } from "../src/app/(user)/canvas/types.ts";
+import { registerNodeDefinitions, unregisterPluginNodes } from "../src/lib/canvas/node-registry.ts";
 
 function node(id: string, type = CanvasNodeType.Text): CanvasNodeData {
     return { id, type, title: id, position: { x: 0, y: 0 }, width: 340, height: 240, metadata: { status: "idle" } };
@@ -51,4 +52,20 @@ test("删除组时保留子节点并清理归组关系", () => {
     const result = applyCanvasAgentOps(snapshot([node("group", CanvasNodeType.Group), child]), [{ type: "delete_node", id: "group" }]);
     assert.deepEqual(result.nodes.map((item) => item.id), ["child"]);
     assert.equal(result.nodes[0].metadata?.groupId, undefined);
+});
+
+test("Agent 可创建已注册的插件节点且保留插件默认数据", () => {
+    registerNodeDefinitions(
+        [{ type: "test-plugin:note", title: "插件便签", icon: "P", defaultSize: { width: 280, height: 180 }, defaultMetadata: { content: "默认内容", pluginColor: "yellow" } }],
+        "test-plugin",
+    );
+    try {
+        const result = applyCanvasAgentOps(snapshot([]), [{ type: "add_node", nodeType: "test-plugin:note", position: { x: 10, y: 20 } }]);
+        assert.equal(result.nodes[0].type, "test-plugin:note");
+        assert.equal(result.nodes[0].title, "插件便签");
+        assert.equal(result.nodes[0].width, 280);
+        assert.equal(result.nodes[0].metadata?.pluginColor, "yellow");
+    } finally {
+        unregisterPluginNodes("test-plugin");
+    }
 });
