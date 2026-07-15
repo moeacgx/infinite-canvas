@@ -1,6 +1,6 @@
 {
-  "name": "@basketikun/canvas-agent",
-  "version": "0.2.0",
+  "name": "@moeacgx/canvas-agent",
+  "version": "0.3.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -11,9 +11,16 @@
     "dist",
     "README.md"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/moeacgx/infinite-canvas.git",
+    "directory": "canvas-agent"
+  },
+  "license": "AGPL-3.0",
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test tests/*.test.mjs",
     "start": "node dist/index.js",
     "prepack": "npm run build"
   },

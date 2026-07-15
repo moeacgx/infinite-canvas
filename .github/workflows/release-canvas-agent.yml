@@ -1,0 +1,48 @@
+name: Release Canvas Agent
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-canvas-agent-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: 安装并测试 Canvas Agent
+        working-directory: canvas-agent
+        run: |
+          bun install --frozen-lockfile
+          bun run test
+
+      - name: 打包发行文件
+        working-directory: canvas-agent
+        run: |
+          mkdir -p "$RUNNER_TEMP/canvas-agent-release"
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/canvas-agent-release"
+          cp "$RUNNER_TEMP"/canvas-agent-release/*.tgz "$RUNNER_TEMP/canvas-agent.tgz"
+          cd "$RUNNER_TEMP"
+          sha256sum canvas-agent.tgz > canvas-agent.tgz.sha256
+
+      - name: 创建 Release 并上传 Canvas Agent
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+          fi
+          gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP/canvas-agent.tgz" "$RUNNER_TEMP/canvas-agent.tgz.sha256" --clobber

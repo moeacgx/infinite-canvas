@@ -9,7 +9,7 @@ import { apiGet } from "@/services/api/request";
 import type { AdminPublicSettings } from "@/services/api/admin";
 
 export type ApiCallFormat = "openai" | "gemini";
-export type ChannelRequestMode = "auto" | "direct" | "proxy";
+export type ChannelRequestMode = "auto" | "direct" | "agent";
 
 export type ModelChannel = {
     id: string;
@@ -659,7 +659,9 @@ function normalizeApiFormat(value: unknown): ApiCallFormat {
 }
 
 function normalizeChannelRequestMode(value: unknown): ChannelRequestMode {
-    return value === "direct" || value === "proxy" ? value : "auto";
+    // v0.8.1 的 proxy 表示生产后端转发；迁移后统一改为用户本机 Agent。
+    if (value === "proxy") return "agent";
+    return value === "direct" || value === "agent" ? value : "auto";
 }
 
 function uniqueRawModels(models: unknown) {

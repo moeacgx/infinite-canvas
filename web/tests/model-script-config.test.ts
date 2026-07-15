@@ -33,9 +33,7 @@ test("旧字符串模型与官方对象模型都能无损规范化", () => {
 
     const upstream = createModelChannel({
         id: "upstream",
-        models: [
-            { name: "object-model", capability: "video", script: "return { url: 'https://api.example/video.mp4' }" },
-        ],
+        models: [{ name: "object-model", capability: "video", script: "return { url: 'https://api.example/video.mp4' }" }],
     } as unknown as Partial<ModelChannel>);
     assert.deepEqual(upstream.models, ["object-model"]);
     assert.equal(upstream.modelScripts?.["object-model"]?.video, "return { url: 'https://api.example/video.mp4' }");
@@ -69,8 +67,13 @@ test("持久化脚本受模型数与单项长度限制", () => {
 
 test("每个本地渠道独立保存网络方式并传给实际请求", () => {
     const direct = createModelChannel({ id: "direct", requestMode: "direct", models: ["m1"] });
-    const proxy = createModelChannel({ id: "proxy", requestMode: "proxy", models: ["m2"] });
-    const config = withLocalChannels({ ...defaultConfig, channelMode: "local" }, [direct, proxy]);
+    const agent = createModelChannel({ id: "agent", requestMode: "agent", models: ["m2"] });
+    const config = withLocalChannels({ ...defaultConfig, channelMode: "local" }, [direct, agent]);
     assert.equal(resolveModelRequestConfig(config, encodeChannelModel("direct", "m1")).requestMode, "direct");
-    assert.equal(resolveModelRequestConfig(config, encodeChannelModel("proxy", "m2")).requestMode, "proxy");
+    assert.equal(resolveModelRequestConfig(config, encodeChannelModel("agent", "m2")).requestMode, "agent");
+});
+
+test("旧版后端兼容配置迁移为本机 Agent", () => {
+    const migrated = createModelChannel({ id: "legacy", requestMode: "proxy" as never, models: ["m"] });
+    assert.equal(migrated.requestMode, "agent");
 });

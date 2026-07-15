@@ -62,7 +62,7 @@ const apiFormatOptions: Array<{ label: string; value: ApiCallFormat }> = [
 const requestModeOptions: Array<{ label: string; value: ChannelRequestMode }> = [
     { label: "自动", value: "auto" },
     { label: "浏览器直连", value: "direct" },
-    { label: "后端兼容", value: "proxy" },
+    { label: "本机 Agent", value: "agent" },
 ];
 
 const webdavDomainKeys: AppSyncDomainKey[] = ["canvas", "assets", "image-workbench", "video-workbench"];
@@ -317,7 +317,10 @@ export function AppConfigModal() {
                         <>
                             <div className="mb-3 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
                                 <CircleAlert className="mt-0.5 size-4 shrink-0" />
-                                <span>自动模式先由浏览器直连；拉取模型确认被 CORS/OPTIONS、证书或混合内容拦截后，该接口后续请求会直接改走本站服务端，避免重复发送生成请求。也可手动选“后端兼容”（需登录，不转发 localhost/内网地址）。转发时 API Key 会发送到当前部署的服务器，请只在信任本站时使用。</span>
+                                <span>
+                                    自动模式先由浏览器直连；拉取模型确认被 CORS/OPTIONS、证书或混合内容拦截后，该接口后续请求会改走你电脑上的 Canvas Agent，避免重复发送生成请求。也可手动选“本机 Agent”。API Key 只在浏览器与本机 Agent
+                                    之间传递，不经过本站服务器；使用前请先在右上角 Agent 面板完成连接，并允许浏览器的本地网络访问权限。
+                                </span>
                             </div>
                             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                                 <div>
@@ -356,7 +359,14 @@ export function AppConfigModal() {
                                         <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                                             <span className="text-xs text-stone-500">已保存 {channel.models.length} 个模型</span>
                                             <div className="flex gap-2">
-                                                <Button size="small" icon={<Code2 className="size-4" />} disabled={!channel.models.length} type={countModelScripts(channel) ? "primary" : "default"} ghost={Boolean(countModelScripts(channel))} onClick={() => setScriptChannelId(channel.id)}>
+                                                <Button
+                                                    size="small"
+                                                    icon={<Code2 className="size-4" />}
+                                                    disabled={!channel.models.length}
+                                                    type={countModelScripts(channel) ? "primary" : "default"}
+                                                    ghost={Boolean(countModelScripts(channel))}
+                                                    onClick={() => setScriptChannelId(channel.id)}
+                                                >
                                                     调用脚本{countModelScripts(channel) ? ` ${countModelScripts(channel)}` : ""}
                                                 </Button>
                                                 <Button size="small" loading={loadingChannelId === channel.id} onClick={() => void refreshChannel(channel)}>
@@ -551,12 +561,7 @@ export function AppConfigModal() {
                     </section>
                 </Form>
             </div>
-            <ModelScriptEditor
-                open={Boolean(scriptChannel)}
-                channel={scriptChannel}
-                onSave={(model, capability, script) => scriptChannel && saveModelScript(scriptChannel.id, model, capability, script)}
-                onClose={() => setScriptChannelId("")}
-            />
+            <ModelScriptEditor open={Boolean(scriptChannel)} channel={scriptChannel} onSave={(model, capability, script) => scriptChannel && saveModelScript(scriptChannel.id, model, capability, script)} onClose={() => setScriptChannelId("")} />
         </Modal>
     );
 }

@@ -21,9 +21,9 @@ export function isRetryableChannelNetworkFailure(failure: RetryableChannelFailur
     return method === "GET" || method === "HEAD";
 }
 
-export function channelProxyHeaders(target: string, method: string, providerHeaders: Record<string, string>, appToken: string) {
+export function channelAgentHeaders(target: string, method: string, providerHeaders: Record<string, string>, agentToken: string) {
     return {
-        Authorization: `Bearer ${appToken}`,
+        "x-canvas-agent-token": agentToken,
         "x-channel-target": target,
         "x-channel-method": method.toUpperCase(),
         "x-channel-headers": encodeURIComponent(JSON.stringify(providerHeaders)),

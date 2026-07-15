@@ -1,8 +1,15 @@
 {
   "mcpServers": {
     "infinite-canvas": {
-      "command": "npx",
-      "args": ["-y", "@basketikun/canvas-agent", "mcp"],
+      "command": "npm",
+      "args": [
+        "exec",
+        "--yes",
+        "--package=https://github.com/moeacgx/infinite-canvas/releases/latest/download/canvas-agent.tgz",
+        "--",
+        "canvas-agent",
+        "mcp"
+      ],
       "startup_timeout_sec": 20,
       "tool_timeout_sec": 90
     }

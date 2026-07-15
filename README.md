@@ -8,7 +8,7 @@
   <a href="https://linux.do/"><img src="https://img.shields.io/badge/Linux.do-Community-2b6de8?style=flat-square" alt="Linux.do"></a>
   <a href="https://render.com/deploy?repo=https://github.com/moeacgx/infinite-canvas"><img src="https://img.shields.io/badge/Render-Deploy-46e3b7?style=flat-square&logo=render&logoColor=111111" alt="Deploy to Render"></a>
   <a href="https://github.com/moeacgx/infinite-canvas"><img src="https://img.shields.io/github/stars/moeacgx/infinite-canvas?style=flat-square&logo=github" alt="GitHub stars"></a>
-  <a href="VERSION"><img src="https://img.shields.io/badge/version-v0.8.1-2563eb?style=flat-square" alt="Version"></a>
+  <a href="VERSION"><img src="https://img.shields.io/badge/version-v0.8.2-2563eb?style=flat-square" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-f97316?style=flat-square" alt="License"></a>
   <a href="https://www.docker.com/"><img src="https://img.shields.io/badge/Docker-ready-2496ed?style=flat-square&logo=docker&logoColor=white" alt="Docker ready"></a>
   <a href="https://nextjs.org/"><img src="https://img.shields.io/badge/Next.js-16.2-000000?style=flat-square&logo=nextdotjs" alt="Next.js"></a>
@@ -26,7 +26,7 @@
 
 - 无限画布：多画布项目、节点拖拽缩放、连线、小地图、撤销重做、导入导出。
 - AI 创作：支持多个 OpenAI 或 Gemini 本地渠道的文生图、图生图、参考图编辑、文本问答、音频和视频生成；Seedance 2.0 可通过火山方舟 Agent Plan 接入。
-- 渠道兼容：每个本地渠道可选自动、浏览器直连或后端兼容；自动模式会在模型读取确认直连受阻后，让同源后续请求直接走受限服务端转发，兼容常见 CORS 和 OPTIONS 问题且不重放生成请求。
+- 渠道兼容：每个本地渠道可选自动、浏览器直连或本机 Agent；自动模式会在模型读取确认直连受阻后，让同源后续请求只经过用户电脑上的 Canvas Agent，兼容常见 CORS 和 OPTIONS 问题且不把用户 API Key 发送到本站服务器。
 - Agent 与插件：提供全站 Agent 侧栏、独立 Canvas Agent、Codex App 插件，以及可扩展的 Canvas 插件 SDK。
 - 提示词库：抓取多个 GitHub 开源项目，按案例整理数百个图片提示词。
 

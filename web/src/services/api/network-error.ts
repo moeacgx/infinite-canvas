@@ -15,8 +15,8 @@ export function networkFailureMessage({ fallback, code, requestUrl, pageProtocol
     const normalizedCode = (code || "").toUpperCase();
     if (normalizedCode === "ERR_CANCELED") return "请求已取消";
     if (timeoutCodes.has(normalizedCode)) return `${fallback}：请求超时，请检查接口地址、网络状态或上游服务`;
-    if (isMixedContent(requestUrl, pageProtocol)) return `${fallback}：当前页面使用 HTTPS，浏览器禁止直连 HTTP 接口；请改用 HTTPS 地址或后端渠道`;
-    return `${fallback}：浏览器未收到接口响应。通常是第三方接口未允许 CORS/OPTIONS、HTTPS 证书异常、DNS 或网络不可达；请改用后端渠道，或让接口放行当前站点来源`;
+    if (isMixedContent(requestUrl, pageProtocol)) return `${fallback}：当前页面使用 HTTPS，浏览器禁止直连 HTTP 接口；请改用 HTTPS 地址，或连接本机 Canvas Agent`;
+    return `${fallback}：浏览器未收到接口响应。通常是第三方接口未允许 CORS/OPTIONS、HTTPS 证书异常、DNS、网络不可达或本地网络权限未放行；请连接本机 Canvas Agent 并允许浏览器访问本地网络，或让接口放行当前站点来源`;
 }
 
 function isMixedContent(requestUrl?: string, pageProtocol?: string) {
