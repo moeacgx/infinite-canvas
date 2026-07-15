@@ -10,7 +10,7 @@ description: 用最少步骤把无限画布跑起来
 ## Docker 启动
 
 ```bash
-git clone git@github.com:basketikun/infinite-canvas.git
+git clone https://github.com/moeacgx/infinite-canvas.git
 cd infinite-canvas
 cp .env.example .env
 docker compose up -d
@@ -46,5 +46,5 @@ docker compose -f docker-compose.local.yml up -d --build
 
 ## 说明
 
-- 当前画布项目和“我的素材”主要保存在浏览器本地，不支持云同步。
-- 本地直连模式下，AI API Key 保存在浏览器本地，并由前端直接请求 OpenAI 兼容接口。
+- 画布项目和“我的素材”默认保存在浏览器本地；如需跨设备合并，可在配置中启用 WebDAV 同步。
+- 本地直连模式下，AI API Key 保存在浏览器本地。前端会优先直连第三方接口；遇到 CORS、OPTIONS、证书或网络问题时，登录用户可自动回退到本站受限的服务端转发。API Key 会随该请求发送到你信任的部署服务端。
