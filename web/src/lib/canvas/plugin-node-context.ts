@@ -20,6 +20,9 @@ export function buildNodeContext(host: CanvasPluginHost, node: CanvasNodeData, t
         applyOps: host.applyOps,
         emit: emitCanvasEvent,
         on: onCanvasEvent,
+        ai: host.ai,
+        openPanel: () => host.openPanel(node.id),
+        closePanel: () => host.closePanel(),
         storage: createPluginStorage(getNodePluginId(node.type)),
     };
 }

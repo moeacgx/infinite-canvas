@@ -136,6 +136,70 @@ export type CanvasResourceKind = "image" | "video" | "audio" | "text";
 export type CanvasNodeResource = { kind: CanvasResourceKind; text?: string; url?: string };
 
 // ---------------------------------------------------------------------------
+// AI 生成:插件直接复用宿主的模型/密钥配置发起生成(生图/生视频/生文本/生音频)
+//
+// 插件本身拿不到 API Key 与模型配置,这些能力由宿主注入。前置/系统提示词由
+// 插件自行拼进 prompt(宿主不感知),因此不同插件可各自定制自己的提示词策略。
+// 若宿主 AI 配置未就绪,会抛错(并由宿主提示用户去配置),插件用 try/catch 处理即可。
+// ---------------------------------------------------------------------------
+
+// 生成公共可选项;references 为图生图/图生视频的参考图(dataURL 或可访问 URL)
+export type GenerateOptions = {
+    signal?: AbortSignal;
+    references?: string[];
+    model?: string; // 指定模型(取自 ai.listModels 的 value);缺省用宿主当前配置
+};
+
+export type GenerateImageOptions = GenerateOptions & {
+    count?: number; // 期望生成张数(宿主会按模型上限裁剪)
+    size?: string; // 形如 "1024x1024" / "auto";缺省用宿主当前配置
+};
+
+export type GenerateImageResult = {
+    // 生成图的 dataURL(已可直接作为 <img src> 或 three 纹理使用)
+    images: string[];
+};
+
+export type GenerateVideoOptions = GenerateOptions & {
+    size?: string;
+    seconds?: string;
+};
+
+export type GenerateVideoResult = {
+    url: string; // 视频可访问 URL
+    mimeType: string;
+    width?: number;
+    height?: number;
+    durationMs?: number;
+};
+
+export type GenerateTextOptions = {
+    signal?: AbortSignal;
+    model?: string;
+    system?: string; // 附加系统提示词(拼在宿主系统提示之后)
+    onDelta?: (text: string) => void; // 流式增量回调
+};
+
+export type GenerateTextResult = {
+    text: string;
+};
+
+// 一个可选模型:value 传回给 generateXxx({ model }),label 用于展示
+export type ModelCapability = "image" | "video" | "text" | "audio";
+export type ModelOption = { value: string; label: string };
+
+// 宿主注入的 AI 生成能力,挂在 ctx.ai 下。任何插件均可调用。
+export type CanvasPluginAi = {
+    generateImage: (prompt: string, options?: GenerateImageOptions) => Promise<GenerateImageResult>;
+    generateVideo: (prompt: string, options?: GenerateVideoOptions) => Promise<GenerateVideoResult>;
+    generateText: (prompt: string, options?: GenerateTextOptions) => Promise<GenerateTextResult>;
+    // 列出某能力下用户已配置的可选模型;不传能力则返回全部
+    listModels: (capability?: ModelCapability) => ModelOption[];
+    // 该能力当前默认选中的模型 value(可作为下拉框初始值)
+    defaultModel: (capability: ModelCapability) => string;
+};
+
+// ---------------------------------------------------------------------------
 // 节点上下文:每个节点渲染时注入,是插件与画布交互的核心接口
 // ---------------------------------------------------------------------------
 
@@ -164,6 +228,11 @@ export type CanvasNodeContext = {
     // 节点间/插件间通信
     emit: (event: string, payload?: unknown) => void;
     on: (event: string, handler: (payload: unknown) => void) => () => void;
+    // AI 生成能力(生图/生视频/生文本),复用宿主模型配置
+    ai: CanvasPluginAi;
+    // 打开/关闭本节点下方的自定义 Panel(需在节点定义里提供 Panel)
+    openPanel: () => void;
+    closePanel: () => void;
     // 插件私有持久化,按插件 id 命名空间隔离
     storage: PluginStorage;
 };
@@ -185,6 +254,16 @@ export type CanvasNodeToolbarItem = {
 export type CanvasNodeContentProps = { ctx: CanvasNodeContext };
 export type CanvasNodePanelProps = { ctx: CanvasNodeContext; onClose: () => void };
 
+// 复用宿主内置生成面板(与图片/视频/文本节点同一个组件:模型选择、参数设置、
+// 提示词库、运行/停止状态全部一致)。声明它即可获得完整生成体验,无需自写面板。
+export type CanvasBuiltinPanelConfig = {
+    mode: "image" | "video" | "text" | "audio"; // 生成类型,决定面板里的模型/设置项
+    // 提交给模型前自动拼在用户提示词前面的固定前缀(如全景图的 equirectangular 约束)
+    promptPrefix?: string;
+    // true(默认)时生成结果写回本节点自身 metadata.content;false 则按内置逻辑生成到下游新节点
+    writeBackToSelf?: boolean;
+};
+
 export type CanvasNodeDefinition = {
     type: string; // 建议 "<pluginId>:<name>",全局唯一
     title: string;
@@ -196,12 +275,23 @@ export type CanvasNodeDefinition = {
     showInCreateMenu?: boolean; // 默认 true
     hasSourceHandle?: boolean; // 右侧输出连接点,默认 true
     hidePanel?: boolean; // 为 true 时:点击/新建不弹出下方面板(含内置生图面板),纯展示型节点用
+    // 为 true 时:节点卡片背景与边框透明,内容直接融入画布(如 SVG/矢量图);选中时仍显示选中描边
+    transparentBackground?: boolean;
     autoOpenPanel?: boolean; // 为 true 时:单击节点自动打开自定义 Panel(默认仅内置节点单击自动打开)
+    // 复用宿主内置生成面板;与自定义 Panel 二选一(同时提供时优先 Panel)
+    useBuiltinPanel?: CanvasBuiltinPanelConfig;
+    // 为 true 时:宿主自动在工具条加「交互 ⇄ 移动」开关,并按 metadata.interactive 控制内容层指针事件。
+    // 默认(interactive 未设/为 false)为「移动」态:内容不吃指针,拖动整块移动节点;
+    // 切到「交互」态后内容可点击/拖拽(如全景转视角、iframe 操作)。适合内部有交互的展示型节点。
+    interactionToggle?: boolean;
+    // 配合 interactionToggle:返回 true 表示当前节点内容「强制可交互」(如编辑态),
+    // 此时忽略 interactive 标志、始终允许操作,并隐藏移动/交互开关。缺省视为 false。
+    forceInteractive?: (node: CanvasNodeData) => boolean;
     keepAspectRatio?: (node: CanvasNodeData) => boolean;
     resource?: (node: CanvasNodeData) => CanvasNodeResource | null;
     // 渲染
     Content?: ComponentType<CanvasNodeContentProps>;
-    Panel?: ComponentType<CanvasNodePanelProps>; // 节点下方面板
+    Panel?: ComponentType<CanvasNodePanelProps>; // 节点下方面板(自定义)
     toolbar?: (ctx: CanvasNodeContext) => CanvasNodeToolbarItem[];
     onDoubleClick?: (ctx: CanvasNodeContext) => boolean; // 返回 true 表示已处理
 };

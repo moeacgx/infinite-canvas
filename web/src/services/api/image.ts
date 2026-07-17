@@ -15,6 +15,9 @@ export type ChatCompletionMessage = {
     content: string | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }>;
 };
 
+// 插件 AI 与原有聊天接口共用同一消息结构，保留上游导出名。
+export type AiTextMessage = ChatCompletionMessage;
+
 type ImageApiResponse = {
     data?: Array<Record<string, unknown>>;
     error?: { message?: string };
@@ -56,6 +59,11 @@ function normalizeQuality(quality: string) {
     const value = quality.trim().toLowerCase();
     const normalized = QUALITY_ALIASES[value] || value;
     return QUALITY_BASE[normalized] ? normalized : undefined;
+}
+
+/** 仅透传 transparent；空值或其他值继续使用接口默认背景。 */
+function normalizeBackground(background: string | undefined) {
+    return background?.trim().toLowerCase() === "transparent" ? "transparent" : undefined;
 }
 
 /** Map "quality + ratio" to an explicit pixel dimension like "3840x2160". */
@@ -209,9 +217,25 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
     if (script) {
         const quality = normalizeQuality(config.quality);
         const requestSize = resolveRequestSize(quality, config.size);
+        const background = normalizeBackground(config.background);
         try {
-            const result = await runModelPlugin({ capability: "image", script, config: requestConfig, prompt: withSystemPrompt(requestConfig, prompt), images: [], params: { size: requestSize, quality, count: n }, signal: options?.signal });
-            return await Promise.all(normalizePluginImages(result).map(async (value) => ({ id: nanoid(), dataUrl: /^data:image\//i.test(value) ? value : await downloadLocalImageContent(requestConfig, resolveModelPluginResultUrl(requestConfig.baseUrl, value), options?.signal) })));
+            const result = await runModelPlugin({
+                capability: "image",
+                script,
+                config: requestConfig,
+                prompt: withSystemPrompt(requestConfig, prompt),
+                images: [],
+                params: { size: requestSize, quality, count: n, ...(background ? { background } : {}) },
+                signal: options?.signal,
+            });
+            return await Promise.all(
+                normalizePluginImages(result).map(async (value) => ({
+                    id: nanoid(),
+                    dataUrl: /^data:image\//i.test(value)
+                        ? value
+                        : await downloadLocalImageContent(requestConfig, resolveModelPluginResultUrl(requestConfig.baseUrl, value), options?.signal),
+                })),
+            );
         } catch (error) {
             throw new Error(readAxiosError(error, "请求失败"));
         }
@@ -225,12 +249,14 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
     }
     const quality = normalizeQuality(config.quality);
     const requestSize = resolveRequestSize(quality, config.size);
+    const background = normalizeBackground(config.background);
     const payload = {
         model: requestConfig.model,
         prompt: withSystemPrompt(requestConfig, prompt),
         n,
         ...(quality ? { quality } : {}),
         ...(requestSize ? { size: requestSize } : {}),
+        ...(background ? { background } : {}),
         response_format: "b64_json",
         output_format: IMAGE_OUTPUT_FORMAT,
     };
@@ -309,11 +335,27 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     if (script) {
         const quality = normalizeQuality(config.quality);
         const requestSize = resolveRequestSize(quality, config.size);
+        const background = normalizeBackground(config.background);
         const images = await Promise.all(references.map((image) => imageToDataUrl(image)));
         const maskDataUrl = mask ? await imageToDataUrl(mask) : "";
         try {
-            const result = await runModelPlugin({ capability: "image", script, config: requestConfig, prompt: withSystemPrompt(requestConfig, requestPrompt), images, params: { size: requestSize, quality, count: n, mask: maskDataUrl }, signal: options?.signal });
-            return await Promise.all(normalizePluginImages(result).map(async (value) => ({ id: nanoid(), dataUrl: /^data:image\//i.test(value) ? value : await downloadLocalImageContent(requestConfig, resolveModelPluginResultUrl(requestConfig.baseUrl, value), options?.signal) })));
+            const result = await runModelPlugin({
+                capability: "image",
+                script,
+                config: requestConfig,
+                prompt: withSystemPrompt(requestConfig, requestPrompt),
+                images,
+                params: { size: requestSize, quality, count: n, mask: maskDataUrl, ...(background ? { background } : {}) },
+                signal: options?.signal,
+            });
+            return await Promise.all(
+                normalizePluginImages(result).map(async (value) => ({
+                    id: nanoid(),
+                    dataUrl: /^data:image\//i.test(value)
+                        ? value
+                        : await downloadLocalImageContent(requestConfig, resolveModelPluginResultUrl(requestConfig.baseUrl, value), options?.signal),
+                })),
+            );
         } catch (error) {
             throw new Error(readAxiosError(error, "请求失败"));
         }
@@ -328,6 +370,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     }
     const quality = normalizeQuality(config.quality);
     const requestSize = resolveRequestSize(quality, config.size);
+    const background = normalizeBackground(config.background);
     const formData = new FormData();
     formData.set("model", requestConfig.model);
     formData.set("prompt", withSystemPrompt(requestConfig, requestPrompt));
@@ -339,6 +382,9 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     }
     if (requestSize) {
         formData.set("size", requestSize);
+    }
+    if (background) {
+        formData.set("background", background);
     }
     const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
     files.forEach((file) => formData.append("image", file));

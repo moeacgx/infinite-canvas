@@ -1,7 +1,5 @@
 // HTML 节点:沙箱 iframe 渲染 HTML,{{input}} 会替换为上游文本节点内容。
-// 交互:预览态 iframe 默认 pointer-events:none —— 鼠标事件穿透到宿主节点体,
-// 因此点节点任意位置都能拖动,无需在节点上加任何标题栏/按钮。
-// 「编辑/预览」与「交互」开关都放在节点外的悬浮工具条(toolbar 扩展点),状态存 metadata。
+// 交互由宿主统一的「交互 ⇄ 移动」开关控制；编辑/预览与脚本权限放在悬浮工具条。
 import { definePlugin, useMemo, useRef, useState } from "@infinite-canvas/plugin-sdk";
 import type { CanvasNodeContentProps } from "@infinite-canvas/plugin-sdk";
 
@@ -100,7 +98,6 @@ function HtmlEditor({ ctx, value }: { ctx: CanvasNodeContentProps["ctx"]; value:
 function HtmlContent({ ctx }: CanvasNodeContentProps) {
     const value = ctx.node.metadata?.content || "";
     const editing = Boolean(ctx.node.metadata?.editing);
-    const interactive = Boolean(ctx.node.metadata?.interactive);
     const allowScripts = Boolean(ctx.node.metadata?.allowScripts);
     const upstreamText = useMemo(
         () =>
@@ -127,15 +124,15 @@ function HtmlContent({ ctx }: CanvasNodeContentProps) {
         );
     }
 
-    // 预览态:iframe 仅在「节点已选中 + 开启交互」时接收鼠标;否则穿透,保证首次点击能选中节点、弹出工具条。
-    const liveIframe = interactive && ctx.isSelected;
+    // 预览态:iframe 的鼠标交互由宿主「交互 ⇄ 移动」开关统一控制(见 interactionToggle),
+    // 这里无需再手动做 pointer-events 穿透。data-canvas-no-zoom 保证交互时滚动作用于页面而非缩放画布。
     return (
-        <div data-canvas-no-zoom={liveIframe || undefined} style={{ position: "relative", height: "100%", width: "100%" }}>
+        <div data-canvas-no-zoom style={{ position: "relative", height: "100%", width: "100%" }}>
             <iframe
                 title="html-preview"
                 sandbox={allowScripts ? "allow-scripts allow-forms" : "allow-forms"}
                 srcDoc={sandboxDocument}
-                style={{ height: "100%", width: "100%", border: 0, borderRadius: 16, background: "#fff", display: "block", pointerEvents: liveIframe ? "auto" : "none" }}
+                style={{ height: "100%", width: "100%", border: 0, borderRadius: 16, background: "#fff", display: "block" }}
             />
         </div>
     );
@@ -144,7 +141,7 @@ function HtmlContent({ ctx }: CanvasNodeContentProps) {
 export default definePlugin({
     id: "html",
     name: "HTML 节点",
-    version: "1.1.1",
+    version: "1.2.1",
     description: "沙箱 iframe 渲染 HTML,支持 {{input}} 注入上游文本",
     nodes: [
         {
@@ -156,11 +153,13 @@ export default definePlugin({
             defaultMetadata: { content: "" },
             minimapColor: "#ec4899",
             hidePanel: true, // 纯展示型节点:点击/新建不弹出下方生图面板
+            // 宿主统一提供「交互 ⇄ 移动」开关;编辑态强制可交互(编辑器始终可操作)并隐藏该开关
+            interactionToggle: true,
+            forceInteractive: (node) => Boolean(node.metadata?.editing),
             Content: HtmlContent,
-            // 所有开关都在节点外的悬浮工具条,不占用节点内部空间
+            // 仅保留「编辑/预览」开关;交互/移动 由宿主自动注入
             toolbar: (ctx) => {
                 const editing = Boolean(ctx.node.metadata?.editing);
-                const interactive = Boolean(ctx.node.metadata?.interactive);
                 const allowScripts = Boolean(ctx.node.metadata?.allowScripts);
                 const hasContent = Boolean(ctx.node.metadata?.content);
                 const items = [
@@ -173,16 +172,8 @@ export default definePlugin({
                         onClick: () => ctx.updateMetadata({ editing: !editing }),
                     },
                 ];
-                // 预览且有内容时,才提供「交互」开关:开=可点击/滚动页面,关=整块可拖动
+                // 预览且有内容时允许显式开启内联脚本；节点交互由宿主统一开关处理。
                 if (!editing && hasContent) {
-                    items.push({
-                        id: "html-toggle-interactive",
-                        title: interactive ? "锁定预览(整块可拖动)" : "允许与页面交互(点击/滚动)",
-                        label: interactive ? "锁定" : "交互",
-                        icon: interactive ? "🔒" : "👆",
-                        active: interactive,
-                        onClick: () => ctx.updateMetadata({ interactive: !interactive }),
-                    });
                     items.push({
                         id: "html-toggle-scripts",
                         title: allowScripts ? "关闭节点脚本" : "启用节点内联脚本（高风险）",

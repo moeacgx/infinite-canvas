@@ -32,3 +32,9 @@ test("插件跳转、启用失败和清理异常不会越过安全边界", () =>
     assert.match(loader, /setEnabled\(record\.id, false\)/);
     assert.match(loader, /finally\s*\{[\s\S]*unregisterPluginNodes\(pluginId\)/);
 });
+
+test("插件升级绕过缓存但不会持久化临时缓存参数", () => {
+    assert.match(loader, /bustCache:\s*true/);
+    assert.match(loader, /const url = normalizePluginUrl\(rawUrl/);
+    assert.match(manager, /hasUpgrade/);
+});

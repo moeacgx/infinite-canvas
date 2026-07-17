@@ -100,8 +100,13 @@ function withCacheBust(url: string) {
     return `${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`;
 }
 
-export async function installPluginFromUrl(rawUrl: string, options?: { official?: boolean; unsafeRemote?: boolean }) {
-    const { source, url } = await fetchPluginSource(rawUrl, { unsafeRemote: options?.unsafeRemote });
+// 从 URL 安装(或覆盖更新)一个插件,成功后立即启用。
+// bustCache=true 时下载绕过 HTTP/CDN 缓存(升级场景必需,避免拿到旧产物),
+// 但落库的 url 始终保持干净(不带 ?t=),便于后续再次更新。
+export async function installPluginFromUrl(rawUrl: string, options?: { official?: boolean; unsafeRemote?: boolean; bustCache?: boolean }) {
+    const requestUrl = options?.bustCache ? withCacheBust(rawUrl) : rawUrl;
+    const { source } = await fetchPluginSource(requestUrl, { unsafeRemote: options?.unsafeRemote });
+    const url = normalizePluginUrl(rawUrl, { unsafeRemote: options?.unsafeRemote });
     const plugin = await evaluatePluginSource(source);
     activatePlugin(plugin);
     usePluginStore.getState().upsert({ id: plugin.id, name: plugin.name || plugin.id, version: plugin.version || "0.0.0", description: plugin.description, url, source, enabled: true, official: options?.official });
@@ -109,7 +114,8 @@ export async function installPluginFromUrl(rawUrl: string, options?: { official?
 }
 
 export async function updatePlugin(record: InstalledPlugin) {
-    return installPluginFromUrl(record.url, { official: record.official, unsafeRemote: !record.official && !record.local });
+    // 升级必须拿到最新产物,强制绕过缓存
+    return installPluginFromUrl(record.url, { official: record.official, unsafeRemote: !record.official && !record.local, bustCache: true });
 }
 
 export async function setPluginEnabled(record: InstalledPlugin, enabled: boolean) {
@@ -165,6 +171,8 @@ export async function ensurePluginsLoaded() {
 }
 
 async function discoverLocalPlugins() {
+    // 自动发现 web/public/plugins 下的本地插件：加入列表但默认关闭。
+    // 已安装插件会刷新版本和源码，同时保留用户当前的启用状态。
     let urls: unknown;
     try {
         const response = await fetch("/plugins/index.json", { cache: "no-store" });
@@ -177,10 +185,21 @@ async function discoverLocalPlugins() {
     await Promise.all(
         urls.filter((url): url is string => typeof url === "string").map(async (rawUrl) => {
             try {
-                const { source, url } = await fetchPluginSource(withCacheBust(rawUrl));
+                const { source } = await fetchPluginSource(withCacheBust(rawUrl));
+                const url = normalizePluginUrl(rawUrl);
                 const plugin = await evaluatePluginSource(source);
                 const store = usePluginStore.getState();
-                if (!store.plugins.some((item) => item.id === plugin.id)) store.upsert({ id: plugin.id, name: plugin.name || plugin.id, version: plugin.version || "0.0.0", description: plugin.description, url, source, enabled: false, local: true });
+                const existing = store.plugins.find((item) => item.id === plugin.id);
+                store.upsert({
+                    id: plugin.id,
+                    name: plugin.name || plugin.id,
+                    version: plugin.version || "0.0.0",
+                    description: plugin.description,
+                    url,
+                    source,
+                    enabled: existing?.enabled ?? false, // 保留用户开关,新发现默认关闭
+                    local: true,
+                });
             } catch (error) {
                 console.error(`[plugin] 本地插件发现失败：${rawUrl}`, error);
             }

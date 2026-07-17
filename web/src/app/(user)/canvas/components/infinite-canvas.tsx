@@ -154,7 +154,7 @@ export function InfiniteCanvas({ containerRef, viewport, backgroundMode = "lines
                 onCanvasDeselect?.();
             }
             panState.current.isPanning = false;
-            document.body.style.cursor = "default";
+            document.body.style.cursor = "";
         };
 
         window.addEventListener("pointermove", handlePointerMove);
