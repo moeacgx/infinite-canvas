@@ -83,9 +83,9 @@ export function isRequestCanceled(error: unknown, signal?: AbortSignal) {
  */
 export function readAxiosError(error: unknown, fallback: string) {
     if (isRequestCanceled(error)) return "请求已取消";
-    if (axios.isAxiosError<{ error?: { message?: string }; msg?: string; code?: number }>(error)) {
+    if (axios.isAxiosError<{ error?: { message?: unknown } | string; msg?: unknown; message?: unknown; code?: number | string }>(error)) {
         const responseData = error.response?.data;
-        const message = responseData?.error?.message || responseData?.msg;
+        const message = readApiErrorMessage(responseData);
         if (message) return message;
         if (error.response) return readStatusError(error.response.status, fallback);
         return networkFailureMessage({
@@ -96,6 +96,23 @@ export function readAxiosError(error: unknown, fallback: string) {
         });
     }
     return error instanceof Error ? error.message : fallback;
+}
+
+/**
+ * 兼容 OpenAI、New API 任务接口以及纯文本响应的错误结构。
+ */
+export function readApiErrorMessage(value: unknown): string {
+    if (!value) return "";
+    if (typeof value === "string") {
+        try {
+            return readApiErrorMessage(JSON.parse(value)) || value;
+        } catch {
+            return value;
+        }
+    }
+    if (typeof value !== "object") return "";
+    const payload = value as { msg?: unknown; message?: unknown; error?: unknown };
+    return readApiErrorMessage(payload.msg) || readApiErrorMessage(payload.message) || readApiErrorMessage(payload.error);
 }
 
 function readStatusError(status: number | undefined, fallback: string) {
