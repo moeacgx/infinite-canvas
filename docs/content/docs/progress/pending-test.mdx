@@ -5,6 +5,7 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
+- New API 模型读取、视频任务轮询和视频内容下载遇到一次瞬时 CORS、Cloudflare 或网关网络错误时，应在浏览器内自动重试并继续已有任务；持续错误仍需展示原始网络提示，POST 创建任务不得自动重放或重复扣费。
 - 本地直连可新增多个渠道，每个渠道独立保存 Base URL、API Key、OpenAI/Gemini 格式和模型；同名模型应按渠道区分，旧单渠道配置升级后地址、Key 和模型不丢失，remote 与 New API 仍走原链路。
 - 本地渠道分别选择自动、浏览器直连和本机 Agent 时应走对应链路。自动模式读取模型遇到 CORS、OPTIONS、证书或网络错误后，应在会话内记住该接口需要 Agent，并让同源后续图片/视频/音频/文本生成直接走本机 Agent，不能先发送一次再重放；刷新页面后记忆仍应有效，remote 与 New API 不应进入回退链路。
 - 本机 Canvas Agent 渠道转发仅允许公网 HTTP(S) 目标，并限制重定向、请求体、响应体、并发与超时；localhost、IPv4/IPv6 私网/保留地址、混合 DNS 与 DNS 重绑定均应拒绝。无 token、恶意 Origin、`Origin: null` 与旧 Agent 版本应在发送 API Key 前被拒绝，无法确认请求尚未发送的写请求不得自动重放。

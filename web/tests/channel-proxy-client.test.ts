@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { channelAgentHeaders, isRetryableChannelNetworkFailure } from "../src/services/api/channel-proxy-client.ts";
+import { channelAgentHeaders, isRetryableChannelNetworkFailure, isRetryableNewApiReadFailure } from "../src/services/api/channel-proxy-client.ts";
+
+test("New API 只重试幂等读取的瞬时网络错误", () => {
+    assert.equal(isRetryableNewApiReadFailure({ channelMode: "newapi", method: "GET", code: "ERR_NETWORK" }), true);
+    assert.equal(isRetryableNewApiReadFailure({ channelMode: "newapi", method: "HEAD", code: "ETIMEDOUT" }), true);
+    assert.equal(isRetryableNewApiReadFailure({ channelMode: "newapi", method: "GET", hasResponse: true, status: 502 }), true);
+    assert.equal(isRetryableNewApiReadFailure({ channelMode: "newapi", method: "POST", code: "ERR_NETWORK" }), false);
+    assert.equal(isRetryableNewApiReadFailure({ channelMode: "newapi", method: "GET", code: "ERR_CANCELED", aborted: true }), false);
+    assert.equal(isRetryableNewApiReadFailure({ channelMode: "local", method: "GET", code: "ERR_NETWORK" }), false);
+});
 
 test("本地 GET 网络错误可回退，remote/New API 与取消请求不回退", () => {
     assert.equal(isRetryableChannelNetworkFailure({ channelMode: "local", method: "GET", code: "ERR_NETWORK" }), true);

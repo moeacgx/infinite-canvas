@@ -110,13 +110,25 @@ test("Axios 本地 GET 网络失败后改走本机 Canvas Agent", async () => {
     assert.equal(upstream.Authorization, "Bearer provider");
 });
 
-test("New API 网络失败不会进入本地渠道代理", async () => {
+test("New API GET 瞬时网络失败会在浏览器内重试且不会进入本地渠道代理", async () => {
+    let calls = 0;
+    const adapter: AxiosAdapter = async (config) => {
+        calls += 1;
+        if (calls < 3) throw new AxiosError("Network Error", "ERR_NETWORK", config);
+        return { data: { ok: true }, status: 200, statusText: "OK", headers: {}, config };
+    };
+    const response = await channelAxiosRequest<{ ok: boolean }>({ channelMode: "newapi" }, { method: "GET", url: "https://newapi.example/v1/models", adapter });
+    assert.equal(response.data.ok, true);
+    assert.equal(calls, 3);
+});
+
+test("New API POST 网络失败不会自动重放", async () => {
     let calls = 0;
     const adapter: AxiosAdapter = async (config) => {
         calls += 1;
         throw new AxiosError("Network Error", "ERR_NETWORK", config);
     };
-    await assert.rejects(() => channelAxiosRequest({ channelMode: "newapi" }, { method: "GET", url: "https://newapi.example/v1/models", adapter }), /Network Error/);
+    await assert.rejects(() => channelAxiosRequest({ channelMode: "newapi" }, { method: "POST", url: "https://newapi.example/v1/videos", adapter }), /Network Error/);
     assert.equal(calls, 1);
 });
 

@@ -4,7 +4,7 @@ import { useCanvasAgentStore } from "@/stores/use-agent-store";
 import type { AiConfig, ChannelRequestMode } from "@/stores/use-config-store";
 import { normalizeLocalAgentEndpoint, normalizeLocalAgentToken } from "@/app/(user)/canvas/utils/canvas-agent-security";
 
-import { channelAgentHeaders, isRetryableChannelNetworkFailure } from "./channel-proxy-client";
+import { channelAgentHeaders, isRetryableChannelNetworkFailure, isRetryableNewApiReadFailure } from "./channel-proxy-client";
 
 type ChannelTransportConfig = Pick<AiConfig, "channelMode"> & { requestMode?: ChannelRequestMode };
 const AGENT_PREFERRED_ORIGINS_KEY = "infinite-canvas:agent-channel-origins";
@@ -20,7 +20,7 @@ export async function channelAxiosRequest<T = unknown>(config: ChannelTransportC
     const target = axios.getUri(requestConfig);
     if (shouldUseLocalAgent(config, target)) return requestThroughLocalAgent<T>(requestConfig, axiosHeaderRecord(requestConfig.headers));
     try {
-        return await axios.request<T>(requestConfig);
+        return await requestWithNewApiReadRetry<T>(config, requestConfig);
     } catch (error) {
         const headers = axiosHeaderRecord(requestConfig.headers);
         const retryable = axios.isAxiosError(error)
@@ -39,6 +39,43 @@ export async function channelAxiosRequest<T = unknown>(config: ChannelTransportC
         rememberAgentOrigin(target);
         return response;
     }
+}
+
+async function requestWithNewApiReadRetry<T>(config: ChannelTransportConfig, requestConfig: AxiosRequestConfig) {
+    for (let retry = 0; ; retry += 1) {
+        try {
+            return await axios.request<T>(requestConfig);
+        } catch (error) {
+            const retryable = axios.isAxiosError(error)
+                ? isRetryableNewApiReadFailure({
+                      channelMode: config.channelMode,
+                      method: requestConfig.method,
+                      code: error.code,
+                      message: error.message,
+                      hasResponse: Boolean(error.response),
+                      status: error.response?.status,
+                      aborted: requestConfig.signal?.aborted || axios.isCancel(error),
+                  })
+                : false;
+            if (!retryable || retry >= 2) throw error;
+            await retryDelay(300 * 2 ** retry, requestConfig.signal as AbortSignal | undefined);
+        }
+    }
+}
+
+function retryDelay(ms: number, signal?: AbortSignal) {
+    return new Promise<void>((resolve, reject) => {
+        if (signal?.aborted) return reject(new axios.CanceledError("请求已取消"));
+        const onAbort = () => {
+            clearTimeout(timer);
+            reject(new axios.CanceledError("请求已取消"));
+        };
+        const timer = setTimeout(() => {
+            signal?.removeEventListener("abort", onAbort);
+            resolve();
+        }, ms);
+        signal?.addEventListener("abort", onAbort, { once: true });
+    });
 }
 
 export async function channelFetch(config: ChannelTransportConfig, input: string | URL, init: RequestInit = {}) {

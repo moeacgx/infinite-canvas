@@ -4,9 +4,21 @@ export type RetryableChannelFailure = {
     code?: string;
     message?: string;
     hasResponse?: boolean;
+    status?: number;
     aborted?: boolean;
     headers?: Record<string, string>;
 };
+
+export function isRetryableNewApiReadFailure(failure: RetryableChannelFailure) {
+    if (failure.channelMode !== "newapi" || failure.aborted) return false;
+    const method = (failure.method || "GET").toUpperCase();
+    if (method !== "GET" && method !== "HEAD") return false;
+    if (failure.hasResponse) return failure.status === 502 || failure.status === 503 || failure.status === 504;
+    const code = (failure.code || "").toUpperCase();
+    const message = (failure.message || "").toLowerCase();
+    if (code === "ERR_CANCELED" || message.includes("abort") || message.includes("cancel")) return false;
+    return code === "ERR_NETWORK" || code === "ECONNABORTED" || code === "ETIMEDOUT" || message.includes("network error") || message.includes("failed to fetch") || message.includes("load failed");
+}
 
 export function isRetryableChannelNetworkFailure(failure: RetryableChannelFailure) {
     if (failure.channelMode !== "local" || failure.hasResponse || failure.aborted) return false;
