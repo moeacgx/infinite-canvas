@@ -4,7 +4,7 @@ import { useCanvasAgentStore } from "@/stores/use-agent-store";
 import type { AiConfig, ChannelRequestMode } from "@/stores/use-config-store";
 import { normalizeLocalAgentEndpoint, normalizeLocalAgentToken } from "@/app/(user)/canvas/utils/canvas-agent-security";
 
-import { channelAgentHeaders, isRetryableChannelNetworkFailure, isRetryableNewApiReadFailure } from "./channel-proxy-client";
+import { channelAgentHeaders, isRetryableChannelNetworkFailure, isRetryableNewApiReadFailure, NEW_API_READ_RETRY_DELAYS_MS } from "./channel-proxy-client";
 
 type ChannelTransportConfig = Pick<AiConfig, "channelMode"> & { requestMode?: ChannelRequestMode };
 const AGENT_PREFERRED_ORIGINS_KEY = "infinite-canvas:agent-channel-origins";
@@ -57,8 +57,8 @@ async function requestWithNewApiReadRetry<T>(config: ChannelTransportConfig, req
                       aborted: requestConfig.signal?.aborted || axios.isCancel(error),
                   })
                 : false;
-            if (!retryable || retry >= 2) throw error;
-            await retryDelay(300 * 2 ** retry, requestConfig.signal as AbortSignal | undefined);
+            if (!retryable || retry >= NEW_API_READ_RETRY_DELAYS_MS.length) throw error;
+            await retryDelay(NEW_API_READ_RETRY_DELAYS_MS[retry], requestConfig.signal as AbortSignal | undefined);
         }
     }
 }

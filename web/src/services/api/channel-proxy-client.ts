@@ -9,6 +9,9 @@ export type RetryableChannelFailure = {
     headers?: Record<string, string>;
 };
 
+// 长任务轮询需要覆盖短暂的浏览器、Cloudflare 和网关断流。
+export const NEW_API_READ_RETRY_DELAYS_MS = [2000, 4000, 8000, 10000, 10000] as const;
+
 export function isRetryableNewApiReadFailure(failure: RetryableChannelFailure) {
     if (failure.channelMode !== "newapi" || failure.aborted) return false;
     const method = (failure.method || "GET").toUpperCase();
