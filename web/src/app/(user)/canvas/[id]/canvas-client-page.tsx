@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent as ReactChangeEvent, DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { BookOpen, Bot, Group, Home, ImageIcon, Images, List, Menu, MessageSquare, Music2, Plus, Puzzle, Redo2, Settings2, Trash2, Undo2, Upload, Video, X } from "lucide-react";
+import { BookOpen, Bot, Group, Home, ImageIcon, Images, List, Menu, MessageSquare, Music2, PanelLeftClose, PanelLeftOpen, Plus, Puzzle, Redo2, Settings2, Trash2, Undo2, Upload, Video, X } from "lucide-react";
 import { saveAs } from "file-saver";
 
 import { requestEdit, requestGeneration, requestImageQuestion, type ChatCompletionMessage } from "@/services/api/image";
@@ -42,10 +42,11 @@ import { InfiniteCanvas } from "../components/infinite-canvas";
 import { Minimap } from "../components/canvas-mini-map";
 import { CanvasNode } from "../components/canvas-node";
 import { CanvasNodePromptPanel, type CanvasNodeGenerationMode } from "../components/canvas-node-prompt-panel";
+import { CanvasSidePanel } from "../components/canvas-side-panel";
 import { CanvasToolbar } from "../components/canvas-toolbar";
 import { AssetPickerModal, type AssetPickerTab, type InsertAssetPayload } from "../components/asset-picker-modal";
 import { CanvasZoomControls } from "../components/canvas-zoom-controls";
-import { useCanvasStore } from "../stores/use-canvas-store";
+import { DEFAULT_CANVAS_SIDE_PANEL, useCanvasStore } from "../stores/use-canvas-store";
 import { buildCanvasResourceReferences, buildNodeMentionReferences, type CanvasResourceReference } from "../utils/canvas-resource-references";
 import { findContainingGroupId, findGroupDropTarget, snapNodesIntoGroup } from "../utils/canvas-group";
 import { applyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "../utils/canvas-agent-ops";
@@ -275,6 +276,8 @@ function InfiniteCanvasPage() {
     const lastHistoryRef = useRef<CanvasHistoryEntry | null>(null);
     const historyCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const viewportSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const sidePanelSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const focusAnimationRef = useRef<number | null>(null);
     const applyingHistoryRef = useRef(false);
     const historyPausedRef = useRef(false);
     const didInitialCenterRef = useRef(false);
@@ -336,6 +339,7 @@ function InfiniteCanvasPage() {
     const [isMiniMapOpen, setIsMiniMapOpen] = useState(false);
     const [backgroundMode, setBackgroundMode] = useState<CanvasBackgroundMode>("lines");
     const [showImageInfo, setShowImageInfo] = useState(false);
+    const [sidePanel, setSidePanel] = useState(() => ({ ...DEFAULT_CANVAS_SIDE_PANEL }));
     const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
     const [assetPickerTab, setAssetPickerTab] = useState<AssetPickerTab>("my-assets");
@@ -466,6 +470,7 @@ function InfiniteCanvasPage() {
             setBackgroundMode(project.backgroundMode);
             setShowImageInfo(project.showImageInfo || false);
             setViewport(project.viewport);
+            setSidePanel(project.sidePanel || { ...DEFAULT_CANVAS_SIDE_PANEL });
             historyRef.current = { past: [], future: [] };
             if (historyCommitTimerRef.current) {
                 clearTimeout(historyCommitTimerRef.current);
@@ -535,6 +540,18 @@ function InfiniteCanvasPage() {
             if (viewportSaveTimerRef.current) clearTimeout(viewportSaveTimerRef.current);
         };
     }, [projectId, projectLoaded, updateProject, viewport]);
+
+    useEffect(() => {
+        if (!projectLoaded) return;
+        if (sidePanelSaveTimerRef.current) clearTimeout(sidePanelSaveTimerRef.current);
+        sidePanelSaveTimerRef.current = setTimeout(() => {
+            updateProject(projectId, { sidePanel });
+            sidePanelSaveTimerRef.current = null;
+        }, 500);
+        return () => {
+            if (sidePanelSaveTimerRef.current) clearTimeout(sidePanelSaveTimerRef.current);
+        };
+    }, [projectId, projectLoaded, sidePanel, updateProject]);
 
     useLayoutEffect(() => {
         nodesRef.current = nodes;
@@ -2800,13 +2817,72 @@ function InfiniteCanvasPage() {
         [configInputsById, confirmStopGeneration, handleConfigNodeChange, handleGenerateNode, runningNodeId],
     );
 
+    const focusNode = useCallback(
+        (nodeId: string) => {
+            const node = nodesRef.current.find((item) => item.id === nodeId);
+            if (!node) return;
+            const batchRootId = node.metadata?.batchRootId;
+            if (batchRootId && !nodesRef.current.find((item) => item.id === batchRootId)?.metadata?.imageBatchExpanded) {
+                toggleBatchExpanded(batchRootId);
+            }
+
+            const worldX = node.position.x + node.width / 2;
+            const worldY = node.position.y + node.height / 2;
+            const scale = Math.min(Math.max(Math.min((size.width * 0.6) / Math.max(node.width, 1), (size.height * 0.6) / Math.max(node.height, 1)), 0.05), 1.5);
+            const target = { x: size.width / 2 - worldX * scale, y: size.height / 2 - worldY * scale, k: scale };
+
+            setSelectedNodeIds(new Set([node.id]));
+            setSelectedConnectionId(null);
+            setToolbarNodeId(null);
+            setContextMenu(null);
+
+            if (focusAnimationRef.current) cancelAnimationFrame(focusAnimationRef.current);
+            const start = { ...viewportRef.current };
+            const duration = 350;
+            let startedAt: number | null = null;
+            const animate = (now: number) => {
+                if (startedAt === null) startedAt = now;
+                const progress = Math.min(1, (now - startedAt) / duration);
+                const eased = 1 - Math.pow(1 - progress, 3);
+                const next = {
+                    x: start.x + (target.x - start.x) * eased,
+                    y: start.y + (target.y - start.y) * eased,
+                    k: start.k + (target.k - start.k) * eased,
+                };
+                viewportRef.current = next;
+                setViewport(next);
+                focusAnimationRef.current = progress < 1 ? requestAnimationFrame(animate) : null;
+            };
+            focusAnimationRef.current = requestAnimationFrame(animate);
+        },
+        [size.height, size.width, toggleBatchExpanded],
+    );
+
+    useEffect(
+        () => () => {
+            if (focusAnimationRef.current) cancelAnimationFrame(focusAnimationRef.current);
+        },
+        [],
+    );
+
     if (!projectLoaded) return <CanvasRefreshShell />;
 
     return (
         <main className="flex h-full min-h-0 overflow-hidden" style={{ background: theme.canvas.background, color: theme.node.text }}>
+            <CanvasSidePanel
+                nodes={nodes}
+                selectedNodeIds={selectedNodeIds}
+                open={sidePanel.open}
+                width={sidePanel.width}
+                onClose={() => setSidePanel((current) => ({ ...current, open: false }))}
+                onWidthChange={(width) => setSidePanel((current) => ({ ...current, width }))}
+                onFocusNode={focusNode}
+            />
             <section className="relative min-w-0 flex-1 overflow-hidden">
                 <CanvasTopBar
                     title={currentProject?.title || "未命名画布"}
+                    sidePanelOpen={sidePanel.open}
+                    onToggleSidePanel={() => setSidePanel((current) => ({ ...current, open: !current.open }))}
                     titleDraft={titleDraft}
                     isTitleEditing={titleEditing}
                     onTitleDraftChange={setTitleDraft}
@@ -3113,6 +3189,8 @@ function InfiniteCanvasPage() {
 
 function CanvasTopBar({
     title,
+    sidePanelOpen,
+    onToggleSidePanel,
     titleDraft,
     isTitleEditing,
     onTitleDraftChange,
@@ -3135,6 +3213,8 @@ function CanvasTopBar({
     onExpandAssistant,
 }: {
     title: string;
+    sidePanelOpen: boolean;
+    onToggleSidePanel: () => void;
     titleDraft: string;
     isTitleEditing: boolean;
     onTitleDraftChange: (value: string) => void;
@@ -3185,6 +3265,9 @@ function CanvasTopBar({
         <>
             <div className="pointer-events-none absolute left-0 right-0 top-0 z-50 flex h-16 items-center justify-between px-4">
                 <div className="pointer-events-auto flex min-w-0 items-center gap-3">
+                    <button type="button" onClick={onToggleSidePanel} className="grid size-9 shrink-0 place-items-center rounded-full transition hover:bg-black/5 dark:hover:bg-white/10" style={{ color: theme.node.text }} aria-label={sidePanelOpen ? "收起左侧面板" : "展开左侧面板"} title={sidePanelOpen ? "收起左侧面板" : "展开左侧面板"}>
+                        {sidePanelOpen ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}
+                    </button>
                     <Dropdown
                         trigger={["click"]}
                         menu={{

@@ -6,6 +6,13 @@ import { localForageStorage } from "@/lib/localforage-storage";
 import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
 import type { CanvasAssistantSession, CanvasConnection, CanvasNodeData, ViewportTransform } from "../types";
 
+export type CanvasSidePanelState = {
+    open: boolean;
+    width: number;
+};
+
+export const DEFAULT_CANVAS_SIDE_PANEL: CanvasSidePanelState = { open: true, width: 280 };
+
 export type CanvasProject = {
     id: string;
     title: string;
@@ -18,6 +25,7 @@ export type CanvasProject = {
     backgroundMode: CanvasBackgroundMode;
     showImageInfo: boolean;
     viewport: ViewportTransform;
+    sidePanel: CanvasSidePanelState;
 };
 
 type CanvasStore = {
@@ -29,7 +37,7 @@ type CanvasStore = {
     renameProject: (id: string, title: string) => void;
     deleteProjects: (ids: string[]) => void;
     replaceProjects: (projects: CanvasProject[]) => void;
-    updateProject: (id: string, patch: Partial<Pick<CanvasProject, "nodes" | "connections" | "chatSessions" | "activeChatId" | "backgroundMode" | "showImageInfo" | "viewport">>) => void;
+    updateProject: (id: string, patch: Partial<Pick<CanvasProject, "nodes" | "connections" | "chatSessions" | "activeChatId" | "backgroundMode" | "showImageInfo" | "viewport" | "sidePanel">>) => void;
 };
 
 const initialViewport: ViewportTransform = { x: 0, y: 0, k: 1 };
@@ -79,6 +87,7 @@ export const useCanvasStore = create<CanvasStore>()(
                     backgroundMode: "lines",
                     showImageInfo: false,
                     viewport: initialViewport,
+                    sidePanel: { ...DEFAULT_CANVAS_SIDE_PANEL },
                 };
                 set((state) => ({ projects: [project, ...state.projects] }));
                 return id;
@@ -97,6 +106,7 @@ export const useCanvasStore = create<CanvasStore>()(
                     backgroundMode: source.backgroundMode || "lines",
                     showImageInfo: source.showImageInfo || false,
                     viewport: source.viewport || initialViewport,
+                    sidePanel: source.sidePanel || { ...DEFAULT_CANVAS_SIDE_PANEL },
                 };
                 set((state) => ({ projects: [project, ...state.projects] }));
                 return project.id;
