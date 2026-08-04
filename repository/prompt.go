@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/basketikun/infinite-canvas/model"
 	"gorm.io/gorm"
@@ -160,18 +161,48 @@ func ReplacePromptCategory(category model.PromptCategory, items []model.Prompt) 
 		return err
 	}
 	return db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("category = ?", category.Category).Delete(&model.Prompt{}).Error; err != nil {
+		return replacePromptCategory(tx, category, items)
+	})
+}
+
+func replacePromptCategory(tx *gorm.DB, category model.PromptCategory, items []model.Prompt) error {
+	var existing []model.Prompt
+	if err := tx.Select("id").Where("category = ?", category.Category).Find(&existing).Error; err != nil {
+		return err
+	}
+	syncedIDs := make([]string, 0, len(existing))
+	for _, item := range existing {
+		if isSyncedPromptID(category.Category, item.ID) {
+			syncedIDs = append(syncedIDs, item.ID)
+		}
+	}
+	if len(syncedIDs) > 0 {
+		if err := tx.Where("id IN ?", syncedIDs).Delete(&model.Prompt{}).Error; err != nil {
 			return err
 		}
-		if len(items) == 0 {
-			return nil
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	for i := range items {
+		items[i].Category = category.Category
+		items[i].GithubURL = ""
+	}
+	return tx.Create(&items).Error
+}
+
+// isSyncedPromptID 识别内置同步器生成的“分类-数字”ID，本地新增项使用 UUID，不应被远程同步删除。
+func isSyncedPromptID(category, id string) bool {
+	suffix, found := strings.CutPrefix(id, category+"-")
+	if !found || suffix == "" {
+		return false
+	}
+	for _, char := range suffix {
+		if char < '0' || char > '9' {
+			return false
 		}
-		for i := range items {
-			items[i].Category = category.Category
-			items[i].GithubURL = ""
-		}
-		return tx.Create(&items).Error
-	})
+	}
+	return true
 }
 
 // applyPromptFilters 应用提示词列表的搜索条件。

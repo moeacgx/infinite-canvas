@@ -10,14 +10,25 @@ import (
 	"github.com/basketikun/infinite-canvas/repository"
 )
 
+const legacyGptImage2PromptRepo = "https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts"
+
+const legacyGptImage2PromptDescription = "EvoLinkAI 的 GPT Image 2 案例提示词分类"
+
 // EnsureDefaultPromptCategories 幂等地将内置分类写入数据库。
 func EnsureDefaultPromptCategories() error {
 	for _, item := range repository.DefaultPromptCategories() {
-		_, found, err := repository.GetPromptCategoryByCode(item.Category)
+		existing, found, err := repository.GetPromptCategoryByCode(item.Category)
 		if err != nil {
 			return err
 		}
 		if found {
+			if migrateDefaultPromptCategorySource(&existing, item) {
+				existing.UpdatedAt = time.Now().Format(time.RFC3339)
+				if err := repository.SavePromptCategory(existing); err != nil {
+					return err
+				}
+				log.Printf("migrated prompt category source: %s", item.Category)
+			}
 			continue
 		}
 		item.UpdatedAt = time.Now().Format(time.RFC3339)
@@ -27,6 +38,21 @@ func EnsureDefaultPromptCategories() error {
 		log.Printf("seeded prompt category: %s", item.Category)
 	}
 	return nil
+}
+
+// migrateDefaultPromptCategorySource 只迁移仍指向已下线内置源的记录，避免覆盖管理员自定义分类。
+func migrateDefaultPromptCategorySource(existing *model.PromptCategory, current model.PromptCategory) bool {
+	if existing == nil || existing.Category != current.Category || !existing.Remote {
+		return false
+	}
+	if existing.Category != "gpt-image-2-prompts" || existing.GithubURL != legacyGptImage2PromptRepo {
+		return false
+	}
+	existing.GithubURL = current.GithubURL
+	if existing.Description == legacyGptImage2PromptDescription {
+		existing.Description = current.Description
+	}
+	return true
 }
 
 // SavePromptCategory 保存提示词分类。新建分类强制 remote=false。
