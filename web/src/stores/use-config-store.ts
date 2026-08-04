@@ -10,6 +10,7 @@ import type { AdminPublicSettings } from "@/services/api/admin";
 
 export type ApiCallFormat = "openai" | "gemini";
 export type ChannelRequestMode = "auto" | "direct" | "agent";
+export type ImageApiMode = "images" | "responses";
 
 export type ModelChannel = {
     id: string;
@@ -18,6 +19,11 @@ export type ModelChannel = {
     apiKey: string;
     apiFormat: ApiCallFormat;
     requestMode?: ChannelRequestMode;
+    imageApiMode?: ImageApiMode;
+    responsesImageModel?: string;
+    streamImages?: boolean;
+    streamPartialImages?: number;
+    responseFormatB64Json?: boolean;
     models: string[];
     modelScripts?: ModelScriptMap;
     modelScriptApprovals?: ModelScriptMap;
@@ -100,6 +106,14 @@ export type ModelSelectionState = {
 };
 
 export type NewApiConnectionState = Pick<AiConfig, "baseUrl" | "newApiGroup" | "newApiTextGroup" | "newApiImageGroup" | "newApiVideoGroup" | "newApiAudioGroup">;
+
+export type ImageChannelOptions = {
+    apiMode: ImageApiMode;
+    responsesModel: string;
+    stream: boolean;
+    partialImages: number;
+    responseFormatB64Json: boolean;
+};
 
 export const defaultConfig: AiConfig = {
     channelMode: "local",
@@ -508,6 +522,11 @@ export function createModelChannel(channel?: Partial<ModelChannel>): ModelChanne
         apiKey: channel?.apiKey || "",
         apiFormat,
         requestMode: normalizeChannelRequestMode(channel?.requestMode),
+        imageApiMode: normalizeImageApiMode(channel?.imageApiMode),
+        responsesImageModel: normalizeResponsesImageModel(channel?.responsesImageModel, rawModels),
+        streamImages: normalizeBoolean(channel?.streamImages, false),
+        streamPartialImages: normalizeStreamPartialImages(channel?.streamPartialImages),
+        responseFormatB64Json: normalizeBoolean(channel?.responseFormatB64Json, true),
         models: uniqueRawModels(rawModels),
         modelScripts: normalizeModelScripts(channel?.modelScripts, rawModels),
         modelScriptApprovals: normalizeModelScriptApprovals(channel?.modelScriptApprovals, channel?.modelScripts),
@@ -568,6 +587,19 @@ export function resolveModelRequestConfig(config: AiConfig, value: string): AiCo
     };
 }
 
+export function resolveImageChannelOptions(config: AiConfig, value: string): ImageChannelOptions {
+    if (config.channelMode !== "local") return { apiMode: "images", responsesModel: "", stream: false, partialImages: 1, responseFormatB64Json: true };
+    const channel = resolveModelChannel(config, value);
+    const apiMode = normalizeImageApiMode(channel.imageApiMode);
+    return {
+        apiMode,
+        responsesModel: apiMode === "responses" ? normalizeResponsesImageModel(channel.responsesImageModel, channel.models) : "",
+        stream: normalizeBoolean(channel.streamImages, false),
+        partialImages: normalizeStreamPartialImages(channel.streamPartialImages),
+        responseFormatB64Json: normalizeBoolean(channel.responseFormatB64Json, true),
+    };
+}
+
 export function resolveModelScript(config: AiConfig, value: string, capability: ModelCapability) {
     if (config.channelMode !== "local") return "";
     const model = modelOptionName(value).trim();
@@ -591,6 +623,11 @@ export function withLocalChannels(config: AiConfig, inputChannels: ModelChannel[
         apiKey: channel.apiKey ?? "",
         apiFormat: normalizeApiFormat(channel.apiFormat),
         requestMode: normalizeChannelRequestMode(channel.requestMode),
+        imageApiMode: normalizeImageApiMode(channel.imageApiMode),
+        responsesImageModel: normalizeResponsesImageModel(channel.responsesImageModel, channel.models),
+        streamImages: normalizeBoolean(channel.streamImages, false),
+        streamPartialImages: normalizeStreamPartialImages(channel.streamPartialImages),
+        responseFormatB64Json: normalizeBoolean(channel.responseFormatB64Json, true),
         models: uniqueRawModels(channel.models || []),
         modelScripts: normalizeModelScripts(channel.modelScripts, channel.models),
         modelScriptApprovals: normalizeModelScriptApprovals(channel.modelScriptApprovals, channel.modelScripts),
@@ -664,6 +701,28 @@ function normalizeChannelRequestMode(value: unknown): ChannelRequestMode {
     // v0.8.1 的 proxy 表示生产后端转发；迁移后统一改为用户本机 Agent。
     if (value === "proxy") return "agent";
     return value === "direct" || value === "agent" ? value : "auto";
+}
+
+function normalizeImageApiMode(value: unknown): ImageApiMode {
+    return value === "responses" ? "responses" : "images";
+}
+
+function normalizeResponsesImageModel(value: unknown, models: unknown) {
+    const available = uniqueRawModels(models);
+    const selected = rawChannelModelName(value);
+    if (selected && available.includes(selected)) return selected;
+    return available.find((model) => isTextModelName(model)) || available[0] || "";
+}
+
+function normalizeStreamPartialImages(value: unknown) {
+    const parsed = Math.floor(Number(value));
+    return Number.isFinite(parsed) ? Math.max(0, Math.min(3, parsed)) : 1;
+}
+
+function normalizeBoolean(value: unknown, fallback: boolean) {
+    if (value === true || value === "true") return true;
+    if (value === false || value === "false") return false;
+    return fallback;
 }
 
 function uniqueRawModels(models: unknown) {
