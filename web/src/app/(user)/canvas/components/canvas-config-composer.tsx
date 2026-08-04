@@ -24,6 +24,8 @@ type MentionState = {
     query: string;
 };
 
+export type ComposerSerializationNode = { kind: "text"; value: string } | { kind: "break" } | { kind: "reference"; nodeId: string } | { kind: "inline" | "block"; children: readonly ComposerSerializationNode[] };
+
 export const CONFIG_REFERENCE_PATTERN = /@\[node:([^\]]+)\]/g;
 
 export function CanvasConfigComposer({ value, inputs, onChange, onClose }: CanvasConfigComposerProps) {
@@ -86,18 +88,24 @@ export function CanvasConfigComposer({ value, inputs, onChange, onClose }: Canva
         if (!editor) return;
         removeActiveMention();
         const chip = createReferenceChip(input, inputs, theme, setImagePreview);
-        const space = document.createTextNode(" ");
         const selection = window.getSelection();
-        const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+        const selectedRange = selection?.rangeCount ? selection.getRangeAt(0) : null;
+        const range = selectedRange && rangeIsInsideEditor(selectedRange, editor) ? selectedRange : null;
+        const boundary = range ? textAroundRange(range) : { before: editor.textContent || "", after: "" };
+        const spacing = referenceBoundarySpacing(boundary.before, boundary.after);
+        const beforeSpace = document.createTextNode(spacing.before);
+        const afterSpace = document.createTextNode(spacing.after);
+        const fragment = document.createDocumentFragment();
+        fragment.append(beforeSpace, chip, afterSpace);
         if (range) {
-            range.insertNode(space);
-            range.insertNode(chip);
-            range.setStartAfter(space);
+            range.deleteContents();
+            range.insertNode(fragment);
+            range.setStart(afterSpace, afterSpace.data.length);
             range.collapse(true);
             selection?.removeAllRanges();
             selection?.addRange(range);
         } else {
-            editor.append(chip, space);
+            editor.append(fragment);
             placeCaretAtEnd(editor);
         }
         closeMention();
@@ -132,6 +140,11 @@ export function CanvasConfigComposer({ value, inputs, onChange, onClose }: Canva
                     style={{ color: theme.node.text }}
                     onInput={() => {
                         if (!composingRef.current) syncFromEditor();
+                    }}
+                    onPaste={(event) => {
+                        event.preventDefault();
+                        insertPlainText(editorRef.current, normalizeComposerPastedText(event.clipboardData.getData("text/plain")));
+                        syncFromEditor();
                     }}
                     onCompositionStart={() => {
                         composingRef.current = true;
@@ -254,20 +267,120 @@ function createReferenceChip(input: NodeGenerationInput, inputs: NodeGenerationI
 }
 
 function serializeEditor(editor: HTMLElement) {
-    return serializeNodes(editor.childNodes).replace(/\uFEFF/g, "");
+    return serializeComposerTree(toSerializationNodes(editor.childNodes));
 }
 
-function serializeNodes(nodes: NodeListOf<ChildNode>) {
-    let result = "";
+function toSerializationNodes(nodes: NodeListOf<ChildNode>): ComposerSerializationNode[] {
+    const result: ComposerSerializationNode[] = [];
     nodes.forEach((node) => {
-        if (node.nodeType === Node.TEXT_NODE) result += node.textContent || "";
+        if (node.nodeType === Node.TEXT_NODE) {
+            result.push({ kind: "text", value: node.textContent || "" });
+            return;
+        }
         if (!(node instanceof HTMLElement)) return;
         const nodeId = node.dataset.referenceNodeId;
-        if (nodeId) result += `@[node:${nodeId}]`;
-        else if (node.tagName === "BR") result += "\n";
-        else result += serializeNodes(node.childNodes);
+        if (nodeId) {
+            result.push({ kind: "reference", nodeId });
+            return;
+        }
+        if (node.tagName === "BR") {
+            result.push({ kind: "break" });
+            return;
+        }
+        result.push({
+            kind: node.tagName === "DIV" || node.tagName === "P" ? "block" : "inline",
+            children: toSerializationNodes(node.childNodes),
+        });
     });
     return result;
+}
+
+export function serializeComposerTree(nodes: readonly ComposerSerializationNode[]) {
+    return serializeComposerNodes(nodes).replace(/\uFEFF/g, "");
+}
+
+function serializeComposerNodes(nodes: readonly ComposerSerializationNode[]) {
+    let result = "";
+    let previousWasBlock = false;
+    let previousContent = "";
+    let hasPreviousNode = false;
+    nodes.forEach((node) => {
+        const isBlock = node.kind === "block";
+        let content = "";
+        if (node.kind === "text") content = node.value.replace(/\uFEFF/g, "");
+        else if (node.kind === "break") content = "\n";
+        else if (node.kind === "reference") content = `@[node:${node.nodeId}]`;
+        else content = serializeComposerNodes(node.children);
+        // contentEditable 用单个 BR 表示空的 DIV/P，它本身不是额外换行。
+        if (isBlock && node.children.length === 1 && node.children[0]?.kind === "break") content = "";
+        if (!content && !isBlock) return;
+
+        if (hasPreviousNode && (isBlock || previousWasBlock) && !previousContent.endsWith("\n") && !content.startsWith("\n")) {
+            result += "\n";
+        }
+        result += content;
+        previousContent = content;
+        previousWasBlock = isBlock;
+        hasPreviousNode = true;
+    });
+    return result;
+}
+
+export function normalizeComposerPastedText(text: string) {
+    return text.replace(/\r\n?/g, "\n");
+}
+
+export function referenceBoundarySpacing(before: string, after: string) {
+    return {
+        before: before && !/\s$/.test(before) ? " " : "",
+        after: !after || !/^\s/.test(after) ? " " : "",
+    };
+}
+
+function insertPlainText(editor: HTMLElement | null, text: string) {
+    if (!editor) return;
+    const selection = window.getSelection();
+    const selectedRange = selection?.rangeCount ? selection.getRangeAt(0) : null;
+    const range = selectedRange && rangeIsInsideEditor(selectedRange, editor) ? selectedRange : null;
+    if (!range) {
+        editor.append(document.createTextNode(text));
+        placeCaretAtEnd(editor);
+        return;
+    }
+    range.deleteContents();
+    if (text) {
+        const textNode = document.createTextNode(text);
+        range.insertNode(textNode);
+        range.setStart(textNode, textNode.data.length);
+    }
+    range.collapse(true);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+}
+
+function rangeIsInsideEditor(range: Range, editor: HTMLElement) {
+    return range.commonAncestorContainer === editor || editor.contains(range.commonAncestorContainer);
+}
+
+function textAroundRange(range: Range) {
+    const container = range.startContainer;
+    const offset = range.startOffset;
+    if (container.nodeType === Node.TEXT_NODE) {
+        const text = container.textContent || "";
+        return { before: text.slice(0, offset), after: text.slice(offset) };
+    }
+    const children = Array.from(container.childNodes);
+    return {
+        before: boundaryText(children[offset - 1], "end"),
+        after: boundaryText(children[offset], "start"),
+    };
+}
+
+function boundaryText(node: Node | undefined, edge: "start" | "end") {
+    if (!node) return "";
+    if (node instanceof HTMLElement && (node.tagName === "DIV" || node.tagName === "P" || node.tagName === "BR")) return "\n";
+    const text = node.textContent || "";
+    return edge === "start" ? text.slice(0, 1) : text.slice(-1);
 }
 
 function removeActiveMention() {

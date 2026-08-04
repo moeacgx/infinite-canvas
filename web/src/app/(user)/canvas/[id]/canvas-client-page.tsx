@@ -36,7 +36,7 @@ import { CanvasNodeCropDialog, type CanvasImageCropRect } from "../components/ca
 import { CanvasNodeMaskEditDialog, type CanvasImageMaskEditPayload } from "../components/canvas-node-mask-edit-dialog";
 import { CanvasNodeSplitDialog, type CanvasImageSplitParams } from "../components/canvas-node-split-dialog";
 import { CanvasNodeUpscaleDialog, type CanvasImageUpscaleParams } from "../components/canvas-node-upscale-dialog";
-import { buildNodeChatMessages, buildNodeGenerationContext, buildNodeGenerationInputs, hydrateNodeGenerationContext, type NodeGenerationInput } from "../components/canvas-node-generation";
+import { buildNodeChatMessages, buildNodeGenerationContext, buildNodeGenerationInputs, canvasNodeReferenceFileName, hydrateNodeGenerationContext, type NodeGenerationInput } from "../components/canvas-node-generation";
 import { CanvasNodeHoverToolbar, CanvasNodeInfoModal } from "../components/canvas-node-hover-toolbar";
 import { InfiniteCanvas } from "../components/infinite-canvas";
 import { Minimap } from "../components/canvas-mini-map";
@@ -1941,7 +1941,7 @@ function InfiniteCanvasPage() {
             const userPrompt = payload.prompt.trim();
             const prompt = `只修改蒙版透明区域，其他区域保持不变。${userPrompt}`;
             const childId = nanoid();
-            const source = { id: node.id, name: `${node.title || node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey };
+            const source = { id: node.id, name: canvasNodeReferenceFileName(CanvasNodeType.Image, node.id), type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey };
             const generationMetadata = buildImageGenerationMetadata("edit", generationConfig, 1, [source]);
             setMaskEditNodeId(null);
             setRunningNodeId(childId);
@@ -2018,7 +2018,7 @@ function InfiniteCanvasPage() {
             const title = buildAngleLabel(params);
             const prompt = buildAnglePrompt(params);
             const generationMetadata = buildImageGenerationMetadata("edit", generationConfig, 1, [
-                { id: node.id, name: `${node.title || node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey },
+                { id: node.id, name: canvasNodeReferenceFileName(CanvasNodeType.Image, node.id), type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey },
             ]);
             setAngleNodeId(null);
             setRunningNodeId(childId);
@@ -2039,7 +2039,7 @@ function InfiniteCanvasPage() {
             setDialogNodeId(childId);
             const controller = startGenerationRequest(childId, node.id, childId);
             try {
-                const image = await requestEdit(generationConfig, prompt, [{ id: node.id, name: `${node.title || node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey }], undefined, { signal: controller.signal }).then(
+                const image = await requestEdit(generationConfig, prompt, [{ id: node.id, name: canvasNodeReferenceFileName(CanvasNodeType.Image, node.id), type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey }], undefined, { signal: controller.signal }).then(
                     (items) => items[0],
                 );
                 const uploaded = await uploadImage(image.dataUrl);
@@ -2211,7 +2211,7 @@ function InfiniteCanvasPage() {
                         .filter((node): node is CanvasNodeData => Boolean(node));
                     const refs = upstreamNodes.flatMap((up) =>
                         typeof up.metadata?.content === "string" && up.metadata.content && up.type !== sourceNode.type
-                            ? [{ id: up.id, name: `${up.title || up.id}.png`, type: up.metadata.mimeType || "image/png", dataUrl: up.metadata.content, storageKey: up.metadata.storageKey }]
+                            ? [{ id: up.id, name: canvasNodeReferenceFileName(CanvasNodeType.Image, up.id), type: up.metadata.mimeType || "image/png", dataUrl: up.metadata.content, storageKey: up.metadata.storageKey }]
                             : [],
                     );
                     const image = refs.length
@@ -2263,7 +2263,7 @@ function InfiniteCanvasPage() {
                     const isEmptyImageNode = isImageNode && !sourceNode?.metadata?.content;
                     const sourceReference =
                         isImageNode && sourceNode?.metadata?.content
-                            ? [{ id: sourceNode.id, name: `${sourceNode.title || sourceNode.id}.png`, type: sourceNode.metadata.mimeType || "image/png", dataUrl: sourceNode.metadata.content, storageKey: sourceNode.metadata.storageKey }]
+                            ? [{ id: sourceNode.id, name: canvasNodeReferenceFileName(CanvasNodeType.Image, sourceNode.id), type: sourceNode.metadata.mimeType || "image/png", dataUrl: sourceNode.metadata.content, storageKey: sourceNode.metadata.storageKey }]
                             : [];
                     const referenceImages = sourceReference.length ? sourceReference : generationContext.referenceImages;
                     const generationType = referenceImages.length ? ("edit" as const) : ("generation" as const);
@@ -2871,11 +2871,13 @@ function InfiniteCanvasPage() {
                                         onSelect={() => {
                                             setSelectedConnectionId(connection.id);
                                             setSelectedNodeIds(new Set());
+                                            setToolbarNodeId(null);
                                             setContextMenu(null);
                                         }}
                                         onContextMenu={(event) => {
                                             setSelectedConnectionId(connection.id);
                                             setSelectedNodeIds(new Set());
+                                            setToolbarNodeId(null);
                                             setContextMenu({ type: "connection", x: event.clientX, y: event.clientY, connectionId: connection.id });
                                         }}
                                     />
@@ -3554,7 +3556,7 @@ function sourceNodeReferenceImages(node: CanvasNodeData | null) {
     return [
         {
             id: node.id,
-            name: `${node.title || node.id}.png`,
+            name: canvasNodeReferenceFileName(CanvasNodeType.Image, node.id),
             type: node.metadata.mimeType || "image/png",
             dataUrl: node.metadata.content,
             storageKey: node.metadata.storageKey,
