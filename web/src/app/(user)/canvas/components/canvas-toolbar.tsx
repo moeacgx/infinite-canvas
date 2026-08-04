@@ -1,5 +1,5 @@
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode, RefObject } from "react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, Segmented, Switch } from "antd";
 import { CircleDot, Eraser, FolderOpen, Grid2x2, Group, Hand, Image as ImageIcon, Info, Library, Moon, Music2, Palette, Redo2, Settings2, Square, Sun, Trash2, Type, Undo2, Upload, Video } from "lucide-react";
 
@@ -27,6 +27,7 @@ export function CanvasToolbar({
     onDeselect,
     onBackgroundModeChange,
     onShowImageInfoChange,
+    onOpenAppearance,
     onOpenAssetLibrary,
     onOpenMyAssets,
 }: {
@@ -49,10 +50,12 @@ export function CanvasToolbar({
     onDeselect: () => void;
     onBackgroundModeChange: (mode: CanvasBackgroundMode) => void;
     onShowImageInfoChange: (show: boolean) => void;
+    onOpenAppearance: () => void;
     onOpenAssetLibrary: () => void;
     onOpenMyAssets: () => void;
 }) {
     const wrapRef = useRef<HTMLDivElement>(null);
+    const appearancePanelRef = useRef<HTMLDivElement>(null);
     const colorTheme = useThemeStore((state) => state.theme);
     const setTheme = useThemeStore((state) => state.setTheme);
     const theme = canvasThemes[colorTheme];
@@ -65,8 +68,18 @@ export function CanvasToolbar({
     const activeStyle = { background: theme.toolbar.activeBg, color: theme.toolbar.activeText };
     const tip = hovered ? toolLabel(hovered) : "";
 
+    useEffect(() => {
+        if (!appearanceOpen) return;
+        const close = (event: PointerEvent) => {
+            const target = event.target as Node;
+            if (!wrapRef.current?.contains(target) && !appearancePanelRef.current?.contains(target)) setAppearanceOpen(false);
+        };
+        document.addEventListener("pointerdown", close, true);
+        return () => document.removeEventListener("pointerdown", close, true);
+    }, [appearanceOpen]);
+
     return (
-        <div className="pointer-events-none absolute bottom-5 z-50 flex justify-center" style={{ left: 300, right: 16 }}>
+        <div className="pointer-events-none absolute bottom-5 left-4 right-4 z-50 flex justify-center md:left-[300px]">
             {tip ? <DockTip label={tip} x={tipX} theme={theme} /> : null}
             <div ref={wrapRef} className="thin-scrollbar pointer-events-auto flex h-14 max-w-full items-center gap-1 overflow-x-auto rounded-xl border px-2 shadow-lg backdrop-blur [&>*]:shrink-0" style={dockStyle}>
                 <ToolbarButton id="tool-hand" label="移动/选择" active={!selectedCount} hovered={hovered} activeStyle={activeStyle} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onDeselect}>
@@ -118,8 +131,11 @@ export function CanvasToolbar({
                     onTipX={setTipX}
                     onHover={setHovered}
                     onClick={(event) => {
-                        setPanelX(getTipX(wrapRef.current, event.currentTarget));
-                        setAppearanceOpen((value) => !value);
+                        setPanelX(getPanelX(wrapRef.current, event.currentTarget));
+                        setAppearanceOpen((value) => {
+                            if (!value) onOpenAppearance();
+                            return !value;
+                        });
                     }}
                 >
                     <Palette className="size-4.5" />
@@ -140,7 +156,8 @@ export function CanvasToolbar({
 
             {appearanceOpen ? (
                 <div
-                    className="pointer-events-auto absolute bottom-[72px] z-30 w-[248px] -translate-x-1/2 rounded-xl border p-2.5 shadow-xl backdrop-blur"
+                    ref={appearancePanelRef}
+                    className="pointer-events-auto absolute bottom-[152px] z-30 w-[calc(100vw-48px)] max-w-[248px] -translate-x-1/2 rounded-xl border p-2.5 shadow-xl backdrop-blur md:bottom-[72px]"
                     style={{ left: panelX || "50%", background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.toolbar.item }}
                 >
                     <div className="px-1 pb-2 text-sm font-medium opacity-65">画布外观</div>
@@ -306,4 +323,14 @@ function getTipX(wrap: HTMLDivElement | null, target: HTMLElement) {
     const wrapBox = wrap.parentElement?.getBoundingClientRect() || wrap.getBoundingClientRect();
     const box = target.getBoundingClientRect();
     return box.left - wrapBox.left + box.width / 2;
+}
+
+function getPanelX(wrap: HTMLDivElement | null, target: HTMLElement) {
+    if (!wrap) return 0;
+    const container = wrap.parentElement?.getBoundingClientRect() || wrap.getBoundingClientRect();
+    const targetBox = target.getBoundingClientRect();
+    const viewportGap = 8;
+    const panelHalfWidth = Math.min(124, Math.max(0, container.width - viewportGap * 2) / 2);
+    const center = targetBox.left - container.left + targetBox.width / 2;
+    return Math.min(Math.max(center, panelHalfWidth + viewportGap), container.width - panelHalfWidth - viewportGap);
 }

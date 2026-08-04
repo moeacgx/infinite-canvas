@@ -1,14 +1,29 @@
-import { buildApiUrl, isNewApiConfig, resolveCapabilityModel, resolveModelRequestConfig, resolveModelScript, resolveNewApiGroup, type AiConfig, type FetchedModelLists, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
+import {
+    buildApiUrl,
+    isNewApiConfig,
+    resolveCapabilityModel,
+    resolveImageChannelOptions,
+    resolveModelRequestConfig,
+    resolveModelScript,
+    resolveNewApiGroup,
+    type AiConfig,
+    type FetchedModelLists,
+    type ImageChannelOptions,
+    type ModelCapability,
+    type ModelChannel,
+} from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
 import { imageToDataUrl, setImageBlob } from "@/services/image-storage";
 import type { ReferenceImage } from "@/types/image";
-import { aiApiUrl, aiHeaders, aiRequestConfig, withSystemMessage, withSystemPrompt, refreshRemoteUser, readAxiosError } from "@/services/api/ai-utils";
+import { aiApiUrl, aiHeaders, aiRequestConfig, withSystemMessage, withSystemPrompt, refreshRemoteUser, readApiErrorMessage, readAxiosError } from "@/services/api/ai-utils";
 import { fetchGeminiModels, requestGeminiImages, streamGeminiChat } from "@/services/api/gemini";
-import { channelAxiosRequest } from "@/services/api/channel-request";
+import { channelAxiosRequest, channelFetch } from "@/services/api/channel-request";
+import { isEventStreamResponse, parseImagesApiStream, parseResponsesApiStream, parseResponsesImageData } from "@/services/api/image-stream";
 import { normalizePluginImages, resolveModelPluginResultUrl, runModelPlugin, sanitizeModelPluginText } from "@/services/api/model-plugin";
+import { networkFailureMessage } from "@/services/api/network-error";
 
 export type ChatCompletionMessage = {
     role: "system" | "user" | "assistant";
@@ -31,7 +46,14 @@ type ImageTaskResponse = {
     result?: ImageApiResponse;
     error?: string | { message?: string };
 };
+type ResponsesApiResponse = {
+    output?: Array<Record<string, unknown>>;
+    error?: { message?: string };
+    code?: number;
+    msg?: string;
+};
 type RequestOptions = { signal?: AbortSignal };
+type GeneratedImage = { id: string; dataUrl: string };
 
 const QUALITY_BASE: Record<string, number> = {
     low: 1024,
@@ -54,6 +76,7 @@ const IMAGE_MAX_RATIO = 3;
 const IMAGE_OUTPUT_FORMAT = "png";
 const NEW_API_IMAGE_TASK_POLL_INTERVAL_MS = 2500;
 const NEW_API_IMAGE_TASK_MAX_ATTEMPTS = 240;
+const IMAGE_REQUEST_MAX_CONCURRENCY = 3;
 
 function normalizeQuality(quality: string) {
     const value = quality.trim().toLowerCase();
@@ -70,6 +93,8 @@ function normalizeBackground(background: string | undefined) {
 function resolveSize(quality: string | undefined, ratio: string): string {
     const parsedRatio = parseImageRatio(ratio);
     const basePixels = quality ? QUALITY_BASE[quality] : undefined;
+    const exactSize = resolveExactRatioSize(parsedRatio.width, parsedRatio.height, basePixels);
+    if (exactSize) return exactSize;
     const isLandscape = parsedRatio.width >= parsedRatio.height;
     const longRatio = isLandscape ? parsedRatio.width / parsedRatio.height : parsedRatio.height / parsedRatio.width;
     let longSide: number;
@@ -89,6 +114,47 @@ function resolveSize(quality: string | undefined, ratio: string): string {
     const height = isLandscape ? shortSide : longSide;
     validateImageSize(width, height);
     return `${width}x${height}`;
+}
+
+function resolveExactRatioSize(widthRatio: number, heightRatio: number, basePixels?: number) {
+    const reduced = reduceImageRatio(widthRatio, heightRatio);
+    if (Math.max(reduced.width, reduced.height) > 32) return undefined;
+
+    const ratioPixels = reduced.width * reduced.height;
+    const desiredUnit = basePixels ? Math.sqrt((basePixels * basePixels) / ratioPixels) : DEFAULT_IMAGE_SHORT_SIDE / Math.min(reduced.width, reduced.height);
+    const minimumUnit = Math.ceil(Math.sqrt(IMAGE_MIN_PIXELS / ratioPixels) / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
+    const maximumUnitByPixels = Math.floor(Math.sqrt(IMAGE_MAX_PIXELS / ratioPixels) / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
+    const maximumUnitByEdge = Math.floor(IMAGE_MAX_EDGE / Math.max(reduced.width, reduced.height) / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
+    const maximumUnit = Math.min(maximumUnitByPixels, maximumUnitByEdge);
+    if (minimumUnit > maximumUnit || maximumUnit < IMAGE_SIZE_STEP) return undefined;
+
+    const unit = Math.min(maximumUnit, Math.max(minimumUnit, Math.round(desiredUnit / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP));
+    const width = reduced.width * unit;
+    const height = reduced.height * unit;
+    validateImageSize(width, height);
+    return `${width}x${height}`;
+}
+
+function reduceImageRatio(width: number, height: number) {
+    let scale = 1;
+    while (scale < 1000 && (!Number.isInteger(width * scale) || !Number.isInteger(height * scale))) scale *= 10;
+    let scaledWidth = Math.round(width * scale);
+    let scaledHeight = Math.round(height * scale);
+    const divisor = greatestCommonDivisor(scaledWidth, scaledHeight);
+    scaledWidth /= divisor;
+    scaledHeight /= divisor;
+    return { width: scaledWidth, height: scaledHeight };
+}
+
+function greatestCommonDivisor(left: number, right: number) {
+    let a = Math.abs(left);
+    let b = Math.abs(right);
+    while (b) {
+        const remainder = a % b;
+        a = b;
+        b = remainder;
+    }
+    return a || 1;
 }
 
 function parseImageRatio(value: string) {
@@ -130,16 +196,28 @@ function resolveRequestSize(quality: string | undefined, size: string) {
 
 async function resolveImageDataUrl(item: Record<string, unknown>, config?: AiConfig, signal?: AbortSignal) {
     if (typeof item.b64_json === "string" && item.b64_json) {
-        return `data:image/png;base64,${item.b64_json}`;
+        return item.b64_json.startsWith("data:") ? item.b64_json : `data:image/png;base64,${item.b64_json}`;
     }
     if (typeof item.url === "string" && item.url) {
-        if (config && isNewApiConfig(config) && item.url.startsWith("/canvas/v1/images/tasks/")) {
-            return downloadNewApiImageContent(config, item.url);
-        }
-        if (config?.channelMode === "local" && /^https?:/i.test(item.url)) return downloadLocalImageContent(config, item.url, signal);
-        return item.url;
+        return resolveImageValue(item.url, config, signal);
     }
     return null;
+}
+
+async function resolveImageValue(value: string, config?: AiConfig, signal?: AbortSignal) {
+    if (config && isNewApiConfig(config) && value.startsWith("/canvas/v1/images/tasks/")) return downloadNewApiImageContent(config, value);
+    const resolvedValue = config ? resolveRelativeImageUrl(config.baseUrl, value) : value;
+    if (config?.channelMode === "local" && /^https?:/i.test(resolvedValue)) return downloadLocalImageContent(config, resolvedValue, signal);
+    return resolvedValue;
+}
+
+function resolveRelativeImageUrl(baseUrl: string, value: string) {
+    if (!/^(?:\/|\.\.?\/)/.test(value)) return value;
+    try {
+        return new URL(value, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
+    } catch {
+        return value;
+    }
 }
 
 async function parseImagePayload(payload: ImageApiResponse, config?: AiConfig, signal?: AbortSignal) {
@@ -154,6 +232,15 @@ async function parseImagePayload(payload: ImageApiResponse, config?: AiConfig, s
     }
 
     return images;
+}
+
+async function parseResponsesPayload(payload: ResponsesApiResponse, config: AiConfig, signal?: AbortSignal) {
+    if (typeof payload.code === "number" && payload.code !== 0) throw new Error(payload.msg || "请求失败");
+    if (payload.error?.message) throw new Error(payload.error.message);
+    const values = parseResponsesImageData(payload);
+    const dataUrls = await Promise.all(values.map((value) => resolveImageValue(value, config, signal)));
+    if (!dataUrls.length) throw new Error("Responses API 没有返回图片");
+    return dataUrls.map((dataUrl) => ({ id: nanoid(), dataUrl }));
 }
 
 async function downloadLocalImageContent(config: AiConfig, url: string, signal?: AbortSignal) {
@@ -208,11 +295,133 @@ function parseStreamChunk(chunk: string, onDelta: (value: string) => void) {
     if (deltaText) onDelta(deltaText);
 }
 
+async function requestImagesApiStream(config: AiConfig, path: "/images/generations" | "/images/edits", body: Record<string, unknown> | FormData, signal?: AbortSignal) {
+    const isFormData = body instanceof FormData;
+    const response = await requestImageFetch(config, path, {
+        method: "POST",
+        headers: aiHeaders(config, isFormData ? undefined : "application/json"),
+        body: isFormData ? body : JSON.stringify(body),
+        signal,
+    });
+    if (!isEventStreamResponse(response)) return parseImagePayload((await response.json()) as ImageApiResponse, config, signal);
+    const streamed = await parseImagesApiStream(response);
+    return parseImagePayload((streamed.resultPayload || { data: streamed.imageItems }) as ImageApiResponse, config, signal);
+}
+
+async function requestImagesApiStreams(config: AiConfig, path: "/images/generations" | "/images/edits", body: Record<string, unknown> | FormData, n: number, signal?: AbortSignal) {
+    return requestConcurrentImages(n, signal, () => requestImagesApiStream(config, path, singleImageRequestBody(body), signal));
+}
+
+function singleImageRequestBody(body: Record<string, unknown> | FormData) {
+    if (!(body instanceof FormData)) return { ...body, n: 1 };
+    const next = new FormData();
+    body.forEach((value, key) => next.append(key, value));
+    next.set("n", "1");
+    return next;
+}
+
+async function requestResponsesImages(
+    config: AiConfig,
+    prompt: string,
+    references: ReferenceImage[],
+    n: number,
+    quality: string | undefined,
+    size: string | undefined,
+    background: string | undefined,
+    channelOptions: ImageChannelOptions,
+    signal?: AbortSignal,
+) {
+    const inputImages = await Promise.all(references.map((image) => imageToDataUrl(image)));
+    return requestConcurrentImages(n, signal, () => requestResponsesImage(config, prompt, inputImages, quality, size, background, channelOptions, signal));
+}
+
+async function requestConcurrentImages(n: number, signal: AbortSignal | undefined, request: () => Promise<GeneratedImage[]>) {
+    const results: Array<PromiseSettledResult<GeneratedImage[]>> = [];
+    for (let offset = 0; offset < n; offset += IMAGE_REQUEST_MAX_CONCURRENCY) {
+        throwIfImageRequestAborted(signal);
+        const batchSize = Math.min(IMAGE_REQUEST_MAX_CONCURRENCY, n - offset);
+        const batch = Array.from({ length: batchSize }, request);
+        results.push(...(await Promise.allSettled(batch)));
+    }
+    throwIfImageRequestAborted(signal);
+    const images = results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
+    if (images.length) return images;
+    const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    throw failure?.reason || new Error("图片接口没有返回图片");
+}
+
+function throwIfImageRequestAborted(signal?: AbortSignal) {
+    if (signal?.aborted) throw new DOMException("请求已取消", "AbortError");
+}
+
+async function requestResponsesImage(config: AiConfig, prompt: string, inputImages: string[], quality: string | undefined, size: string | undefined, background: string | undefined, channelOptions: ImageChannelOptions, signal?: AbortSignal) {
+    const tool: Record<string, unknown> = {
+        type: "image_generation",
+        action: inputImages.length ? "edit" : "generate",
+        size: size || "auto",
+        output_format: IMAGE_OUTPUT_FORMAT,
+        ...(quality ? { quality } : {}),
+        ...(background ? { background } : {}),
+        ...(channelOptions.stream ? { partial_images: channelOptions.partialImages } : {}),
+    };
+    const text = withSystemPrompt(config, prompt);
+    const input = inputImages.length
+        ? [
+              {
+                  role: "user",
+                  content: [{ type: "input_text", text }, ...inputImages.map((imageUrl) => ({ type: "input_image", image_url: imageUrl }))],
+              },
+          ]
+        : text;
+    const body = {
+        model: channelOptions.responsesModel || config.model,
+        input,
+        tools: [tool],
+        tool_choice: "required",
+        ...(channelOptions.stream ? { stream: true } : {}),
+    };
+    const response = await requestImageFetch(config, "/responses", {
+        method: "POST",
+        headers: aiHeaders(config, "application/json"),
+        body: JSON.stringify(body),
+        signal,
+    });
+    if (!isEventStreamResponse(response)) return parseResponsesPayload((await response.json()) as ResponsesApiResponse, config, signal);
+    const values = await parseResponsesApiStream(response);
+    const dataUrls = await Promise.all(values.map((value) => resolveImageValue(value, config, signal)));
+    if (!dataUrls.length) throw new Error("Responses API 流式接口没有返回图片");
+    return dataUrls.map((dataUrl) => ({ id: nanoid(), dataUrl }));
+}
+
+async function requestImageFetch(config: AiConfig, path: string, init: RequestInit) {
+    const requestUrl = aiApiUrl(config, path);
+    let response: Response;
+    try {
+        response = await channelFetch(config, requestUrl, init);
+    } catch (error) {
+        if (init.signal?.aborted) throw error;
+        if (error instanceof TypeError) {
+            throw new Error(
+                networkFailureMessage({
+                    fallback: "请求失败",
+                    requestUrl,
+                    pageProtocol: typeof window === "undefined" ? undefined : window.location.protocol,
+                }),
+            );
+        }
+        throw error;
+    }
+    if (response.ok) return response;
+    const text = await response.text().catch(() => "");
+    throw new Error(readApiErrorMessage(text) || `请求失败：${response.status}`);
+}
+
 export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions) {
     const channelModel = resolveCapabilityModel(config, "image");
     const requestConfig = resolveModelRequestConfig(config, channelModel);
     assertImageModel(requestConfig.model);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
+    const channelOptions = resolveImageChannelOptions(config, channelModel);
     const script = resolveModelScript(config, channelModel, "image");
     if (script) {
         const quality = normalizeQuality(config.quality);
@@ -231,9 +440,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
             return await Promise.all(
                 normalizePluginImages(result).map(async (value) => ({
                     id: nanoid(),
-                    dataUrl: /^data:image\//i.test(value)
-                        ? value
-                        : await downloadLocalImageContent(requestConfig, resolveModelPluginResultUrl(requestConfig.baseUrl, value), options?.signal),
+                    dataUrl: /^data:image\//i.test(value) ? value : await downloadLocalImageContent(requestConfig, resolveModelPluginResultUrl(requestConfig.baseUrl, value), options?.signal),
                 })),
             );
         } catch (error) {
@@ -257,13 +464,23 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
         ...(quality ? { quality } : {}),
         ...(requestSize ? { size: requestSize } : {}),
         ...(background ? { background } : {}),
-        response_format: "b64_json",
+        response_format: channelOptions.responseFormatB64Json ? "b64_json" : "url",
         output_format: IMAGE_OUTPUT_FORMAT,
     };
     if (isNewApiConfig(requestConfig)) {
         return requestNewApiImageTask(requestConfig, payload, undefined, options);
     }
     try {
+        if (channelOptions.apiMode === "responses") {
+            const images = await requestResponsesImages(requestConfig, prompt, [], n, quality, requestSize, background, channelOptions, options?.signal);
+            refreshRemoteUser(requestConfig);
+            return images;
+        }
+        if (channelOptions.stream) {
+            const images = await requestImagesApiStreams(requestConfig, "/images/generations", { ...payload, stream: true, partial_images: channelOptions.partialImages }, n, options?.signal);
+            refreshRemoteUser(requestConfig);
+            return images;
+        }
         const response = await channelAxiosRequest<ImageApiResponse>(requestConfig, {
             method: "POST",
             url: aiApiUrl(requestConfig, "/images/generations"),
@@ -281,7 +498,15 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
 
 async function requestNewApiImageTask(config: AiConfig, payload: Record<string, unknown> | FormData, params?: Record<string, string>, options?: RequestOptions) {
     try {
-        const created = (await channelAxiosRequest<ImageTaskResponse>(config, { method: "POST", url: aiApiUrl(config, "/images/tasks"), data: payload, ...aiRequestConfig(config, payload instanceof FormData ? undefined : "application/json", params, "image"), signal: options?.signal })).data;
+        const created = (
+            await channelAxiosRequest<ImageTaskResponse>(config, {
+                method: "POST",
+                url: aiApiUrl(config, "/images/tasks"),
+                data: payload,
+                ...aiRequestConfig(config, payload instanceof FormData ? undefined : "application/json", params, "image"),
+                signal: options?.signal,
+            })
+        ).data;
         const taskId = created.task_id;
         if (!taskId) throw new Error("图片任务没有返回任务 ID");
         const task = await waitForNewApiImageTask(config, taskId, options);
@@ -330,6 +555,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     const requestConfig = resolveModelRequestConfig(config, channelModel);
     assertImageModel(requestConfig.model);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
+    const channelOptions = resolveImageChannelOptions(config, channelModel);
     const requestPrompt = buildImageReferencePromptText(prompt, references);
     const script = resolveModelScript(config, channelModel, "image");
     if (script) {
@@ -351,9 +577,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
             return await Promise.all(
                 normalizePluginImages(result).map(async (value) => ({
                     id: nanoid(),
-                    dataUrl: /^data:image\//i.test(value)
-                        ? value
-                        : await downloadLocalImageContent(requestConfig, resolveModelPluginResultUrl(requestConfig.baseUrl, value), options?.signal),
+                    dataUrl: /^data:image\//i.test(value) ? value : await downloadLocalImageContent(requestConfig, resolveModelPluginResultUrl(requestConfig.baseUrl, value), options?.signal),
                 })),
             );
         } catch (error) {
@@ -371,12 +595,24 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     const quality = normalizeQuality(config.quality);
     const requestSize = resolveRequestSize(quality, config.size);
     const background = normalizeBackground(config.background);
+    if (channelOptions.apiMode === "responses") {
+        if (mask) throw new Error("Responses API 暂不支持蒙版编辑，请切换到 Images API");
+        try {
+            return await requestResponsesImages(requestConfig, requestPrompt, references, n, quality, requestSize, background, channelOptions, options?.signal);
+        } catch (error) {
+            throw new Error(readAxiosError(error, "请求失败"));
+        }
+    }
     const formData = new FormData();
     formData.set("model", requestConfig.model);
     formData.set("prompt", withSystemPrompt(requestConfig, requestPrompt));
     formData.set("n", String(n));
-    formData.set("response_format", "b64_json");
+    formData.set("response_format", channelOptions.responseFormatB64Json ? "b64_json" : "url");
     formData.set("output_format", IMAGE_OUTPUT_FORMAT);
+    if (channelOptions.stream) {
+        formData.set("stream", "true");
+        formData.set("partial_images", String(channelOptions.partialImages));
+    }
     if (quality) {
         formData.set("quality", quality);
     }
@@ -395,7 +631,18 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     }
 
     try {
-        const response = await channelAxiosRequest<ImageApiResponse>(requestConfig, { method: "POST", url: aiApiUrl(requestConfig, "/images/edits"), data: formData, ...aiRequestConfig(requestConfig, undefined, undefined, "image"), signal: options?.signal });
+        if (channelOptions.stream) {
+            const images = await requestImagesApiStreams(requestConfig, "/images/edits", formData, n, options?.signal);
+            refreshRemoteUser(requestConfig);
+            return images;
+        }
+        const response = await channelAxiosRequest<ImageApiResponse>(requestConfig, {
+            method: "POST",
+            url: aiApiUrl(requestConfig, "/images/edits"),
+            data: formData,
+            ...aiRequestConfig(requestConfig, undefined, undefined, "image"),
+            signal: options?.signal,
+        });
         const images = await parseImagePayload(response.data, requestConfig, options?.signal);
         refreshRemoteUser(requestConfig);
         return images;
@@ -454,18 +701,18 @@ export async function requestImageQuestion(config: AiConfig, messages: ChatCompl
             signal: options?.signal,
             responseType: "text",
             onDownloadProgress: (event) => {
-                    const responseText = String(event.event?.target?.responseText || "");
-                    const nextText = responseText.slice(processedLength);
-                    processedLength = responseText.length;
-                    buffer += nextText;
-                    const chunks = buffer.split("\n\n");
-                    buffer = chunks.pop() || "";
-                    for (const chunk of chunks) {
-                        parseStreamChunk(chunk, (delta) => {
-                            answer += delta;
-                            onDelta(answer);
-                        });
-                    }
+                const responseText = String(event.event?.target?.responseText || "");
+                const nextText = responseText.slice(processedLength);
+                processedLength = responseText.length;
+                buffer += nextText;
+                const chunks = buffer.split("\n\n");
+                buffer = chunks.pop() || "";
+                for (const chunk of chunks) {
+                    parseStreamChunk(chunk, (delta) => {
+                        answer += delta;
+                        onDelta(answer);
+                    });
+                }
             },
         });
         if (typeof response.data === "object" && response.data && "code" in response.data && (response.data as { code?: number; msg?: string }).code !== 0) {
@@ -522,11 +769,14 @@ export async function fetchImageModels(config: AiConfig) {
 export async function fetchChannelModels(channel: ModelChannel) {
     try {
         if (channel.apiFormat === "gemini") return await fetchGeminiModels(channel);
-        const response = await channelAxiosRequest<{ data?: Array<{ id?: string }>; error?: { message?: string } }>({ channelMode: "local", requestMode: channel.requestMode }, {
-            method: "GET",
-            url: buildApiUrl(channel.baseUrl, "/models"),
-            headers: { Authorization: `Bearer ${channel.apiKey}` },
-        });
+        const response = await channelAxiosRequest<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(
+            { channelMode: "local", requestMode: channel.requestMode },
+            {
+                method: "GET",
+                url: buildApiUrl(channel.baseUrl, "/models"),
+                headers: { Authorization: `Bearer ${channel.apiKey}` },
+            },
+        );
         if (response.data.error?.message) throw new Error(response.data.error.message);
         return uniqueSortedModels((response.data.data || []).map((model) => model.id).filter((id): id is string => Boolean(id)));
     } catch (error) {

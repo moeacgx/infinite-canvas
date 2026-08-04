@@ -65,9 +65,9 @@ export function isSeedanceVideoModel(model: string) {
     return value.includes("seedance") || value.includes("doubao-seedance");
 }
 
-export function isSeedanceFastModel(model: string) {
+export function isSeedanceFastOrMiniModel(model: string) {
     const value = model.toLowerCase();
-    return isSeedanceVideoModel(value) && value.includes("fast");
+    return isSeedanceVideoModel(value) && (value.includes("fast") || value.includes("mini"));
 }
 
 export function isArkPlanBaseUrl(baseUrl: string) {
@@ -76,7 +76,7 @@ export function isArkPlanBaseUrl(baseUrl: string) {
 
 export function normalizeSeedanceResolution(value: string, model = "") {
     const normalized = normalizeResolutionToken(value);
-    if (isSeedanceFastModel(model) && normalized === "1080p") return "720p";
+    if (isSeedanceFastOrMiniModel(model) && normalized === "1080p") return "720p";
     return seedanceResolutionOptions.some((item) => item.value === normalized) ? normalized : "720p";
 }
 

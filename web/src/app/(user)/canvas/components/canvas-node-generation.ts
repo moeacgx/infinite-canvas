@@ -27,6 +27,11 @@ export type NodeGenerationInput = {
     audio?: ReferenceAudio;
 };
 
+export function canvasNodeReferenceFileName(type: CanvasNodeType.Image | CanvasNodeType.Video | CanvasNodeType.Audio, nodeId: string) {
+    const extension = type === CanvasNodeType.Image ? "png" : type === CanvasNodeType.Video ? "mp4" : "mp3";
+    return `${type}-${nodeId}.${extension}`;
+}
+
 export function buildNodeGenerationContext(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[], prompt: string): NodeGenerationContext {
     const inputs = buildNodeGenerationInputs(nodeId, nodes, connections);
     const sourceNode = nodes.find((node) => node.id === nodeId);
@@ -161,7 +166,7 @@ function readReferenceImage(node: CanvasNodeData): ReferenceImage | null {
     if (node.type !== CanvasNodeType.Image || !node.metadata?.content) return null;
     return {
         id: node.id,
-        name: `${node.title || node.id}.png`,
+        name: canvasNodeReferenceFileName(CanvasNodeType.Image, node.id),
         type: node.metadata.mimeType || "image/png",
         dataUrl: node.metadata.content,
         storageKey: node.metadata.storageKey,
@@ -172,7 +177,7 @@ function readReferenceVideo(node: CanvasNodeData): ReferenceVideo | null {
     if (node.type !== CanvasNodeType.Video || !node.metadata?.content) return null;
     return {
         id: node.id,
-        name: `${node.title || node.id}.mp4`,
+        name: canvasNodeReferenceFileName(CanvasNodeType.Video, node.id),
         type: node.metadata.mimeType || "video/mp4",
         url: node.metadata.content,
         storageKey: node.metadata.storageKey,
@@ -187,7 +192,7 @@ function readReferenceAudio(node: CanvasNodeData): ReferenceAudio | null {
     if (node.type !== CanvasNodeType.Audio || !node.metadata?.content) return null;
     return {
         id: node.id,
-        name: `${node.title || node.id}.mp3`,
+        name: canvasNodeReferenceFileName(CanvasNodeType.Audio, node.id),
         type: node.metadata.mimeType || "audio/mpeg",
         url: node.metadata.content,
         storageKey: node.metadata.storageKey,

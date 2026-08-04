@@ -1,6 +1,6 @@
 "use client";
 
-import { App, Button, Form, Input, Modal, Progress, Segmented, Select } from "antd";
+import { App, Button, Form, Input, InputNumber, Modal, Progress, Segmented, Select, Switch } from "antd";
 import { CircleAlert, Cloud, Code2, Plus, RefreshCw, Trash2, Wifi } from "lucide-react";
 import { useState } from "react";
 
@@ -26,6 +26,7 @@ import {
     type ApiCallFormat,
     type ChannelMode,
     type ChannelRequestMode,
+    type ImageApiMode,
     type ModelCapability,
     type ModelChannel,
 } from "@/stores/use-config-store";
@@ -64,13 +65,18 @@ const requestModeOptions: Array<{ label: string; value: ChannelRequestMode }> = 
     { label: "浏览器直连", value: "direct" },
     { label: "本机 Agent", value: "agent" },
 ];
+const imageApiModeOptions: Array<{ label: string; value: ImageApiMode }> = [
+    { label: "Images API", value: "images" },
+    { label: "Responses API", value: "responses" },
+];
 
-const webdavDomainKeys: AppSyncDomainKey[] = ["canvas", "assets", "image-workbench", "video-workbench"];
+const webdavDomainKeys: AppSyncDomainKey[] = ["canvas", "assets", "image-workbench", "video-workbench", "workflows"];
 const webdavDomainLabels: Record<AppSyncDomainKey, string> = {
     canvas: "画布",
     assets: "我的素材",
     "image-workbench": "生图工作台",
     "video-workbench": "视频创作台",
+    workflows: "创意工作流",
 };
 
 function createWebdavDomainProgress(): Record<AppSyncDomainKey, WebdavDomainProgress> {
@@ -276,7 +282,7 @@ export function AppConfigModal() {
         try {
             const result = await syncAppDataToWebdav(webdav, updateWebdavProgress);
             updateWebdavConfig("lastSyncedAt", result.syncedAt);
-            message.success(`同步完成：${result.projects} 个画布，${result.assets} 个素材，${result.imageLogs + result.videoLogs} 条记录，本次上传 ${result.uploadedFiles} 个文件 ${formatBytes(result.uploadedBytes)}`);
+            message.success(`同步完成：${result.projects} 个画布，${result.assets} 个素材，${result.workflows} 个工作流，${result.imageLogs + result.videoLogs} 条记录，本次上传 ${result.uploadedFiles} 个文件 ${formatBytes(result.uploadedBytes)}`);
         } catch (error) {
             setWebdavSyncStatus(error instanceof Error ? error.message : "WebDAV 同步失败");
             message.error(error instanceof Error ? error.message : "WebDAV 同步失败");
@@ -355,6 +361,44 @@ export function AppConfigModal() {
                                             <Form.Item label="网络方式" className="mb-0 md:col-span-2">
                                                 <Segmented block value={channel.requestMode || "auto"} options={requestModeOptions} onChange={(value) => updateChannel(channel.id, { requestMode: value as ChannelRequestMode })} />
                                             </Form.Item>
+                                            {channel.apiFormat === "openai" ? (
+                                                <>
+                                                    <Form.Item label="图片接口" className="mb-0">
+                                                        <Segmented block value={channel.imageApiMode || "images"} options={imageApiModeOptions} onChange={(value) => updateChannel(channel.id, { imageApiMode: value as ImageApiMode })} />
+                                                    </Form.Item>
+                                                    {channel.imageApiMode !== "responses" ? (
+                                                        <Form.Item label="图片返回" className="mb-0">
+                                                            <Segmented
+                                                                block
+                                                                value={channel.responseFormatB64Json === false ? "url" : "b64_json"}
+                                                                options={[
+                                                                    { label: "Base64", value: "b64_json" },
+                                                                    { label: "URL", value: "url" },
+                                                                ]}
+                                                                onChange={(value) => updateChannel(channel.id, { responseFormatB64Json: value === "b64_json" })}
+                                                            />
+                                                        </Form.Item>
+                                                    ) : (
+                                                        <Form.Item label="Responses 主模型" className="mb-0">
+                                                            <Select
+                                                                showSearch
+                                                                value={channel.responsesImageModel || undefined}
+                                                                placeholder="选择支持图片工具的主模型"
+                                                                options={channel.models.map((model) => ({ label: model, value: model }))}
+                                                                onChange={(value) => updateChannel(channel.id, { responsesImageModel: value })}
+                                                            />
+                                                        </Form.Item>
+                                                    )}
+                                                    <Form.Item label="流式图片" className="mb-0">
+                                                        <Switch checked={Boolean(channel.streamImages)} onChange={(checked) => updateChannel(channel.id, { streamImages: checked })} />
+                                                    </Form.Item>
+                                                    {channel.streamImages ? (
+                                                        <Form.Item label="中间图数量" className="mb-0">
+                                                            <InputNumber className="w-full" min={0} max={3} precision={0} value={channel.streamPartialImages ?? 1} onChange={(value) => updateChannel(channel.id, { streamPartialImages: value ?? 1 })} />
+                                                        </Form.Item>
+                                                    ) : null}
+                                                </>
+                                            ) : null}
                                         </div>
                                         <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                                             <span className="text-xs text-stone-500">已保存 {channel.models.length} 个模型</span>

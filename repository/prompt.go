@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/basketikun/infinite-canvas/model"
 	"gorm.io/gorm"
@@ -52,6 +53,26 @@ func SavePromptCategory(item model.PromptCategory) error {
 	return db.Save(&item).Error
 }
 
+// UpdatePromptCategorySource 仅在分类仍指向指定旧地址时原子更新内置远程源。
+func UpdatePromptCategorySource(category, oldURL, newURL, oldDescription, newDescription, updatedAt string) (bool, error) {
+	db, err := DB()
+	if err != nil {
+		return false, err
+	}
+	return updatePromptCategorySource(db, category, oldURL, newURL, oldDescription, newDescription, updatedAt)
+}
+
+func updatePromptCategorySource(db *gorm.DB, category, oldURL, newURL, oldDescription, newDescription, updatedAt string) (bool, error) {
+	result := db.Model(&model.PromptCategory{}).
+		Where("category = ? AND github_url = ? AND remote = ?", category, oldURL, true).
+		Updates(map[string]any{
+			"github_url":  newURL,
+			"description": gorm.Expr("CASE WHEN description = ? THEN ? ELSE description END", oldDescription, newDescription),
+			"updated_at":  updatedAt,
+		})
+	return result.RowsAffected > 0, result.Error
+}
+
 // DeletePromptCategory 删除指定提示词分类。
 func DeletePromptCategory(category string) error {
 	db, err := DB()
@@ -72,6 +93,36 @@ func CountPromptsByCategory(category string) (int64, error) {
 		return 0, err
 	}
 	return count, nil
+}
+
+// PromptCategoryNeedsRepair 检查内置同步项是否缺失或仍引用旧远程地址。
+func PromptCategoryNeedsRepair(category, remoteURL string) (bool, error) {
+	db, err := DB()
+	if err != nil {
+		return false, err
+	}
+	return promptCategoryNeedsRepair(db, category, remoteURL)
+}
+
+func promptCategoryNeedsRepair(db *gorm.DB, category, remoteURL string) (bool, error) {
+	if category == "" {
+		return false, nil
+	}
+	var items []model.Prompt
+	if err := db.Select("id", "cover_url", "preview").Where("category = ?", category).Find(&items).Error; err != nil {
+		return false, err
+	}
+	hasSyncedItem := false
+	for _, item := range items {
+		if !isSyncedPromptID(category, item.ID) {
+			continue
+		}
+		hasSyncedItem = true
+		if remoteURL != "" && (strings.Contains(item.CoverURL, remoteURL) || strings.Contains(item.Preview, remoteURL)) {
+			return true, nil
+		}
+	}
+	return !hasSyncedItem, nil
 }
 
 // ListPrompts 按查询条件返回提示词分页列表。
@@ -160,18 +211,48 @@ func ReplacePromptCategory(category model.PromptCategory, items []model.Prompt) 
 		return err
 	}
 	return db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("category = ?", category.Category).Delete(&model.Prompt{}).Error; err != nil {
+		return replacePromptCategory(tx, category, items)
+	})
+}
+
+func replacePromptCategory(tx *gorm.DB, category model.PromptCategory, items []model.Prompt) error {
+	var existing []model.Prompt
+	if err := tx.Select("id").Where("category = ?", category.Category).Find(&existing).Error; err != nil {
+		return err
+	}
+	syncedIDs := make([]string, 0, len(existing))
+	for _, item := range existing {
+		if isSyncedPromptID(category.Category, item.ID) {
+			syncedIDs = append(syncedIDs, item.ID)
+		}
+	}
+	if len(syncedIDs) > 0 {
+		if err := tx.Where("id IN ?", syncedIDs).Delete(&model.Prompt{}).Error; err != nil {
 			return err
 		}
-		if len(items) == 0 {
-			return nil
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	for i := range items {
+		items[i].Category = category.Category
+		items[i].GithubURL = ""
+	}
+	return tx.Create(&items).Error
+}
+
+// isSyncedPromptID 识别内置同步器生成的“分类-数字”ID，本地新增项使用 UUID，不应被远程同步删除。
+func isSyncedPromptID(category, id string) bool {
+	suffix, found := strings.CutPrefix(id, category+"-")
+	if !found || suffix == "" {
+		return false
+	}
+	for _, char := range suffix {
+		if char < '0' || char > '9' {
+			return false
 		}
-		for i := range items {
-			items[i].Category = category.Category
-			items[i].GithubURL = ""
-		}
-		return tx.Create(&items).Error
-	})
+	}
+	return true
 }
 
 // applyPromptFilters 应用提示词列表的搜索条件。
