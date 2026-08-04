@@ -1,7 +1,8 @@
 type JsonRecord = Record<string, unknown>;
 
 const MAX_STREAM_CHARACTERS = 256 * 1024 * 1024;
-const MAX_EVENT_CHARACTERS = 32 * 1024 * 1024;
+// 4K PNG 的 Base64 最终事件可能超过 32 MiB，仍受整条流 256 MiB 上限约束。
+const MAX_EVENT_CHARACTERS = 64 * 1024 * 1024;
 const MAX_EVENT_COUNT = 4096;
 
 export function isEventStreamResponse(response: Response) {
@@ -157,7 +158,7 @@ function collectImageStrings(value: unknown, depth = 0): string[] {
 }
 
 function normalizeBase64Image(value: string, mime: string) {
-    return value.startsWith("data:") || /^https?:\/\//i.test(value) ? value : `data:${mime};base64,${value}`;
+    return value.startsWith("data:") || /^(?:https?:\/\/|\/|\.\.?\/)/i.test(value) ? value : `data:${mime};base64,${value}`;
 }
 
 function hasImageValue(record: JsonRecord) {

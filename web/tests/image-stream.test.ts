@@ -80,6 +80,11 @@ test("Responses API 解析完整 image_generation_call", () => {
     assert.deepEqual(images, ["data:image/png;base64,AAA=", "data:image/png;base64,BBB=", "https://cdn.example.com/image.png"]);
 });
 
+test("Responses API 保留中转站返回的相对图片 URL", () => {
+    const images = parseResponsesImageData({ output: [{ type: "image_generation_call", result: { url: "/generated/image.png" } }] });
+    assert.deepEqual(images, ["/generated/image.png"]);
+});
+
 test("Responses API 流优先完整输出并可回退到最后中间图", async () => {
     const completed = await parseResponsesApiStream(
         eventStream([

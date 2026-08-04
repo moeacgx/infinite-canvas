@@ -103,6 +103,47 @@ test("Images URL 返回设置显式发送 response_format=url", async (context) 
     assert.equal(requestBody?.stream, true);
 });
 
+test("Images 流式多图拆成单图请求并限制并发", async (context) => {
+    const originalFetch = globalThis.fetch;
+    context.after(() => {
+        globalThis.fetch = originalFetch;
+    });
+
+    let activeRequests = 0;
+    let maxActiveRequests = 0;
+    const requestBodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = async (_input, init) => {
+        activeRequests += 1;
+        maxActiveRequests = Math.max(maxActiveRequests, activeRequests);
+        requestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        activeRequests -= 1;
+        return new Response('data: {"type":"image_generation.completed","b64_json":"SU1BR0U="}\n\ndata: [DONE]\n\n', {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+        });
+    };
+
+    const channel = createModelChannel({
+        id: "images-stream",
+        baseUrl: "https://relay.example.com",
+        apiKey: "test-key",
+        apiFormat: "openai",
+        requestMode: "direct",
+        streamImages: true,
+        models: ["gpt-image-2"],
+    });
+    const selectedModel = encodeChannelModel("images-stream", "gpt-image-2");
+    const config = withLocalChannels({ ...defaultConfig, channelMode: "local", imageModel: selectedModel, imageModels: [selectedModel], count: "6" }, [channel]);
+
+    const images = await requestGeneration(config, "PROMPT");
+
+    assert.equal(images.length, 6);
+    assert.equal(requestBodies.length, 6);
+    assert.equal(maxActiveRequests, 3);
+    assert.ok(requestBodies.every((body) => body.n === 1));
+});
+
 test("图片比例换算保持常见比例并遵守最大边长", async (context) => {
     const originalFetch = globalThis.fetch;
     context.after(() => {

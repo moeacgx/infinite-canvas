@@ -76,7 +76,7 @@ const IMAGE_MAX_RATIO = 3;
 const IMAGE_OUTPUT_FORMAT = "png";
 const NEW_API_IMAGE_TASK_POLL_INTERVAL_MS = 2500;
 const NEW_API_IMAGE_TASK_MAX_ATTEMPTS = 240;
-const RESPONSES_IMAGE_MAX_CONCURRENCY = 3;
+const IMAGE_REQUEST_MAX_CONCURRENCY = 3;
 
 function normalizeQuality(quality: string) {
     const value = quality.trim().toLowerCase();
@@ -206,8 +206,18 @@ async function resolveImageDataUrl(item: Record<string, unknown>, config?: AiCon
 
 async function resolveImageValue(value: string, config?: AiConfig, signal?: AbortSignal) {
     if (config && isNewApiConfig(config) && value.startsWith("/canvas/v1/images/tasks/")) return downloadNewApiImageContent(config, value);
-    if (config?.channelMode === "local" && /^https?:/i.test(value)) return downloadLocalImageContent(config, value, signal);
-    return value;
+    const resolvedValue = config ? resolveRelativeImageUrl(config.baseUrl, value) : value;
+    if (config?.channelMode === "local" && /^https?:/i.test(resolvedValue)) return downloadLocalImageContent(config, resolvedValue, signal);
+    return resolvedValue;
+}
+
+function resolveRelativeImageUrl(baseUrl: string, value: string) {
+    if (!/^(?:\/|\.\.?\/)/.test(value)) return value;
+    try {
+        return new URL(value, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
+    } catch {
+        return value;
+    }
 }
 
 async function parseImagePayload(payload: ImageApiResponse, config?: AiConfig, signal?: AbortSignal) {
@@ -298,6 +308,18 @@ async function requestImagesApiStream(config: AiConfig, path: "/images/generatio
     return parseImagePayload((streamed.resultPayload || { data: streamed.imageItems }) as ImageApiResponse, config, signal);
 }
 
+async function requestImagesApiStreams(config: AiConfig, path: "/images/generations" | "/images/edits", body: Record<string, unknown> | FormData, n: number, signal?: AbortSignal) {
+    return requestConcurrentImages(n, signal, () => requestImagesApiStream(config, path, singleImageRequestBody(body), signal));
+}
+
+function singleImageRequestBody(body: Record<string, unknown> | FormData) {
+    if (!(body instanceof FormData)) return { ...body, n: 1 };
+    const next = new FormData();
+    body.forEach((value, key) => next.append(key, value));
+    next.set("n", "1");
+    return next;
+}
+
 async function requestResponsesImages(
     config: AiConfig,
     prompt: string,
@@ -310,16 +332,26 @@ async function requestResponsesImages(
     signal?: AbortSignal,
 ) {
     const inputImages = await Promise.all(references.map((image) => imageToDataUrl(image)));
+    return requestConcurrentImages(n, signal, () => requestResponsesImage(config, prompt, inputImages, quality, size, background, channelOptions, signal));
+}
+
+async function requestConcurrentImages(n: number, signal: AbortSignal | undefined, request: () => Promise<GeneratedImage[]>) {
     const results: Array<PromiseSettledResult<GeneratedImage[]>> = [];
-    for (let offset = 0; offset < n; offset += RESPONSES_IMAGE_MAX_CONCURRENCY) {
-        const batchSize = Math.min(RESPONSES_IMAGE_MAX_CONCURRENCY, n - offset);
-        const batch = Array.from({ length: batchSize }, () => requestResponsesImage(config, prompt, inputImages, quality, size, background, channelOptions, signal));
+    for (let offset = 0; offset < n; offset += IMAGE_REQUEST_MAX_CONCURRENCY) {
+        throwIfImageRequestAborted(signal);
+        const batchSize = Math.min(IMAGE_REQUEST_MAX_CONCURRENCY, n - offset);
+        const batch = Array.from({ length: batchSize }, request);
         results.push(...(await Promise.allSettled(batch)));
     }
+    throwIfImageRequestAborted(signal);
     const images = results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
     if (images.length) return images;
     const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
-    throw failure?.reason || new Error("Responses API 没有返回图片");
+    throw failure?.reason || new Error("图片接口没有返回图片");
+}
+
+function throwIfImageRequestAborted(signal?: AbortSignal) {
+    if (signal?.aborted) throw new DOMException("请求已取消", "AbortError");
 }
 
 async function requestResponsesImage(config: AiConfig, prompt: string, inputImages: string[], quality: string | undefined, size: string | undefined, background: string | undefined, channelOptions: ImageChannelOptions, signal?: AbortSignal) {
@@ -445,7 +477,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
             return images;
         }
         if (channelOptions.stream) {
-            const images = await requestImagesApiStream(requestConfig, "/images/generations", { ...payload, stream: true, partial_images: channelOptions.partialImages }, options?.signal);
+            const images = await requestImagesApiStreams(requestConfig, "/images/generations", { ...payload, stream: true, partial_images: channelOptions.partialImages }, n, options?.signal);
             refreshRemoteUser(requestConfig);
             return images;
         }
@@ -600,7 +632,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
 
     try {
         if (channelOptions.stream) {
-            const images = await requestImagesApiStream(requestConfig, "/images/edits", formData, options?.signal);
+            const images = await requestImagesApiStreams(requestConfig, "/images/edits", formData, n, options?.signal);
             refreshRemoteUser(requestConfig);
             return images;
         }
