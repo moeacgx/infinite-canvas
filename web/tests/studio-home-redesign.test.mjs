@@ -16,11 +16,13 @@ test("生图和视频工作台默认使用底部布局并持久化用户选择",
         assert.match(source, new RegExp(key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
         assert.match(source, /window\.localStorage\.getItem\(WORKBENCH_LAYOUT_KEY\)/);
         assert.match(source, /window\.localStorage\.setItem\(WORKBENCH_LAYOUT_KEY, layout\)/);
-        assert.match(source, /workbenchLayout === "bottom" \? "h-full overflow-y-auto pb-56 sm:pb-52"/);
         assert.match(source, /nativeEvent\.isComposing/);
         assert.match(source, /切换到侧边工作台/);
         assert.match(source, new RegExp(title));
     }
+
+    assert.match(imageSource, /workbenchLayout === "bottom" \? "h-full overflow-y-auto pb-72 md:pb-60 lg:pb-60"/);
+    assert.match(videoSource, /workbenchLayout === "bottom" \? "h-full overflow-y-auto pb-56 sm:pb-52 lg:pb-52"/);
 });
 
 test("独立 AI 对话与 Prompt Skill 入口已移除，画布助手能力不受影响", () => {

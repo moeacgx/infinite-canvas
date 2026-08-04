@@ -568,7 +568,7 @@ export default function VideoPage() {
                     </div>
 
                     <div
-                        className={`${workbenchLayout === "bottom" ? "h-full overflow-y-auto pb-56 sm:pb-52" : ""} thin-scrollbar min-w-0 rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:min-h-0 lg:overflow-y-auto lg:p-5`}
+                        className={`${workbenchLayout === "bottom" ? "h-full overflow-y-auto pb-56 sm:pb-52 lg:pb-52" : ""} thin-scrollbar min-w-0 rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:min-h-0 lg:overflow-y-auto lg:p-5`}
                     >
                         <div className="mb-4 flex items-center justify-between gap-3">
                             <h2 className="text-xl font-semibold">生成结果</h2>
