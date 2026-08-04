@@ -99,22 +99,29 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
     const insertReference = (reference: CanvasResourceReference) => {
         const editor = editorRef.current;
         if (!editor) return;
-        removeActiveMention();
-        const leadingSpace = document.createTextNode(" ");
+        removeActiveMention(editor);
         const chip = createReferenceChip(reference, theme, setImagePreview);
-        const trailingSpace = document.createTextNode(" ");
         const selection = window.getSelection();
-        const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+        const selectedRange = selection?.rangeCount ? selection.getRangeAt(0) : null;
+        const range = selectedRange && rangeIsInsideEditor(selectedRange, editor) ? selectedRange : null;
+        const boundary = range ? textAroundRange(range) : { before: editor.textContent || "", after: "" };
+        const spacing = referenceBoundarySpacing(boundary.before, boundary.after);
+        const leadingSpace = spacing.before ? document.createTextNode(spacing.before) : null;
+        const trailingSpace = spacing.after ? document.createTextNode(spacing.after) : null;
+        const fragment = document.createDocumentFragment();
+        if (leadingSpace) fragment.append(leadingSpace);
+        fragment.append(chip);
+        if (trailingSpace) fragment.append(trailingSpace);
         if (range) {
-            range.insertNode(trailingSpace);
-            range.insertNode(chip);
-            range.insertNode(leadingSpace);
-            range.setStartAfter(trailingSpace);
+            range.deleteContents();
+            range.insertNode(fragment);
+            if (trailingSpace) range.setStart(trailingSpace, trailingSpace.data.length);
+            else range.setStartAfter(chip);
             range.collapse(true);
             selection?.removeAllRanges();
             selection?.addRange(range);
         } else {
-            editor.append(leadingSpace, chip, trailingSpace);
+            editor.append(fragment);
             placeCaretAtEnd(editor);
         }
         closeMention();
@@ -144,14 +151,19 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
                     if (!composingRef.current) syncFromEditor();
                 }}
                 onPaste={(event) => {
-                    const text = event.clipboardData.getData("text/plain");
+                    event.preventDefault();
+                    const text = normalizePromptPastedText(event.clipboardData.getData("text/plain"));
                     if (!text) return;
 
-                    event.preventDefault();
-
                     const selection = window.getSelection();
-                    const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
-                    if (!range) return;
+                    const selectedRange = selection?.rangeCount ? selection.getRangeAt(0) : null;
+                    const range = selectedRange && rangeIsInsideEditor(selectedRange, editorRef.current) ? selectedRange : null;
+                    if (!range) {
+                        editorRef.current?.append(document.createTextNode(text));
+                        if (editorRef.current) placeCaretAtEnd(editorRef.current);
+                        syncFromEditor();
+                        return;
+                    }
 
                     range.deleteContents();
 
@@ -420,15 +432,52 @@ function serializePromptNodes(nodes: NodeListOf<ChildNode>) {
     return result;
 }
 
-function removeActiveMention() {
+function removeActiveMention(editor: HTMLElement) {
     const selection = window.getSelection();
     if (!selection?.rangeCount) return;
     const range = selection.getRangeAt(0);
+    if (!rangeIsInsideEditor(range, editor)) return;
     const text = textBeforeCaret();
     const match = /@([^\s@]*)$/.exec(text);
     if (!match) return;
     range.setStart(range.startContainer, Math.max(0, range.startOffset - (match[1] || "").length - 1));
     range.deleteContents();
+}
+
+export function normalizePromptPastedText(text: string) {
+    return text.replace(/\r\n?/g, "\n");
+}
+
+export function referenceBoundarySpacing(before: string, after: string) {
+    return {
+        before: before && !/\s$/.test(before) ? " " : "",
+        after: !after || !/^\s/.test(after) ? " " : "",
+    };
+}
+
+function rangeIsInsideEditor(range: Range, editor: HTMLElement | null) {
+    return Boolean(editor && (range.commonAncestorContainer === editor || editor.contains(range.commonAncestorContainer)));
+}
+
+function textAroundRange(range: Range) {
+    const container = range.startContainer;
+    const offset = range.startOffset;
+    if (container.nodeType === Node.TEXT_NODE) {
+        const text = container.textContent || "";
+        return { before: text.slice(0, offset), after: text.slice(offset) };
+    }
+    const children = Array.from(container.childNodes);
+    return {
+        before: boundaryText(children[offset - 1], "end"),
+        after: boundaryText(children[offset], "start"),
+    };
+}
+
+function boundaryText(node: Node | undefined, edge: "start" | "end") {
+    if (!node) return "";
+    if (node instanceof HTMLElement && (node.tagName === "DIV" || node.tagName === "P" || node.tagName === "BR")) return "\n";
+    const text = node.textContent || "";
+    return edge === "start" ? text.slice(0, 1) : text.slice(-1);
 }
 
 function deleteAdjacentReference(key: string) {

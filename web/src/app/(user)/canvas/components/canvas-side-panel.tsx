@@ -40,6 +40,8 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, open, width, onClose, 
     const [closing, setClosing] = useState(false);
     const [resizing, setResizing] = useState(false);
     const rowRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+    const resizeCleanupRef = useRef<((updateState?: boolean) => void) | null>(null);
+    const normalizedWidth = Math.min(CANVAS_SIDE_PANEL_MAX_WIDTH, Math.max(CANVAS_SIDE_PANEL_MIN_WIDTH, Number(width) || CANVAS_SIDE_PANEL_MIN_WIDTH));
 
     const typeOptions = useMemo(() => {
         void registryVersion;
@@ -79,21 +81,34 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, open, width, onClose, 
         if (selectedId) rowRefs.current[selectedId]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }, [selectedNodeIds]);
 
+    useEffect(
+        () => () => {
+            resizeCleanupRef.current?.(false);
+        },
+        [],
+    );
+
     const startResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
         event.preventDefault();
+        resizeCleanupRef.current?.();
         const startX = event.clientX;
-        const startWidth = width;
+        const startWidth = normalizedWidth;
         const onMove = (moveEvent: PointerEvent) => {
             onWidthChange(Math.min(CANVAS_SIDE_PANEL_MAX_WIDTH, Math.max(CANVAS_SIDE_PANEL_MIN_WIDTH, startWidth + moveEvent.clientX - startX)));
         };
-        const onUp = () => {
+        const cleanup = (updateState = true) => {
             window.removeEventListener("pointermove", onMove);
             window.removeEventListener("pointerup", onUp);
-            setResizing(false);
+            window.removeEventListener("pointercancel", onUp);
+            resizeCleanupRef.current = null;
+            if (updateState) setResizing(false);
         };
+        const onUp = () => cleanup();
         setResizing(true);
+        resizeCleanupRef.current = cleanup;
         window.addEventListener("pointermove", onMove);
         window.addEventListener("pointerup", onUp);
+        window.addEventListener("pointercancel", onUp);
     };
 
     if (!mounted) return null;
@@ -102,13 +117,13 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, open, width, onClose, 
         <motion.div
             className="absolute inset-y-0 left-0 z-[70] flex h-full shrink-0 md:relative md:z-[60]"
             initial={{ width: 0, opacity: 0 }}
-            animate={{ width: open ? width + 1 : 0, opacity: open ? 1 : 0 }}
+            animate={{ width: open ? normalizedWidth + 1 : 0, opacity: open ? 1 : 0 }}
             transition={{ duration: resizing ? 0 : PANEL_MOTION_SECONDS, ease: [0.22, 1, 0.36, 1] }}
             style={{ overflow: "clip", pointerEvents: closing ? "none" : undefined, maxWidth: "86vw" }}
         >
             <aside
                 className="relative flex h-full shrink-0 flex-col overflow-hidden border-r shadow-xl md:shadow-none"
-                style={{ width, maxWidth: "86vw", background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
+                style={{ width: normalizedWidth, maxWidth: "86vw", background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
                 data-canvas-no-zoom
             >
                 <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b px-3" style={{ borderColor: theme.toolbar.border }}>
