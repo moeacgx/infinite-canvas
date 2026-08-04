@@ -25,9 +25,7 @@ type MentionState = {
     rect: DOMRect | null;
 };
 
-type PromptToken =
-    | { type: "text"; value: string }
-    | { type: "reference"; label: string };
+type PromptToken = { type: "text"; value: string } | { type: "reference"; label: string };
 
 export function CanvasPromptChipInput({ value, references, onChange, onSubmit, className, style, placeholder }: CanvasPromptChipInputProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
@@ -236,15 +234,7 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
                 }}
             />
 
-            {mention && candidates.length ? (
-                <MentionMenu
-                    rect={mention.rect}
-                    references={candidates}
-                    activeIndex={Math.min(activeIndex, candidates.length - 1)}
-                    theme={theme}
-                    onSelect={insertReference}
-                />
-            ) : null}
+            {mention && candidates.length ? <MentionMenu rect={mention.rect} references={candidates} activeIndex={Math.min(activeIndex, candidates.length - 1)} theme={theme} onSelect={insertReference} /> : null}
 
             {imagePreview ? (
                 <Image
@@ -367,11 +357,7 @@ function ReferencePreview({ reference }: { reference: CanvasResourceReference })
     );
 }
 
-function createReferenceChip(
-    reference: CanvasResourceReference,
-    theme: (typeof canvasThemes)[keyof typeof canvasThemes],
-    onImagePreview: (url: string) => void,
-) {
+function createReferenceChip(reference: CanvasResourceReference, theme: (typeof canvasThemes)[keyof typeof canvasThemes], onImagePreview: (url: string) => void) {
     const wrapper = document.createElement("span");
     wrapper.contentEditable = "false";
     wrapper.dataset.refLabel = reference.label;
@@ -460,17 +446,19 @@ function rangeIsInsideEditor(range: Range, editor: HTMLElement | null) {
 }
 
 function textAroundRange(range: Range) {
-    const container = range.startContainer;
-    const offset = range.startOffset;
+    return {
+        before: textAtRangeBoundary(range.startContainer, range.startOffset, "before"),
+        after: textAtRangeBoundary(range.endContainer, range.endOffset, "after"),
+    };
+}
+
+function textAtRangeBoundary(container: Node, offset: number, side: "before" | "after") {
     if (container.nodeType === Node.TEXT_NODE) {
         const text = container.textContent || "";
-        return { before: text.slice(0, offset), after: text.slice(offset) };
+        return side === "before" ? text.slice(0, offset) : text.slice(offset);
     }
     const children = Array.from(container.childNodes);
-    return {
-        before: boundaryText(children[offset - 1], "end"),
-        after: boundaryText(children[offset], "start"),
-    };
+    return side === "before" ? boundaryText(children[offset - 1], "end") : boundaryText(children[offset], "start");
 }
 
 function boundaryText(node: Node | undefined, edge: "start" | "end") {
