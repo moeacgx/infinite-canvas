@@ -23,6 +23,9 @@ func TestCollectGptImage2CasesSupportsTigerPromptLabels(t *testing.T) {
 			collectGptImage2Cases(cases, markdown)
 
 			item := cases[imageDir]
+			if item.title != "示例" {
+				t.Fatalf("title = %q", item.title)
+			}
 			if item.prompt != fmt.Sprintf("提示词 %d", index+1) {
 				t.Fatalf("prompt = %q", item.prompt)
 			}
@@ -34,6 +37,115 @@ func TestCollectGptImage2CasesSupportsTigerPromptLabels(t *testing.T) {
 				t.Fatalf("source URL fallback was not indexed")
 			}
 		})
+	}
+}
+
+func TestGptImage2CaseTitleRemovesMarkdownSourceAndByline(t *testing.T) {
+	block := "### Case 12: [电影感海报](https://x.com/example/status/12) (by [@example](https://x.com/example))\n"
+	title := gptImage2CaseTitle(block)
+	if title != "电影感海报" {
+		t.Fatalf("case title = %q", title)
+	}
+	if got := gptImage2PromptTitle("", title, 12); got != "电影感海报" {
+		t.Fatalf("prompt title = %q", got)
+	}
+	if got := gptImage2PromptTitle(" JSON 标题 ", "Markdown 标题", 12); got != "JSON 标题" {
+		t.Fatalf("record title should win, got %q", got)
+	}
+	if got := gptImage2PromptTitle("", "", 12); got != "GPT Image 2 Prompt 012" {
+		t.Fatalf("fallback title = %q", got)
+	}
+}
+
+func TestPromptCategorySyncLockSerializesSameCategoryAndCleansUp(t *testing.T) {
+	const category = "sync-lock-same-category"
+	firstUnlock := lockPromptCategorySync(category)
+	firstReleased := false
+	defer func() {
+		if !firstReleased {
+			firstUnlock()
+		}
+	}()
+
+	secondAcquired := make(chan struct{})
+	secondDone := make(chan struct{})
+	go func() {
+		unlock := lockPromptCategorySync(category)
+		close(secondAcquired)
+		unlock()
+		close(secondDone)
+	}()
+	waitForPromptCategorySyncLockUsers(t, category, 2)
+	select {
+	case <-secondAcquired:
+		t.Fatal("same-category sync acquired the lock concurrently")
+	default:
+	}
+
+	firstUnlock()
+	firstReleased = true
+	select {
+	case <-secondAcquired:
+	case <-time.After(time.Second):
+		t.Fatal("same-category sync did not acquire the released lock")
+	}
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("same-category sync did not finish")
+	}
+	waitForPromptCategorySyncLockUsers(t, category, 0)
+}
+
+func TestPromptCategorySyncLockAllowsDifferentCategories(t *testing.T) {
+	const firstCategory = "sync-lock-first-category"
+	const secondCategory = "sync-lock-second-category"
+	firstUnlock := lockPromptCategorySync(firstCategory)
+	firstReleased := false
+	defer func() {
+		if !firstReleased {
+			firstUnlock()
+		}
+	}()
+
+	secondAcquired := make(chan struct{})
+	secondDone := make(chan struct{})
+	go func() {
+		unlock := lockPromptCategorySync(secondCategory)
+		close(secondAcquired)
+		unlock()
+		close(secondDone)
+	}()
+	select {
+	case <-secondAcquired:
+	case <-time.After(time.Second):
+		t.Fatal("different-category sync was blocked")
+	}
+	<-secondDone
+	firstUnlock()
+	firstReleased = true
+	waitForPromptCategorySyncLockUsers(t, firstCategory, 0)
+	waitForPromptCategorySyncLockUsers(t, secondCategory, 0)
+}
+
+func waitForPromptCategorySyncLockUsers(t *testing.T, category string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		promptCategorySyncLocks.Lock()
+		entry := promptCategorySyncLocks.entries[category]
+		got := 0
+		if entry != nil {
+			got = entry.users
+		}
+		promptCategorySyncLocks.Unlock()
+		if got == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("sync lock users for %q = %d, want %d", category, got, want)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -62,12 +174,20 @@ func TestStoreUniqueGptImage2CaseDisablesAmbiguousURLFallback(t *testing.T) {
 	}
 }
 
-func TestValidatePromptSyncItemsRejectsEmptyResult(t *testing.T) {
-	if err := validatePromptSyncItems(nil); err == nil || !strings.Contains(err.Error(), "已保留现有数据") {
+func TestValidatePromptSyncItemsRejectsUnsafeResult(t *testing.T) {
+	if err := validatePromptSyncItems("awesome-gpt-image", nil); err == nil || !strings.Contains(err.Error(), "已保留现有数据") {
 		t.Fatalf("empty sync result error = %v", err)
 	}
-	if err := validatePromptSyncItems([]model.Prompt{{ID: "one"}}); err != nil {
+	if err := validatePromptSyncItems("awesome-gpt-image", []model.Prompt{{ID: "one"}}); err != nil {
 		t.Fatalf("non-empty sync result error = %v", err)
+	}
+	tooFew := make([]model.Prompt, minGptImage2PromptItems-1)
+	if err := validatePromptSyncItems("gpt-image-2-prompts", tooFew); err == nil || !strings.Contains(err.Error(), "安全下限") {
+		t.Fatalf("small Tiger sync result error = %v", err)
+	}
+	minimum := make([]model.Prompt, minGptImage2PromptItems)
+	if err := validatePromptSyncItems("gpt-image-2-prompts", minimum); err != nil {
+		t.Fatalf("minimum Tiger sync result error = %v", err)
 	}
 }
 
@@ -85,6 +205,9 @@ func TestTigerPromptSourceLive(t *testing.T) {
 	t.Logf("parsed %d prompts from the live Tiger source", len(items))
 	var webpURL string
 	for _, item := range items {
+		if strings.TrimSpace(item.Title) == "" {
+			t.Fatalf("prompt %q has an empty title", item.ID)
+		}
 		if item.CoverURL == "" || !strings.Contains(item.Preview, item.CoverURL) {
 			t.Fatalf("prompt %q has invalid preview: cover=%q preview=%q", item.ID, item.CoverURL, item.Preview)
 		}

@@ -53,6 +53,26 @@ func SavePromptCategory(item model.PromptCategory) error {
 	return db.Save(&item).Error
 }
 
+// UpdatePromptCategorySource 仅在分类仍指向指定旧地址时原子更新内置远程源。
+func UpdatePromptCategorySource(category, oldURL, newURL, oldDescription, newDescription, updatedAt string) (bool, error) {
+	db, err := DB()
+	if err != nil {
+		return false, err
+	}
+	return updatePromptCategorySource(db, category, oldURL, newURL, oldDescription, newDescription, updatedAt)
+}
+
+func updatePromptCategorySource(db *gorm.DB, category, oldURL, newURL, oldDescription, newDescription, updatedAt string) (bool, error) {
+	result := db.Model(&model.PromptCategory{}).
+		Where("category = ? AND github_url = ? AND remote = ?", category, oldURL, true).
+		Updates(map[string]any{
+			"github_url":  newURL,
+			"description": gorm.Expr("CASE WHEN description = ? THEN ? ELSE description END", oldDescription, newDescription),
+			"updated_at":  updatedAt,
+		})
+	return result.RowsAffected > 0, result.Error
+}
+
 // DeletePromptCategory 删除指定提示词分类。
 func DeletePromptCategory(category string) error {
 	db, err := DB()
@@ -73,6 +93,36 @@ func CountPromptsByCategory(category string) (int64, error) {
 		return 0, err
 	}
 	return count, nil
+}
+
+// PromptCategoryNeedsRepair 检查内置同步项是否缺失或仍引用旧远程地址。
+func PromptCategoryNeedsRepair(category, remoteURL string) (bool, error) {
+	db, err := DB()
+	if err != nil {
+		return false, err
+	}
+	return promptCategoryNeedsRepair(db, category, remoteURL)
+}
+
+func promptCategoryNeedsRepair(db *gorm.DB, category, remoteURL string) (bool, error) {
+	if category == "" {
+		return false, nil
+	}
+	var items []model.Prompt
+	if err := db.Select("id", "cover_url", "preview").Where("category = ?", category).Find(&items).Error; err != nil {
+		return false, err
+	}
+	hasSyncedItem := false
+	for _, item := range items {
+		if !isSyncedPromptID(category, item.ID) {
+			continue
+		}
+		hasSyncedItem = true
+		if remoteURL != "" && (strings.Contains(item.CoverURL, remoteURL) || strings.Contains(item.Preview, remoteURL)) {
+			return true, nil
+		}
+	}
+	return !hasSyncedItem, nil
 }
 
 // ListPrompts 按查询条件返回提示词分页列表。

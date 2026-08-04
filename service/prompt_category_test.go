@@ -53,3 +53,28 @@ func TestMigrateDefaultPromptCategorySourcePreservesAdminChanges(t *testing.T) {
 		t.Fatalf("custom description was overwritten: %q", customDescription.Description)
 	}
 }
+
+func TestIsCurrentGptImage2PromptCategoryRejectsCustomCategories(t *testing.T) {
+	current := model.PromptCategory{
+		Category:  "gpt-image-2-prompts",
+		GithubURL: "https://github.com/tigerowo/awesome-gpt-image-2-prompts",
+		Remote:    true,
+	}
+	tests := []struct {
+		name     string
+		existing model.PromptCategory
+		want     bool
+	}{
+		{name: "当前内置源", existing: current, want: true},
+		{name: "自定义地址", existing: model.PromptCategory{Category: current.Category, GithubURL: "https://example.com/custom", Remote: true}},
+		{name: "本地分类", existing: model.PromptCategory{Category: current.Category, GithubURL: current.GithubURL, Remote: false}},
+		{name: "其他分类", existing: model.PromptCategory{Category: "custom", GithubURL: current.GithubURL, Remote: true}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isCurrentGptImage2PromptCategory(test.existing, current); got != test.want {
+				t.Fatalf("isCurrentGptImage2PromptCategory() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}

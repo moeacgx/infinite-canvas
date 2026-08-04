@@ -3,11 +3,13 @@ package service
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/basketikun/infinite-canvas/model"
@@ -22,6 +24,7 @@ const (
 	youMindNanoBananaProRawBase  = "https://raw.githubusercontent.com/YouMind-OpenLab/awesome-nano-banana-pro-prompts/main"
 	davidWuGptImage2RawBase      = "https://raw.githubusercontent.com/davidwuw0811-boop/awesome-gpt-image2-prompts/main"
 	maxPromptSourceBytes         = 16 << 20
+	minGptImage2PromptItems      = 800
 )
 
 var gptImage2CaseFiles = []string{"README.md", "cases/ad-creative.md", "cases/character.md", "cases/comparison.md", "cases/ecommerce.md", "cases/portrait.md", "cases/poster.md", "cases/ui.md"}
@@ -37,15 +40,29 @@ type gptImage2Data struct {
 }
 
 type gptImage2Case struct {
+	title  string
 	prompt string
 	image  string
 }
 
+type promptCategorySyncLock struct {
+	mu    sync.Mutex
+	users int
+}
+
+var promptCategorySyncLocks = struct {
+	sync.Mutex
+	entries map[string]*promptCategorySyncLock
+}{entries: map[string]*promptCategorySyncLock{}}
+
 var (
-	gptImage2CaseHeadingPattern = regexp.MustCompile(`(?m)^### Case\s+\d+:`)
-	gptImage2PromptPattern      = regexp.MustCompile(`(?is)\*\*\s*(?:Prompt|提示词)(?:\s*\d+)?(?:\s*\([^\r\n)]*\))?\s*(?::|：)?\s*\*\*\s*(?::|：)?\s*` + "```" + `[^\r\n]*\r?\n(.*?)\r?\n` + "```")
-	gptImage2ImageDirPattern    = regexp.MustCompile(`images/[-\w]+_case\d+`)
-	gptImage2SourceURLPattern   = regexp.MustCompile(`https://(?:x\.com|twitter\.com)/[A-Za-z0-9_]+/status/\d+`)
+	gptImage2CaseHeadingPattern  = regexp.MustCompile(`(?m)^### Case\s+\d+:`)
+	gptImage2CaseTitlePattern    = regexp.MustCompile(`(?m)^### Case\s+\d+:\s*(.+?)\s*$`)
+	gptImage2PromptPattern       = regexp.MustCompile(`(?is)\*\*\s*(?:Prompt|提示词)(?:\s*\d+)?(?:\s*\([^\r\n)]*\))?\s*(?::|：)?\s*\*\*\s*(?::|：)?\s*` + "```" + `[^\r\n]*\r?\n(.*?)\r?\n` + "```")
+	gptImage2ImageDirPattern     = regexp.MustCompile(`images/[-\w]+_case\d+`)
+	gptImage2SourceURLPattern    = regexp.MustCompile(`https://(?:x\.com|twitter\.com)/[A-Za-z0-9_]+/status/\d+`)
+	gptImage2MarkdownLinkPattern = regexp.MustCompile(`\[([^\]]+)]\([^)]+\)`)
+	gptImage2BylinePattern       = regexp.MustCompile(`(?i)\s+\(by\b.*$`)
 )
 
 type davidWuGptImage2Prompt struct {
@@ -63,6 +80,9 @@ type davidWuGptImage2Prompt struct {
 }
 
 func SyncPromptCategory(category string) ([]model.PromptCategory, error) {
+	unlock := lockPromptCategorySync(category)
+	defer unlock()
+
 	item, found, err := repository.GetPromptCategoryByCode(category)
 	if err != nil {
 		return nil, err
@@ -77,13 +97,35 @@ func SyncPromptCategory(category string) ([]model.PromptCategory, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := validatePromptSyncItems(items); err != nil {
+	if err := validatePromptSyncItems(item.Category, items); err != nil {
 		return nil, err
 	}
 	if err := repository.ReplacePromptCategory(item, items); err != nil {
 		return nil, err
 	}
 	return repository.ListPromptCategories()
+}
+
+func lockPromptCategorySync(category string) func() {
+	promptCategorySyncLocks.Lock()
+	entry := promptCategorySyncLocks.entries[category]
+	if entry == nil {
+		entry = &promptCategorySyncLock{}
+		promptCategorySyncLocks.entries[category] = entry
+	}
+	entry.users++
+	promptCategorySyncLocks.Unlock()
+
+	entry.mu.Lock()
+	return func() {
+		entry.mu.Unlock()
+		promptCategorySyncLocks.Lock()
+		entry.users--
+		if entry.users == 0 && promptCategorySyncLocks.entries[category] == entry {
+			delete(promptCategorySyncLocks.entries, category)
+		}
+		promptCategorySyncLocks.Unlock()
+	}
 }
 
 func buildPromptCategory(category string) ([]model.Prompt, error) {
@@ -125,9 +167,12 @@ func fetchText(baseURL, file string) (string, error) {
 	return string(data), nil
 }
 
-func validatePromptSyncItems(items []model.Prompt) error {
+func validatePromptSyncItems(category string, items []model.Prompt) error {
 	if len(items) == 0 {
 		return errors.New("远程提示词源解析结果为空，已保留现有数据")
+	}
+	if category == "gpt-image-2-prompts" && len(items) < minGptImage2PromptItems {
+		return fmt.Errorf("远程提示词源仅解析出 %d 条，低于安全下限 %d，已保留现有数据", len(items), minGptImage2PromptItems)
 	}
 	return nil
 }
@@ -155,8 +200,9 @@ func buildGptImage2Prompts() ([]model.Prompt, error) {
 		if entry.prompt == "" {
 			continue
 		}
+		title := gptImage2PromptTitle(item.Title, entry.title, len(items)+1)
 		date := normalizePromptTime(item.AddedAt)
-		items = append(items, model.Prompt{ID: "gpt-image-2-prompts-" + leftPad(len(items)+1), Title: item.Title, CoverURL: entry.image, Prompt: entry.prompt, Tags: tagsFromCategory(item.Category), CreatedAt: date, UpdatedAt: date, Preview: markdownPreview([]string{entry.image})})
+		items = append(items, model.Prompt{ID: "gpt-image-2-prompts-" + leftPad(len(items)+1), Title: title, CoverURL: entry.image, Prompt: entry.prompt, Tags: tagsFromCategory(item.Category), CreatedAt: date, UpdatedAt: date, Preview: markdownPreview([]string{entry.image})})
 	}
 	return items, nil
 }
@@ -188,7 +234,7 @@ func collectGptImage2Cases(cases map[string]gptImage2Case, markdown string) {
 				break
 			}
 		}
-		entry := gptImage2Case{prompt: prompt, image: image}
+		entry := gptImage2Case{title: gptImage2CaseTitle(block), prompt: prompt, image: image}
 		if imageDir != "" {
 			cases[imageDir] = entry
 		}
@@ -196,6 +242,26 @@ func collectGptImage2Cases(cases map[string]gptImage2Case, markdown string) {
 			storeUniqueGptImage2Case(cases, sourceURL, entry)
 		}
 	}
+}
+
+func gptImage2CaseTitle(block string) string {
+	match := gptImage2CaseTitlePattern.FindStringSubmatch(block)
+	if len(match) < 2 {
+		return ""
+	}
+	title := gptImage2MarkdownLinkPattern.ReplaceAllString(strings.TrimSpace(match[1]), "$1")
+	title = gptImage2BylinePattern.ReplaceAllString(title, "")
+	return strings.TrimSpace(title)
+}
+
+func gptImage2PromptTitle(recordTitle, caseTitle string, sequence int) string {
+	if title := strings.TrimSpace(recordTitle); title != "" {
+		return title
+	}
+	if title := strings.TrimSpace(caseTitle); title != "" {
+		return title
+	}
+	return "GPT Image 2 Prompt " + leftPad(sequence)
 }
 
 func splitGptImage2CaseBlocks(markdown string) []string {
