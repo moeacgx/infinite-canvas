@@ -9,7 +9,6 @@ const geminiSource = readFileSync(new URL("../services/api/gemini.ts", import.me
 const imageSource = readFileSync(new URL("../services/api/image.ts", import.meta.url), "utf8");
 const audioSource = readFileSync(new URL("../services/api/audio.ts", import.meta.url), "utf8");
 const videoSource = readFileSync(new URL("../services/api/video.ts", import.meta.url), "utf8");
-const agentSource = readFileSync(new URL("../services/agent/agent-engine.ts", import.meta.url), "utf8");
 
 test("本地直连支持多渠道并用渠道前缀区分同名模型", () => {
     assert.match(storeSource, /export type ApiCallFormat = "openai" \| "gemini"/);
@@ -45,7 +44,7 @@ test("Gemini 调用支持模型列表、SSE、图片与工具调用签名", () =
 });
 
 test("所有生成入口都会先解析本地模型所属渠道", () => {
-    for (const source of [imageSource, audioSource, videoSource, agentSource]) {
+    for (const source of [imageSource, audioSource, videoSource]) {
         assert.match(source, /resolveModelRequestConfig/);
     }
 });

@@ -1,32 +1,52 @@
 "use client";
 
-import { ArrowRight } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
-import { App, Button, Image, Tag } from "antd";
+import { ArrowRight, ArrowUp, ChevronDown, ImagePlus, Video } from "lucide-react";
+import { type KeyboardEvent, useEffect, useState } from "react";
+import { App, Button, Dropdown, Image, Tag } from "antd";
+import { useRouter } from "next/navigation";
 
 import { fetchPrompts, type Prompt } from "@/services/api/prompts";
-import { navigationTools } from "@/constant/navigation-tools";
 import { cn } from "@/lib/utils";
+import { useConfigStore } from "@/stores/use-config-store";
+import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
+import { HomeBannerCarousel, type HomeBanner } from "./home-banner-carousel";
 
-function Highlighter({ action, color, children }: { action: "highlight" | "underline"; color: string; children: ReactNode }) {
-    return (
-        <span className="relative inline-block px-1">
-            {action === "highlight" ? (
-                <span className="absolute inset-x-0 bottom-0 top-1 rounded-sm opacity-45" style={{ backgroundColor: color }} />
-            ) : (
-                <span className="absolute inset-x-0 bottom-0 h-1 rounded-full opacity-80" style={{ backgroundColor: color }} />
-            )}
-            <span className="relative font-medium text-stone-800 dark:text-stone-200">{children}</span>
-        </span>
-    );
-}
+const BANNER_ROOT = "https://gcore.jsdelivr.net/gh/tigerowo/infinite-canvas@v0.5.0/web/public/banners";
+const HOME_BANNERS: HomeBanner[] = [
+    { imageUrl: `${BANNER_ROOT}/agent.webp`, videoUrl: `${BANNER_ROOT}/agent.webm`, alt: "Agent 一句话成片功能演示" },
+    { imageUrl: `${BANNER_ROOT}/panorama.webp`, alt: "全景图生成与查看功能演示" },
+    { imageUrl: `${BANNER_ROOT}/3ddirector.webp`, alt: "3D 导演台与下界轴功能演示" },
+];
+
+type QuickCreateMode = "image" | "video";
+
+const IMAGE_PRESETS = [
+    { key: "1:1", size: "1:1", label: "自动 · 1:1" },
+    { key: "16:9", size: "16:9", label: "自动 · 16:9" },
+    { key: "9:16", size: "9:16", label: "自动 · 9:16" },
+    { key: "3:2", size: "3:2", label: "自动 · 3:2" },
+] as const;
+
+const VIDEO_PRESETS = [
+    { key: "720-landscape", size: "1280x720", quality: "720", label: "720p · 横屏" },
+    { key: "720-portrait", size: "720x1280", quality: "720", label: "720p · 竖屏" },
+    { key: "1080-landscape", size: "1920x1080", quality: "1080", label: "1080p · 横屏" },
+    { key: "1080-portrait", size: "1080x1920", quality: "1080", label: "1080p · 竖屏" },
+] as const;
 
 export default function IndexPage() {
     const { message } = App.useApp();
-    const [primaryTool] = navigationTools;
+    const router = useRouter();
+    const updateConfig = useConfigStore((state) => state.updateConfig);
+    const dispatchImage = useWorkbenchAgentStore((state) => state.dispatchImage);
+    const dispatchVideo = useWorkbenchAgentStore((state) => state.dispatchVideo);
     const [promptShowcase, setPromptShowcase] = useState<Prompt[]>([]);
     const [previewIndex, setPreviewIndex] = useState(0);
     const [previewOpen, setPreviewOpen] = useState(false);
+    const [quickPrompt, setQuickPrompt] = useState("");
+    const [quickMode, setQuickMode] = useState<QuickCreateMode>("image");
+    const [imagePreset, setImagePreset] = useState<(typeof IMAGE_PRESETS)[number]>(IMAGE_PRESETS[0]);
+    const [videoPreset, setVideoPreset] = useState<(typeof VIDEO_PRESETS)[number]>(VIDEO_PRESETS[0]);
 
     useEffect(() => {
         void fetchPrompts({ pageSize: 12 })
@@ -34,34 +54,127 @@ export default function IndexPage() {
             .catch((error) => message.error(error instanceof Error ? error.message : "获取提示词失败"));
     }, [message]);
 
-    return (
-        <main className="relative h-full overflow-y-auto bg-background bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:16px_16px] text-stone-950 dark:bg-[radial-gradient(rgba(245,245,244,.18)_1px,transparent_1px)] dark:text-stone-100">
-            <section className="relative mx-auto min-h-[calc(100vh-4rem)] max-w-7xl overflow-hidden px-6">
-                <div className="pointer-events-none absolute left-[15%] top-24 size-20 rounded-full border border-dashed border-stone-200 dark:border-stone-800" />
-                <div className="pointer-events-none absolute right-[23%] top-[48%] size-20 rounded-full border border-dashed border-stone-200 dark:border-stone-800" />
+    const openWorkbench = () => {
+        const prompt = quickPrompt.trim();
+        if (!prompt) {
+            message.info("先描述一下你想创作的画面");
+            return;
+        }
+        if (quickMode === "image") {
+            updateConfig("size", imagePreset.size);
+            dispatchImage({ prompt, run: false });
+            router.push("/image");
+            return;
+        }
+        updateConfig("size", videoPreset.size);
+        updateConfig("vquality", videoPreset.quality);
+        dispatchVideo({ prompt, run: false });
+        router.push("/video");
+    };
 
-                <div className="relative flex min-h-[620px] flex-col items-center justify-center pt-10 text-center">
-                    <h1 className="ai-title-aurora max-w-5xl text-balance text-5xl font-semibold tracking-normal sm:text-7xl lg:text-8xl">无限画布</h1>
-                    <p className="mt-8 max-w-3xl text-balance text-lg leading-8 text-stone-500 dark:text-stone-400">
-                        在
-                        <Highlighter action="underline" color="#FF9800">
-                            无限画布
-                        </Highlighter>
-                        中生成、连接和重组
-                        <Highlighter action="highlight" color="#87CEFA">
-                            图片、文字与图形
-                        </Highlighter>
-                        ，让创作从单次生成变成连续推演。
-                    </p>
-                    <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
-                        <Button type="primary" size="large" href={`/${primaryTool.slug}`} icon={<ArrowRight className="size-4" />} iconPlacement="end">
-                            开始使用
-                        </Button>
-                        <Button size="large" href="/canvas">
-                            打开画布
-                        </Button>
+    const onQuickPromptKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+        if (event.nativeEvent.isComposing || event.key !== "Enter" || (!event.metaKey && !event.ctrlKey)) return;
+        event.preventDefault();
+        openWorkbench();
+    };
+
+    return (
+        <main className="relative h-full overflow-x-hidden overflow-y-auto bg-background bg-[radial-gradient(#d6d3d1_1px,transparent_1px)] [background-size:16px_16px] text-stone-950 dark:bg-[radial-gradient(rgba(245,245,244,.18)_1px,transparent_1px)] dark:text-stone-100">
+            <section className="relative mx-auto min-h-[calc(100vh-4rem)] max-w-7xl px-4 sm:px-6">
+                <div className="pointer-events-none absolute left-1/2 top-8 h-[520px] w-[900px] -translate-x-1/2 rounded-full bg-[radial-gradient(circle,rgba(245,158,11,.08),transparent_68%)] blur-2xl dark:bg-[radial-gradient(circle,rgba(245,158,11,.06),transparent_68%)]" />
+
+                <section className="relative flex min-h-[650px] flex-col items-center justify-center py-8 sm:py-12">
+                    <HomeBannerCarousel banners={HOME_BANNERS} />
+
+                    <div className="mt-8 w-full max-w-[820px] sm:mt-11">
+                        <div className="relative overflow-hidden rounded-[24px] border border-stone-200/90 bg-white/90 shadow-[0_18px_55px_rgba(28,25,23,.11)] backdrop-blur-xl transition focus-within:border-stone-400 dark:border-white/10 dark:bg-[#1b1a18]/92 dark:shadow-[0_22px_70px_rgba(0,0,0,.34)] dark:focus-within:border-white/20">
+                            <textarea
+                                value={quickPrompt}
+                                onChange={(event) => setQuickPrompt(event.target.value)}
+                                onKeyDown={onQuickPromptKeyDown}
+                                rows={3}
+                                placeholder={quickMode === "image" ? "描述你想生成的画面，例如：雨夜霓虹中的未来城市……" : "描述镜头运动、主体动作和场景氛围……"}
+                                className="block min-h-28 w-full resize-none bg-transparent px-5 pb-2 pt-5 text-[15px] leading-7 text-stone-900 outline-none placeholder:text-stone-400 sm:min-h-32 sm:px-6 sm:pt-6 dark:text-stone-100 dark:placeholder:text-stone-600"
+                                aria-label="快速创作提示词"
+                            />
+                            <div className="flex min-h-16 items-end justify-between gap-3 px-3 pb-3 sm:px-4 sm:pb-4">
+                                <div className="flex min-w-0 flex-wrap items-center gap-2 pr-12 sm:pr-0">
+                                    <Dropdown
+                                        trigger={["click"]}
+                                        menu={{
+                                            selectable: true,
+                                            selectedKeys: [quickMode],
+                                            items: [
+                                                { key: "image", icon: <ImagePlus className="size-4" />, label: "生成图片" },
+                                                { key: "video", icon: <Video className="size-4" />, label: "生成视频" },
+                                            ],
+                                            onClick: ({ key }) => setQuickMode(key as QuickCreateMode),
+                                        }}
+                                    >
+                                        <button
+                                            type="button"
+                                            className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-full bg-stone-100 px-3 text-sm font-medium text-stone-700 transition hover:bg-stone-200 dark:bg-white/7 dark:text-stone-200 dark:hover:bg-white/12"
+                                        >
+                                            {quickMode === "image" ? <ImagePlus className="size-4" /> : <Video className="size-4" />}
+                                            <span>{quickMode === "image" ? "生成图片" : "生成视频"}</span>
+                                            <ChevronDown className="size-3.5 opacity-55" />
+                                        </button>
+                                    </Dropdown>
+
+                                    {quickMode === "image" ? (
+                                        <Dropdown
+                                            trigger={["click"]}
+                                            menu={{
+                                                selectable: true,
+                                                selectedKeys: [imagePreset.key],
+                                                items: IMAGE_PRESETS.map((item) => ({ key: item.key, label: item.label })),
+                                                onClick: ({ key }) => setImagePreset(IMAGE_PRESETS.find((item) => item.key === key) || IMAGE_PRESETS[0]),
+                                            }}
+                                        >
+                                            <button
+                                                type="button"
+                                                className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-full bg-stone-100 px-3 text-sm text-stone-700 transition hover:bg-stone-200 dark:bg-white/7 dark:text-stone-300 dark:hover:bg-white/12"
+                                            >
+                                                <span>{imagePreset.label}</span>
+                                                <ChevronDown className="size-3.5 opacity-55" />
+                                            </button>
+                                        </Dropdown>
+                                    ) : (
+                                        <Dropdown
+                                            trigger={["click"]}
+                                            menu={{
+                                                selectable: true,
+                                                selectedKeys: [videoPreset.key],
+                                                items: VIDEO_PRESETS.map((item) => ({ key: item.key, label: item.label })),
+                                                onClick: ({ key }) => setVideoPreset(VIDEO_PRESETS.find((item) => item.key === key) || VIDEO_PRESETS[0]),
+                                            }}
+                                        >
+                                            <button
+                                                type="button"
+                                                className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-full bg-stone-100 px-3 text-sm text-stone-700 transition hover:bg-stone-200 dark:bg-white/7 dark:text-stone-300 dark:hover:bg-white/12"
+                                            >
+                                                <span>{videoPreset.label}</span>
+                                                <ChevronDown className="size-3.5 opacity-55" />
+                                            </button>
+                                        </Dropdown>
+                                    )}
+                                </div>
+
+                                <button
+                                    type="button"
+                                    disabled={!quickPrompt.trim()}
+                                    onClick={openWorkbench}
+                                    className="absolute bottom-3 right-3 z-10 grid size-10 shrink-0 cursor-pointer place-items-center rounded-full bg-stone-900 text-white transition hover:-translate-y-0.5 hover:bg-stone-700 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:translate-y-0 sm:static dark:bg-stone-100 dark:text-stone-900 dark:hover:bg-white"
+                                    aria-label="带入工作台"
+                                    title="带入工作台（Ctrl / Command + Enter）"
+                                >
+                                    <ArrowUp className="size-4" />
+                                </button>
+                            </div>
+                        </div>
+                        <p className="mt-3 text-center text-xs text-stone-400 dark:text-stone-600">将在工作台中继续确认参数，不会直接开始生成</p>
                     </div>
-                </div>
+                </section>
 
                 <section className="relative mx-auto mb-20 max-w-6xl border-t border-stone-200 pt-12 dark:border-stone-800">
                     <div className="mb-8 grid gap-4 md:grid-cols-[1fr_auto_1fr] md:items-start">

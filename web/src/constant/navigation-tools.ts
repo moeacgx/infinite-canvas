@@ -1,4 +1,4 @@
-import { FileText, ImagePlus, Images, Maximize2, MessageSquare, Video, Workflow } from "lucide-react";
+import { FileText, ImagePlus, Images, Maximize2, Video, Workflow } from "lucide-react";
 
 export const navigationTools = [
     {
@@ -20,11 +20,6 @@ export const navigationTools = [
         slug: "workflows",
         label: "创意工作流",
         icon: Workflow,
-    },
-    {
-        slug: "chat",
-        label: "AI 对话",
-        icon: MessageSquare,
     },
     {
         slug: "prompts",

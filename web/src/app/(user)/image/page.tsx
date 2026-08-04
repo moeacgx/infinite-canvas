@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, ImagePlus, LoaderCircle, PenLine, Plus, SlidersHorizontal, Sparkles, Trash2, Upload } from "lucide-react";
+import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, ImagePlus, LoaderCircle, PanelBottom, PanelLeft, PenLine, Plus, SlidersHorizontal, Sparkles, Trash2, Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Tag, Tooltip, Typography } from "antd";
 import localforage from "localforage";
@@ -63,8 +63,10 @@ type GenerationLog = {
 type GenerationLogConfig = Pick<AiConfig, "model" | "imageModel" | "quality" | "size" | "count">;
 
 type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
+type WorkbenchLayout = "side" | "bottom";
 
 const LOG_STORE_KEY = "infinite-canvas:image_generation_logs";
+const WORKBENCH_LAYOUT_KEY = "infinite-canvas:image-workbench-layout";
 const RESULT_ACTION_BUTTON_CLASS = "min-w-0 px-1.5 [&_.ant-btn-icon]:shrink-0 [&>span:last-child]:min-w-0 [&>span:last-child]:truncate";
 const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
 
@@ -88,6 +90,7 @@ export default function ImagePage() {
     const [running, setRunning] = useState(false);
     const [logsOpen, setLogsOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
+    const [workbenchLayout, setWorkbenchLayoutState] = useState<WorkbenchLayout>("bottom");
     const [promptDialogOpen, setPromptDialogOpen] = useState(false);
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
     const [startedAt, setStartedAt] = useState(0);
@@ -108,6 +111,15 @@ export default function ImagePage() {
 
     useEffect(() => {
         void refreshLogs();
+    }, []);
+
+    useEffect(() => {
+        try {
+            const storedLayout = window.localStorage.getItem(WORKBENCH_LAYOUT_KEY);
+            if (storedLayout === "side" || storedLayout === "bottom") setWorkbenchLayoutState(storedLayout);
+        } catch {
+            // 浏览器禁用本地存储时仍使用默认的底部布局。
+        }
     }, []);
 
     useEffect(() => {
@@ -349,10 +361,19 @@ export default function ImagePage() {
 
     generateRef.current = generate;
 
+    const setWorkbenchLayout = (layout: WorkbenchLayout) => {
+        setWorkbenchLayoutState(layout);
+        try {
+            window.localStorage.setItem(WORKBENCH_LAYOUT_KEY, layout);
+        } catch {
+            // 持久化不可用时保留本次会话中的布局选择。
+        }
+    };
+
     return (
         <div className="flex h-full flex-col overflow-hidden bg-stone-50 text-stone-900 dark:bg-stone-950 dark:text-stone-100">
-            <main className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto p-3 lg:grid-cols-[300px_minmax(0,1fr)] lg:overflow-hidden xl:grid-cols-[320px_minmax(0,1fr)]">
-                <aside className="thin-scrollbar hidden min-h-0 overflow-y-auto rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:block">
+            <main className={`${workbenchLayout === "side" ? "grid grid-cols-1 overflow-y-auto lg:grid-cols-[300px_minmax(0,1fr)] lg:overflow-hidden xl:grid-cols-[320px_minmax(0,1fr)]" : "relative flex overflow-hidden"} min-h-0 flex-1 gap-3 p-3`}>
+                <aside className={`${workbenchLayout === "side" ? "lg:block" : ""} thin-scrollbar hidden min-h-0 overflow-y-auto rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800`}>
                     <LogPanel
                         logs={logs}
                         selectedLogIds={selectedLogIds}
@@ -364,20 +385,23 @@ export default function ImagePage() {
                     />
                 </aside>
 
-                <section className="grid gap-3 lg:min-h-0 lg:overflow-hidden xl:grid-cols-[420px_minmax(0,1fr)]">
-                    <div className="thin-scrollbar flex flex-col rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:min-h-0 lg:overflow-y-auto">
+                <section className={`${workbenchLayout === "side" ? "grid gap-3 lg:min-h-0 lg:overflow-hidden xl:grid-cols-[420px_minmax(0,1fr)]" : "min-h-0 min-w-0 flex-1"}`}>
+                    <div className={`${workbenchLayout === "side" ? "flex" : "hidden"} thin-scrollbar flex-col rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:min-h-0 lg:overflow-y-auto`}>
                         <div>
                             <div className="flex items-start justify-between gap-3">
                                 <div className="min-w-0">
                                     <h1 className="text-2xl font-semibold text-stone-950 dark:text-stone-100">生图工作台</h1>
                                 </div>
-                                <div className="flex shrink-0 gap-2 lg:hidden">
-                                    <Button icon={<History className="size-4" />} onClick={() => setLogsOpen(true)}>
-                                        记录
-                                    </Button>
-                                    <Button icon={<SlidersHorizontal className="size-4" />} onClick={() => setSettingsOpen(true)}>
-                                        参数
-                                    </Button>
+                                <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                                    <WorkbenchLayoutSwitch value={workbenchLayout} onChange={setWorkbenchLayout} />
+                                    <div className="flex gap-2 lg:hidden">
+                                        <Button icon={<History className="size-4" />} onClick={() => setLogsOpen(true)}>
+                                            记录
+                                        </Button>
+                                        <Button icon={<SlidersHorizontal className="size-4" />} onClick={() => setSettingsOpen(true)}>
+                                            参数
+                                        </Button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -458,7 +482,9 @@ export default function ImagePage() {
                         </div>
                     </div>
 
-                    <div className="thin-scrollbar rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:min-h-0 lg:overflow-y-auto lg:p-5">
+                    <div
+                        className={`${workbenchLayout === "bottom" ? "h-full overflow-y-auto pb-56 sm:pb-52" : ""} thin-scrollbar min-w-0 rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:min-h-0 lg:overflow-y-auto lg:p-5`}
+                    >
                         <div className="mb-4 flex items-center justify-between gap-3">
                             <div>
                                 <h2 className="text-xl font-semibold">生成结果</h2>
@@ -485,6 +511,63 @@ export default function ImagePage() {
                         )}
                     </div>
                 </section>
+                {workbenchLayout === "bottom" ? (
+                    <div className="pointer-events-none absolute inset-x-3 bottom-3 z-40 flex justify-center">
+                        <div className="pointer-events-auto w-full max-w-5xl rounded-[24px] border border-white/70 bg-white/80 p-3 shadow-[0_28px_90px_rgba(15,23,42,0.2)] backdrop-blur-2xl dark:border-white/10 dark:bg-stone-950/82 dark:shadow-[0_30px_100px_rgba(0,0,0,0.58)] sm:p-4">
+                            <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto] md:items-start">
+                                <Input.TextArea
+                                    value={prompt}
+                                    onChange={(event) => setPrompt(event.target.value)}
+                                    autoSize={{ minRows: 2, maxRows: 4 }}
+                                    placeholder="描述画面主体、风格、构图、光线和用途"
+                                    className="rounded-2xl"
+                                    onPressEnter={(event) => {
+                                        if (event.nativeEvent.isComposing) return;
+                                        if (!event.shiftKey && canGenerate && !running) {
+                                            event.preventDefault();
+                                            void generate();
+                                        }
+                                    }}
+                                />
+                                <div className="grid grid-cols-4 gap-2 md:flex md:flex-wrap md:items-center md:justify-end">
+                                    <Button title="生成记录" aria-label="生成记录" icon={<History className="size-4" />} onClick={() => setLogsOpen(true)} />
+                                    <Button title="参数配置" aria-label="参数配置" icon={<SlidersHorizontal className="size-4" />} onClick={() => setSettingsOpen(true)} />
+                                    <Button title="切换到侧边工作台" aria-label="切换到侧边工作台" icon={<PanelLeft className="size-4" />} onClick={() => setWorkbenchLayout("side")} />
+                                    <Button type="primary" aria-label="开始创作" icon={<Sparkles className="size-4" />} loading={running} disabled={!canGenerate || running} onClick={() => void generate()}>
+                                        <span className="hidden sm:inline">开始创作</span>
+                                    </Button>
+                                </div>
+                            </div>
+                            <div className="mt-2 flex min-w-0 items-center gap-2 overflow-x-auto pb-0.5">
+                                <Button size="small" icon={<BookOpen className="size-3.5" />} onClick={() => setPromptDialogOpen(true)}>
+                                    提示词库
+                                </Button>
+                                <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => setAssetPickerOpen(true)}>
+                                    我的素材
+                                </Button>
+                                <Button size="small" icon={<ClipboardPaste className="size-3.5" />} onClick={() => void addReferencesFromClipboard()}>
+                                    粘贴参考图
+                                </Button>
+                                <Button size="small" icon={<Upload className="size-3.5" />} onClick={() => fileInputRef.current?.click()}>
+                                    上传参考图
+                                </Button>
+                                <span className="ml-auto shrink-0 text-xs text-stone-500 dark:text-stone-400">
+                                    {model} · {effectiveConfig.size} · {effectiveConfig.quality}
+                                </span>
+                            </div>
+                            {references.length ? (
+                                <div className="mt-2 flex gap-2 overflow-x-auto">
+                                    {references.map((item, index) => (
+                                        <div key={item.id} className="relative size-11 shrink-0 overflow-hidden rounded-lg border border-stone-200 dark:border-stone-800">
+                                            <img src={item.dataUrl} alt={item.name} className="size-full object-cover" />
+                                            <span className="absolute left-0.5 top-0.5 rounded bg-black/65 px-1 text-[9px] text-white">{imageReferenceLabel(index)}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : null}
+                        </div>
+                    </div>
+                ) : null}
             </main>
             <input
                 ref={fileInputRef}
@@ -518,6 +601,19 @@ export default function ImagePage() {
             <Modal title="删除生成记录" open={deleteConfirmOpen} onCancel={() => setDeleteConfirmOpen(false)} onOk={deleteSelectedLogs} okText="删除" okButtonProps={{ danger: true }} cancelText="取消">
                 确定删除选中的 {selectedLogIds.length} 条生成记录吗？
             </Modal>
+        </div>
+    );
+}
+
+function WorkbenchLayoutSwitch({ value, onChange }: { value: WorkbenchLayout; onChange: (layout: WorkbenchLayout) => void }) {
+    return (
+        <div className="flex rounded-lg border border-stone-200 bg-stone-50 p-1 dark:border-stone-800 dark:bg-stone-900">
+            <Button size="small" type={value === "side" ? "primary" : "text"} icon={<PanelLeft className="size-3.5" />} onClick={() => onChange("side")}>
+                侧边
+            </Button>
+            <Button size="small" type={value === "bottom" ? "primary" : "text"} icon={<PanelBottom className="size-3.5" />} onClick={() => onChange("bottom")}>
+                底部
+            </Button>
         </div>
     );
 }

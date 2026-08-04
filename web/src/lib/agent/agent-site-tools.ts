@@ -58,7 +58,7 @@ export async function runSiteTool(name: SiteToolName, input: SiteToolInput, navi
 
 export function normalizeSitePath(value: unknown) {
     const path = String(value || "/").trim() || "/";
-    if (!/^\/(?:canvas(?:\/[A-Za-z0-9_-]+)?|image|video|prompts|assets|asset-library|chat)?(?:\?[^#]*)?$/.test(path)) throw new Error("不允许跳转到站外地址");
+    if (!/^\/(?:canvas(?:\/[A-Za-z0-9_-]+)?|image|video|prompts|assets|asset-library)?(?:\?[^#]*)?$/.test(path)) throw new Error("不允许跳转到站外地址");
     return path;
 }
 

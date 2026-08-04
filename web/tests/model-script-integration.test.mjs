@@ -8,7 +8,6 @@ const configModal = read("../src/components/layout/app-config-modal.tsx");
 const image = read("../src/services/api/image.ts");
 const video = read("../src/services/api/video.ts");
 const audio = read("../src/services/api/audio.ts");
-const agent = read("../src/services/agent/agent-engine.ts");
 
 test("本地渠道提供按模型和能力配置脚本的安全编辑器", () => {
     assert.match(configModal, /<ModelScriptEditor/);
@@ -19,8 +18,8 @@ test("本地渠道提供按模型和能力配置脚本的安全编辑器", () =>
     assert.match(editor, /MAX_SCRIPT_LENGTH = 100_000/);
 });
 
-test("图片、视频、音频、文本及网站 Agent 都接入自定义脚本", () => {
-    for (const source of [image, video, audio, agent]) {
+test("图片、视频和音频入口都接入自定义脚本", () => {
+    for (const source of [image, video, audio]) {
         assert.match(source, /resolveModelScript/);
         assert.match(source, /runModelPlugin/);
     }
@@ -30,6 +29,4 @@ test("图片、视频、音频、文本及网站 Agent 都接入自定义脚本"
     assert.match(image, /requestEdit[\s\S]*signal:\s*options\?\.signal/);
     assert.match(audio, /pcm16ToWav/);
     assert.match(audio, /channelAxiosRequest<Blob>/);
-    assert.match(agent, /normalizePluginToolCalls/);
-    assert.match(agent, /value\.slice\(0,\s*20\)/);
 });
