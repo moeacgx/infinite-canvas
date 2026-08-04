@@ -46,7 +46,10 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, open, width, onClose, 
     const typeOptions = useMemo(() => {
         void registryVersion;
         const types = new Set([...listNodeDefinitions().map((definition) => definition.type), ...nodes.map((node) => node.type)]);
-        return [{ label: "全部", value: "all" }, ...Array.from(types).map((type) => ({ label: getNodeDefinition(type)?.title || type, value: type }))];
+        return [
+            { label: "全部", value: "all" },
+            ...Array.from(types).map((type) => ({ label: getNodeDefinition(type)?.title || type, value: type })),
+        ];
     }, [nodes, registryVersion]);
 
     const filteredNodes = useMemo(() => {
