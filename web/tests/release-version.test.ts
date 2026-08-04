@@ -1,9 +1,19 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { displayedLatestVersion, isNewerVersion, mergeReleases, type ReleaseInfo } from "@/lib/release";
 
 const release = (version: string): ReleaseInfo => ({ version, date: "", items: [{ type: "新增", content: version }] });
+
+test("发布版本在 VERSION、前端包和更新日志中保持一致", () => {
+    const version = readFileSync(new URL("../../VERSION", import.meta.url), "utf8").trim();
+    const packageVersion = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
+    const changelog = readFileSync(new URL("../../CHANGELOG.md", import.meta.url), "utf8");
+
+    assert.equal(version, `v${packageVersion}`);
+    assert.match(changelog, new RegExp(`^## ${version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} - `, "m"));
+});
 
 test("版本比较按语义化版本的主次补丁位判断", () => {
     assert.equal(isNewerVersion("v0.9.0", "v0.8.1"), true);
