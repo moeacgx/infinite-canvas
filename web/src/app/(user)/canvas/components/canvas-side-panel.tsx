@@ -114,71 +114,85 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, open, width, onClose, 
     if (!mounted) return null;
 
     return (
-        <motion.div
-            className="absolute inset-y-0 left-0 z-[70] flex h-full shrink-0 md:relative md:z-[60]"
-            initial={{ width: 0, opacity: 0 }}
-            animate={{ width: open ? normalizedWidth + 1 : 0, opacity: open ? 1 : 0 }}
-            transition={{ duration: resizing ? 0 : PANEL_MOTION_SECONDS, ease: [0.22, 1, 0.36, 1] }}
-            style={{ overflow: "clip", pointerEvents: closing ? "none" : undefined, maxWidth: "86vw" }}
-        >
-            <aside
-                className="relative flex h-full shrink-0 flex-col overflow-hidden border-r shadow-xl md:shadow-none"
-                style={{ width: normalizedWidth, maxWidth: "86vw", background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
-                data-canvas-no-zoom
+        <>
+            <motion.button
+                type="button"
+                className="absolute inset-0 z-[130] cursor-default border-0 bg-black/35 p-0 backdrop-blur-[1px] md:hidden"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: open ? 1 : 0 }}
+                transition={{ duration: PANEL_MOTION_SECONDS }}
+                style={{ pointerEvents: open ? "auto" : "none" }}
+                onClick={onClose}
+                aria-label="关闭画布元素面板"
+                data-canvas-side-panel-backdrop
+            />
+            <motion.div
+                className="absolute inset-y-0 left-0 z-[140] flex h-full shrink-0 md:relative md:z-[60]"
+                initial={{ width: 0, opacity: 0 }}
+                animate={{ width: open ? normalizedWidth + 1 : 0, opacity: open ? 1 : 0 }}
+                transition={{ duration: resizing ? 0 : PANEL_MOTION_SECONDS, ease: [0.22, 1, 0.36, 1] }}
+                style={{ overflow: "clip", pointerEvents: closing ? "none" : undefined, maxWidth: "86vw" }}
             >
-                <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b px-3" style={{ borderColor: theme.toolbar.border }}>
-                    <div className="min-w-0">
-                        <div className="text-sm font-semibold">画布元素</div>
-                        <div className="text-xs opacity-45">{nodes.length} 个节点</div>
-                    </div>
-                    <button type="button" className="grid size-8 shrink-0 place-items-center rounded-md transition hover:bg-black/5 dark:hover:bg-white/10" onClick={onClose} aria-label="收起左侧面板" title="收起左侧面板">
-                        <PanelLeftClose className="size-4" />
-                    </button>
-                </div>
-
-                <div className="flex items-center gap-2 px-3 pb-2 pt-3">
-                    <Input size="small" allowClear prefix={<Search className="size-3.5 opacity-50" />} placeholder="搜索节点" value={keyword} onChange={(event) => setKeyword(event.target.value)} />
-                    <Select size="small" className="w-28 shrink-0" popupMatchSelectWidth={false} value={typeFilter} onChange={setTypeFilter} options={typeOptions} />
-                </div>
-
-                <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-                    {filteredNodes.length ? (
-                        <div className="space-y-1">
-                            {filteredNodes.map((node) => {
-                                const definition = getNodeDefinition(node.type);
-                                const active = selectedNodeIds.has(node.id);
-                                const preview = nodePreview(node);
-                                return (
-                                    <button
-                                        key={node.id}
-                                        ref={(element) => {
-                                            rowRefs.current[node.id] = element;
-                                        }}
-                                        type="button"
-                                        onClick={() => onFocusNode(node.id)}
-                                        className={cn("flex w-full items-center gap-3 rounded-md px-2 py-2 text-left transition", active ? "" : "hover:bg-black/5 dark:hover:bg-white/5")}
-                                        style={active ? { background: theme.toolbar.activeBg } : undefined}
-                                    >
-                                        <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-md bg-black/5 dark:bg-white/5">
-                                            {preview ? <img src={preview} alt="" className="size-full object-cover" /> : nodeIcon(definition?.icon)}
-                                        </span>
-                                        <span className="min-w-0 flex-1">
-                                            <span className="block truncate text-sm font-medium">{node.title || definition?.title || "未命名节点"}</span>
-                                            <span className="block truncate text-xs opacity-45">{definition?.title || node.type}</span>
-                                        </span>
-                                        {node.metadata?.status && node.metadata.status !== "idle" ? <span className="size-1.5 shrink-0 rounded-full" style={{ background: STATUS_COLOR[node.metadata.status] || "transparent" }} /> : null}
-                                    </button>
-                                );
-                            })}
+                <aside
+                    className="relative flex h-full shrink-0 flex-col overflow-hidden border-r shadow-xl md:shadow-none"
+                    style={{ width: normalizedWidth, maxWidth: "86vw", background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
+                    aria-label="画布元素"
+                    data-canvas-no-zoom
+                >
+                    <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b px-3" style={{ borderColor: theme.toolbar.border }}>
+                        <div className="min-w-0">
+                            <div className="text-sm font-semibold">画布元素</div>
+                            <div className="text-xs opacity-45">{nodes.length} 个节点</div>
                         </div>
-                    ) : (
-                        <div className="pt-16 text-center text-sm opacity-40">{nodes.length ? "没有匹配的节点" : "画布暂无节点"}</div>
-                    )}
-                </div>
+                        <button type="button" className="grid size-8 shrink-0 place-items-center rounded-md transition hover:bg-black/5 dark:hover:bg-white/10" onClick={onClose} aria-label="收起左侧面板" title="收起左侧面板">
+                            <PanelLeftClose className="size-4" />
+                        </button>
+                    </div>
 
-                <button type="button" className="absolute inset-y-0 right-0 z-40 hidden w-4 translate-x-1/2 cursor-col-resize md:block" onPointerDown={startResize} aria-label="调整左侧面板宽度" title="调整左侧面板宽度" />
-            </aside>
-        </motion.div>
+                    <div className="flex items-center gap-2 px-3 pb-2 pt-3">
+                        <Input size="small" allowClear prefix={<Search className="size-3.5 opacity-50" />} placeholder="搜索节点" value={keyword} onChange={(event) => setKeyword(event.target.value)} />
+                        <Select size="small" className="w-28 shrink-0" popupMatchSelectWidth={false} value={typeFilter} onChange={setTypeFilter} options={typeOptions} />
+                    </div>
+
+                    <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+                        {filteredNodes.length ? (
+                            <div className="space-y-1">
+                                {filteredNodes.map((node) => {
+                                    const definition = getNodeDefinition(node.type);
+                                    const active = selectedNodeIds.has(node.id);
+                                    const preview = nodePreview(node);
+                                    return (
+                                        <button
+                                            key={node.id}
+                                            ref={(element) => {
+                                                rowRefs.current[node.id] = element;
+                                            }}
+                                            type="button"
+                                            onClick={() => onFocusNode(node.id)}
+                                            className={cn("flex w-full items-center gap-3 rounded-md px-2 py-2 text-left transition", active ? "" : "hover:bg-black/5 dark:hover:bg-white/5")}
+                                            style={active ? { background: theme.toolbar.activeBg } : undefined}
+                                        >
+                                            <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-md bg-black/5 dark:bg-white/5">
+                                                {preview ? <img src={preview} alt="" className="size-full object-cover" /> : nodeIcon(definition?.icon)}
+                                            </span>
+                                            <span className="min-w-0 flex-1">
+                                                <span className="block truncate text-sm font-medium">{node.title || definition?.title || "未命名节点"}</span>
+                                                <span className="block truncate text-xs opacity-45">{definition?.title || node.type}</span>
+                                            </span>
+                                            {node.metadata?.status && node.metadata.status !== "idle" ? <span className="size-1.5 shrink-0 rounded-full" style={{ background: STATUS_COLOR[node.metadata.status] || "transparent" }} /> : null}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        ) : (
+                            <div className="pt-16 text-center text-sm opacity-40">{nodes.length ? "没有匹配的节点" : "画布暂无节点"}</div>
+                        )}
+                    </div>
+
+                    <button type="button" className="absolute inset-y-0 right-0 z-40 hidden w-4 translate-x-1/2 cursor-col-resize md:block" onPointerDown={startResize} aria-label="调整左侧面板宽度" title="调整左侧面板宽度" />
+                </aside>
+            </motion.div>
+        </>
     );
 }
 

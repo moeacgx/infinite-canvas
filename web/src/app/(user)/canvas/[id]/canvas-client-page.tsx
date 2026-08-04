@@ -2872,7 +2872,7 @@ function InfiniteCanvasPage() {
     if (!projectLoaded) return <CanvasRefreshShell />;
 
     return (
-        <main className="flex h-full min-h-0 overflow-hidden" style={{ background: theme.canvas.background, color: theme.node.text }}>
+        <main className="relative flex h-full min-h-0 overflow-hidden" style={{ background: theme.canvas.background, color: theme.node.text }}>
             <CanvasSidePanel
                 nodes={nodes}
                 selectedNodeIds={selectedNodeIds}
@@ -3064,39 +3064,42 @@ function InfiniteCanvasPage() {
                     extraTools={pluginToolbarTools}
                 />
 
-                <CanvasToolbar
-                    selectedCount={selectedNodeIds.size}
-                    canUndo={historyState.canUndo}
-                    canRedo={historyState.canRedo}
-                    backgroundMode={backgroundMode}
-                    showImageInfo={showImageInfo}
-                    onAddImage={() => createNode(CanvasNodeType.Image)}
-                    onAddVideo={() => createNode(CanvasNodeType.Video)}
-                    onAddAudio={() => createNode(CanvasNodeType.Audio)}
-                    onAddText={() => createNode(CanvasNodeType.Text)}
-                    onAddConfig={() => createNode(CanvasNodeType.Config)}
-                    onAddGroup={() => createNode(CanvasNodeType.Group)}
-                    onUndo={undoCanvas}
-                    onRedo={redoCanvas}
-                    onUpload={() => handleUploadRequest()}
-                    onDelete={() => deleteNodes(new Set(selectedNodeIds))}
-                    onClear={() => setClearConfirmOpen(true)}
-                    onDeselect={deselectCanvas}
-                    onBackgroundModeChange={setBackgroundMode}
-                    onShowImageInfoChange={setShowImageInfo}
-                    onOpenAssetLibrary={() => {
-                        setAssetPickerTab("library");
-                        setAssetPickerOpen(true);
-                    }}
-                    onOpenMyAssets={() => {
-                        setAssetPickerTab("my-assets");
-                        setAssetPickerOpen(true);
-                    }}
-                />
+                <div className={sidePanel.open ? "hidden md:contents" : "contents"} data-canvas-floating-controls>
+                    <CanvasToolbar
+                        selectedCount={selectedNodeIds.size}
+                        canUndo={historyState.canUndo}
+                        canRedo={historyState.canRedo}
+                        backgroundMode={backgroundMode}
+                        showImageInfo={showImageInfo}
+                        onAddImage={() => createNode(CanvasNodeType.Image)}
+                        onAddVideo={() => createNode(CanvasNodeType.Video)}
+                        onAddAudio={() => createNode(CanvasNodeType.Audio)}
+                        onAddText={() => createNode(CanvasNodeType.Text)}
+                        onAddConfig={() => createNode(CanvasNodeType.Config)}
+                        onAddGroup={() => createNode(CanvasNodeType.Group)}
+                        onUndo={undoCanvas}
+                        onRedo={redoCanvas}
+                        onUpload={() => handleUploadRequest()}
+                        onDelete={() => deleteNodes(new Set(selectedNodeIds))}
+                        onClear={() => setClearConfirmOpen(true)}
+                        onDeselect={deselectCanvas}
+                        onBackgroundModeChange={setBackgroundMode}
+                        onShowImageInfoChange={setShowImageInfo}
+                        onOpenAppearance={() => setIsMiniMapOpen(false)}
+                        onOpenAssetLibrary={() => {
+                            setAssetPickerTab("library");
+                            setAssetPickerOpen(true);
+                        }}
+                        onOpenMyAssets={() => {
+                            setAssetPickerTab("my-assets");
+                            setAssetPickerOpen(true);
+                        }}
+                    />
 
-                {isMiniMapOpen ? <Minimap nodes={nodes} viewport={viewport} viewportSize={size} onViewportChange={setViewport} /> : null}
+                    {isMiniMapOpen ? <Minimap nodes={nodes} viewport={viewport} viewportSize={size} onViewportChange={setViewport} /> : null}
 
-                <CanvasZoomControls scale={viewport.k} onScaleChange={setZoomScale} onReset={resetViewport} isMiniMapOpen={isMiniMapOpen} onToggleMiniMap={() => setIsMiniMapOpen((value) => !value)} />
+                    <CanvasZoomControls scale={viewport.k} onScaleChange={setZoomScale} onReset={resetViewport} isMiniMapOpen={isMiniMapOpen} onToggleMiniMap={() => setIsMiniMapOpen((value) => !value)} />
+                </div>
 
                 {contextMenu ? (
                     <CanvasNodeContextMenu
@@ -3245,7 +3248,6 @@ function CanvasTopBar({
     const colorTheme = useThemeStore((state) => state.theme);
     const theme = canvasThemes[colorTheme];
     const titleRef = useRef<HTMLDivElement>(null);
-    const accountRef = useRef<HTMLDivElement>(null);
     const [shortcutsOpen, setShortcutsOpen] = useState(false);
     const [accountOpen, setAccountOpen] = useState(false);
 
@@ -3258,19 +3260,10 @@ function CanvasTopBar({
         return () => document.removeEventListener("pointerdown", close, true);
     }, [isTitleEditing, onFinishTitleEditing]);
 
-    useEffect(() => {
-        if (!accountOpen) return;
-        const close = (event: PointerEvent) => {
-            if (!accountRef.current?.contains(event.target as Node)) setAccountOpen(false);
-        };
-        document.addEventListener("pointerdown", close, true);
-        return () => document.removeEventListener("pointerdown", close, true);
-    }, [accountOpen]);
-
     return (
         <>
-            <div className="pointer-events-none absolute left-0 right-0 top-0 z-50 flex h-16 items-center justify-between px-4">
-                <div className="pointer-events-auto flex min-w-0 items-center gap-3">
+            <div className="pointer-events-none absolute left-0 right-0 top-0 z-50 flex min-h-16 flex-col items-stretch gap-2 px-4 py-3 md:h-16 md:flex-row md:items-center md:justify-between md:py-0">
+                <div className="pointer-events-auto flex w-full min-w-0 items-center gap-3 md:w-auto">
                     <button type="button" onClick={onToggleSidePanel} className="grid size-9 shrink-0 place-items-center rounded-full transition hover:bg-black/5 dark:hover:bg-white/10" style={{ color: theme.node.text }} aria-label={sidePanelOpen ? "收起左侧面板" : "展开左侧面板"} title={sidePanelOpen ? "收起左侧面板" : "展开左侧面板"}>
                         {sidePanelOpen ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}
                     </button>
@@ -3308,13 +3301,13 @@ function CanvasTopBar({
                                     if (event.key === "Enter") onFinishTitleEditing();
                                     if (event.key === "Escape") onCancelTitleEditing();
                                 }}
-                                className="max-w-[280px] bg-transparent p-0 text-left text-lg font-semibold tracking-normal outline-none"
+                                className="max-w-[calc(100vw-8rem)] bg-transparent p-0 text-left text-lg font-semibold tracking-normal outline-none md:max-w-[280px]"
                                 style={{ color: theme.node.text }}
                             />
                         ) : (
                             <button
                                 type="button"
-                                className="max-w-[280px] truncate border-b border-dashed border-transparent text-left text-lg font-semibold tracking-normal transition hover:border-current"
+                                className="max-w-[calc(100vw-8rem)] truncate border-b border-dashed border-transparent text-left text-lg font-semibold tracking-normal transition hover:border-current md:max-w-[280px]"
                                 onDoubleClick={onStartTitleEditing}
                                 title="双击修改画布名称"
                             >
@@ -3324,51 +3317,57 @@ function CanvasTopBar({
                     </div>
                 </div>
 
-                <div className="pointer-events-auto flex items-center gap-1.5">
+                <div className="pointer-events-auto flex w-full min-w-0 items-center gap-1.5 pb-1 md:w-auto md:pb-0">
                     <UserStatusActions
                         variant="canvas"
                         accountOpen={accountOpen}
                         onAccountOpenChange={setAccountOpen}
-                        accountRef={accountRef}
-                        getPopupContainer={(node) => node.parentElement || document.body}
                         onOpenShortcuts={() => {
                             setShortcutsOpen(true);
                             setAccountOpen(false);
                         }}
                     />
-                    <span className="h-6 w-px" style={{ background: theme.toolbar.border }} />
-                    <Button
-                        type="text"
-                        className="!h-10 !rounded-xl !px-3 !font-medium"
-                        style={{ background: theme.toolbar.panel, color: theme.node.text, boxShadow: "0 10px 30px rgba(28,25,23,.10)" }}
-                        icon={<Puzzle className="size-4" />}
-                        onClick={onOpenPlugins}
-                    >
-                        扩展
-                    </Button>
-                    <Button
-                        type="text"
-                        className="!h-10 !rounded-xl !px-3 !font-medium"
-                        style={{ background: localAgentOpen ? theme.toolbar.activeBg : theme.toolbar.panel, color: theme.node.text, boxShadow: "0 10px 30px rgba(28,25,23,.10)" }}
-                        icon={<Bot className="size-4" />}
-                        onClick={onToggleLocalAgent}
-                    >
-                        本地 Agent
-                    </Button>
-                    {assistantCollapsed ? (
-                        <>
-                            <span className="h-6 w-px" style={{ background: theme.toolbar.border }} />
-                            <Button
-                                type="text"
-                                className="!h-10 !rounded-xl !px-3 !font-medium"
-                                style={{ background: theme.toolbar.panel, color: theme.node.text, boxShadow: "0 10px 30px rgba(28,25,23,.10)" }}
-                                icon={<MessageSquare className="size-4" />}
-                                onClick={onExpandAssistant}
-                            >
-                                助手
-                            </Button>
-                        </>
-                    ) : null}
+                    <div className="thin-scrollbar flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto md:overflow-visible">
+                        <span className="hidden h-6 w-px shrink-0 sm:block" style={{ background: theme.toolbar.border }} />
+                        <Button
+                            type="text"
+                            className="!h-10 !w-10 !min-w-10 !rounded-xl !px-0 !font-medium sm:!w-auto sm:!px-3"
+                            style={{ background: theme.toolbar.panel, color: theme.node.text, boxShadow: "0 10px 30px rgba(28,25,23,.10)" }}
+                            icon={<Puzzle className="size-4" />}
+                            onClick={onOpenPlugins}
+                            aria-label="扩展"
+                            title="扩展"
+                        >
+                            <span className="hidden sm:inline">扩展</span>
+                        </Button>
+                        <Button
+                            type="text"
+                            className="!h-10 !w-10 !min-w-10 !rounded-xl !px-0 !font-medium sm:!w-auto sm:!px-3"
+                            style={{ background: localAgentOpen ? theme.toolbar.activeBg : theme.toolbar.panel, color: theme.node.text, boxShadow: "0 10px 30px rgba(28,25,23,.10)" }}
+                            icon={<Bot className="size-4" />}
+                            onClick={onToggleLocalAgent}
+                            aria-label="本地 Agent"
+                            title="本地 Agent"
+                        >
+                            <span className="hidden sm:inline">本地 Agent</span>
+                        </Button>
+                        {assistantCollapsed ? (
+                            <>
+                                <span className="hidden h-6 w-px shrink-0 sm:block" style={{ background: theme.toolbar.border }} />
+                                <Button
+                                    type="text"
+                                    className="!h-10 !w-10 !min-w-10 !rounded-xl !px-0 !font-medium sm:!w-auto sm:!px-3"
+                                    style={{ background: theme.toolbar.panel, color: theme.node.text, boxShadow: "0 10px 30px rgba(28,25,23,.10)" }}
+                                    icon={<MessageSquare className="size-4" />}
+                                    onClick={onExpandAssistant}
+                                    aria-label="助手"
+                                    title="助手"
+                                >
+                                    <span className="hidden sm:inline">助手</span>
+                                </Button>
+                            </>
+                        ) : null}
+                    </div>
                 </div>
             </div>
             <Modal title="快捷键" open={shortcutsOpen} onCancel={() => setShortcutsOpen(false)} footer={null} centered>
