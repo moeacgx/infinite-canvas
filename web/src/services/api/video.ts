@@ -7,6 +7,7 @@ import { channelAxiosRequest } from "@/services/api/channel-request";
 import { resolveModelPluginResultUrl, runModelPlugin } from "@/services/api/model-plugin";
 import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
+import { assertVideoSecondsSupported } from "@/lib/video-model-capabilities";
 import { boolConfig, buildSeedancePromptText, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceVideoReferenceError, SEEDANCE_REFERENCE_LIMITS } from "@/lib/seedance-video";
 import { buildApiUrl, isNewApiConfig, resolveCapabilityModel, resolveModelRequestConfig, resolveModelScript, resolveNewApiGroup, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
@@ -104,6 +105,7 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
     if (videoReferences.length || audioReferences.length) {
         throw new Error("当前视频接口不支持参考视频或参考音频，请切换到 Seedance 2.0 / 火山 Agent Plan 模型，或移除参考素材");
     }
+    assertVideoSecondsSupported(requestConfig, model);
     return createOpenAIVideoTask(requestConfig, model, prompt, references, options, channelModel);
 }
 
