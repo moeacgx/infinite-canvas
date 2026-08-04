@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## v0.9.0 - 2026-08-04
+## v0.9.0 - 2026-08-05
 
 + [新增] 选择性迁移 Tiger 分支的创意工作流，支持单图与多图系列模板、AI 创建、导入导出、失败重试、本地记录和 WebDAV 独立同步。
 + [新增] 本地 OpenAI 渠道可独立选择 Images 或 Responses 生图协议、Base64 或 URL 返回格式，并兼容 Images/Responses 流式图片事件。
