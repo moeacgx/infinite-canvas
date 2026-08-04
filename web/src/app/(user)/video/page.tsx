@@ -17,6 +17,7 @@ import { boolConfig, isSeedanceVideoConfig, normalizeSeedanceRatio, seedanceRefe
 import { deleteStoredMedia, resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
 import { resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { createVideoGenerationTask, pollVideoGenerationTask, storeGeneratedVideo, type VideoGenerationTask } from "@/services/api/video";
+import { reachedVideoPollFailureLimit } from "@/lib/video-polling";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
 import { useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
@@ -313,6 +314,7 @@ export default function VideoPage() {
         setStartedAt((value) => value || performance.now());
         setResults((value) => (value.length ? value : [{ id: log.id, status: "pending" }]));
         const taskConfig = buildVideoConfig({ ...effectiveConfig, ...log.config }, log.task.model || log.model);
+        let consecutivePollFailures = 0;
         try {
             for (let attempt = 0; attempt < 120; attempt += 1) {
                 const state = await pollVideoGenerationTask(configOverride || taskConfig, log.task);
@@ -334,6 +336,12 @@ export default function VideoPage() {
                     return;
                 }
                 if (state.status === "failed") throw new Error(state.error);
+                if (state.status === "retrying") {
+                    consecutivePollFailures += 1;
+                    if (reachedVideoPollFailureLimit(consecutivePollFailures)) throw new Error(state.error);
+                } else {
+                    consecutivePollFailures = 0;
+                }
                 if (attempt === 119) throw new Error("视频生成超时，请稍后重试");
                 await delay(log.task.provider === "seedance" ? 5000 : 2500);
             }

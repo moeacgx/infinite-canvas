@@ -8,6 +8,7 @@ import { resolveModelPluginResultUrl, runModelPlugin } from "@/services/api/mode
 import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
 import { assertVideoSecondsSupported } from "@/lib/video-model-capabilities";
+import { isTransientVideoPollError, reachedVideoPollFailureLimit } from "@/lib/video-polling";
 import { boolConfig, buildSeedancePromptText, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceVideoReferenceError, SEEDANCE_REFERENCE_LIMITS } from "@/lib/seedance-video";
 import { buildApiUrl, isNewApiConfig, resolveCapabilityModel, resolveModelRequestConfig, resolveModelScript, resolveNewApiGroup, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
@@ -36,7 +37,7 @@ type SeedancePayload = {
 
 export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string };
 export type VideoGenerationTask = { id: string; provider: "openai" | "seedance" | "plugin"; model: string; channelModel?: string };
-export type VideoGenerationTaskState = { status: "pending" } | { status: "completed"; result: VideoGenerationResult } | { status: "failed"; error: string };
+export type VideoGenerationTaskState = { status: "pending" } | { status: "retrying"; error: string } | { status: "completed"; result: VideoGenerationResult } | { status: "failed"; error: string };
 type RequestOptions = { signal?: AbortSignal };
 
 const pluginVideoResults = new Map<string, { result: VideoGenerationResult; timer: ReturnType<typeof setTimeout> }>();
@@ -81,10 +82,17 @@ function refreshRemoteUser(config: AiConfig) {
 export async function requestVideoGeneration(config: AiConfig, prompt: string, references: ReferenceImage[] = [], videoReferences: ReferenceVideo[] = [], audioReferences: ReferenceAudio[] = [], options?: RequestOptions): Promise<VideoGenerationResult> {
     const task = await createVideoGenerationTask(config, prompt, references, videoReferences, audioReferences, options);
     const delayMs = task.provider === "seedance" ? 5000 : 2500;
+    let consecutivePollFailures = 0;
     for (let attempt = 0; attempt < 120; attempt += 1) {
         const state = await pollVideoGenerationTask(config, task, options);
         if (state.status === "completed") return state.result;
         if (state.status === "failed") throw new Error(state.error);
+        if (state.status === "retrying") {
+            consecutivePollFailures += 1;
+            if (reachedVideoPollFailureLimit(consecutivePollFailures)) throw new Error(state.error);
+        } else {
+            consecutivePollFailures = 0;
+        }
         if (attempt === 119) throw new Error(`${task.provider === "seedance" ? "Seedance " : ""}视频生成超时，请稍后重试`);
         await delay(delayMs, options?.signal);
     }
@@ -230,6 +238,7 @@ async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask, 
         if (video.status === "failed" || video.status === "cancelled") return { status: "failed", error: video.error?.message || "视频生成失败" };
         return { status: "pending" };
     } catch (error) {
+        if (isTransientVideoPollError(error, options?.signal)) return { status: "retrying", error: readAxiosError(error, "视频任务查询暂时失败，请稍后重试") };
         throw new Error(readAxiosError(error, "视频任务查询失败"));
     }
 }
@@ -287,6 +296,7 @@ async function pollSeedanceTask(config: AiConfig, task: VideoGenerationTask, opt
         if (state.status === "failed" || state.status === "cancelled" || state.status === "expired") return { status: "failed", error: state.error?.message || `Seedance 视频生成${state.status === "expired" ? "超时" : "失败"}` };
         return { status: "pending" };
     } catch (error) {
+        if (isTransientVideoPollError(error, options?.signal)) return { status: "retrying", error: readAxiosError(error, "Seedance 任务查询暂时失败，请稍后重试") };
         throw new Error(readAxiosError(error, "Seedance 任务查询失败"));
     }
 }
