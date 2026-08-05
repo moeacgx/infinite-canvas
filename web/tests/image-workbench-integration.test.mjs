@@ -85,7 +85,7 @@ test("New API 工作流不会误绑定残留的本地渠道", () => {
 });
 
 test("生图页保留模型渠道切换、工作流入口与可取消的即时请求链路", () => {
-    assert.match(imagePageSource, /useState<WorkbenchLayout>\("bottom"\)/);
+    assert.match(imagePageSource, /useState<WorkbenchLayout>\("side"\)/);
     assert.match(imagePageSource, /window\.localStorage\.getItem\(WORKBENCH_LAYOUT_KEY\)/);
     assert.match(imagePageSource, /window\.localStorage\.setItem\(WORKBENCH_LAYOUT_KEY, layout\)/);
     assert.match(imagePageSource, /<ModelPicker[\s\S]*capability="image"[\s\S]*channelId=\{config\.imageChannelId\}/);
