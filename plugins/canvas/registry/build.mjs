@@ -66,4 +66,6 @@ const manifest = {
     ),
 };
 await writeFile(join(outDir, "official-plugins.json"), JSON.stringify(manifest, null, 4) + "\n");
+// 官方插件通过清单按需安装；空索引只用于声明镜像内没有额外的自动发现插件。
+await writeFile(join(outDir, "index.json"), "[]\n");
 console.log(`wrote official-plugins.json (${OFFICIAL.length} plugins) → dist/`);

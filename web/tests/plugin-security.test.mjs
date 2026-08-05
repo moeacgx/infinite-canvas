@@ -5,11 +5,19 @@ import test from "node:test";
 const loader = readFileSync(new URL("../src/lib/canvas/plugin-loader.ts", import.meta.url), "utf8");
 const registry = readFileSync(new URL("../src/lib/canvas/plugin-registry.ts", import.meta.url), "utf8");
 const manager = readFileSync(new URL("../src/app/(user)/canvas/components/canvas-plugin-manager-modal.tsx", import.meta.url), "utf8");
+const registryBuild = readFileSync(new URL("../../plugins/canvas/registry/build.mjs", import.meta.url), "utf8");
+const dockerfile = readFileSync(new URL("../../Dockerfile", import.meta.url), "utf8");
 
 test("默认只允许镜像内同源官方插件", () => {
     assert.match(loader, /url\.origin === window\.location\.origin && url\.pathname\.startsWith\("\/plugins\/"\)/);
     assert.match(registry, /官方插件注册表必须来自本站 \/plugins\//);
     assert.doesNotMatch(registry, /basketikun|jsdelivr|UPSTREAM_PLUGIN/);
+});
+
+test("镜像提供空的本地插件索引且官方插件仍按清单加载", () => {
+    assert.match(registryBuild, /writeFile\(join\(outDir, "index\.json"\), "\[\]\\n"\)/);
+    assert.match(registryBuild, /writeFile\(join\(outDir, "official-plugins\.json"\)/);
+    assert.match(dockerfile, /COPY --from=plugin-build \/app\/plugins\/canvas\/registry\/dist \.\/public\/plugins/);
 });
 
 test("第三方插件必须显式开启危险开关并再次确认", () => {
