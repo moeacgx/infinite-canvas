@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { Button, Switch, Tooltip } from "antd";
-import { Bot, PanelRightClose } from "lucide-react";
+import { Button, Tooltip } from "antd";
+import { Cable, PanelRightClose } from "lucide-react";
 import { motion } from "motion/react";
 
 import { CanvasLocalAgentPanel } from "@/app/(user)/canvas/components/canvas-local-agent-panel";
@@ -27,7 +27,6 @@ export function AgentPanel() {
     const panelOpen = useCanvasAgentStore((state) => state.panelOpen);
     const canvasContext = useCanvasAgentStore((state) => state.canvasContext);
     const token = useCanvasAgentStore((state) => state.token);
-    const confirmTools = useCanvasAgentStore((state) => state.confirmTools);
     const setAgentState = useCanvasAgentStore((state) => state.setAgentState);
     const closePanel = useCanvasAgentStore((state) => state.closePanel);
     const [resizing, setResizing] = useState(false);
@@ -83,31 +82,22 @@ export function AgentPanel() {
                 <header className="flex h-14 shrink-0 items-center justify-between border-b px-4" style={{ borderColor: theme.node.stroke }}>
                     <div className="flex min-w-0 items-center gap-2">
                         <span className="grid size-8 place-items-center rounded-lg">
-                            <Bot className="size-4" />
+                            <Cable className="size-4" />
                         </span>
                         <div className="min-w-0">
-                            <div className="text-base font-semibold leading-5">Agent</div>
-                            <div className="truncate text-xs" style={{ color: theme.node.muted }}>{canvasContext ? canvasContext.snapshot.title : "全站助手"}</div>
+                            <div className="text-base font-semibold leading-5">本地网络代理</div>
+                            <div className="truncate text-xs" style={{ color: theme.node.muted }}>
+                                自定义 API 跨域回退
+                            </div>
                         </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
-                        <label className="flex items-center gap-1.5 text-xs" style={{ color: theme.node.muted }}>
-                            <Switch size="small" checked={confirmTools} onChange={(value) => setAgentState({ confirmTools: value })} />
-                            工具确认
-                        </label>
-                        <Tooltip title="收起 Agent">
+                        <Tooltip title="收起本地网络代理">
                             <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" style={{ color: theme.node.muted }} icon={<PanelRightClose className="size-4" />} onClick={closePanel} />
                         </Tooltip>
                     </div>
                 </header>
-                <CanvasLocalAgentPanel
-                    snapshot={canvasContext?.snapshot || EMPTY_SNAPSHOT}
-                    canUndoOps={Boolean(canvasContext?.canUndoOps)}
-                    embedded
-                    autoConnect={Boolean(token.trim())}
-                    onApplyOps={applyOps}
-                    onUndoOps={undoOps}
-                />
+                <CanvasLocalAgentPanel snapshot={canvasContext?.snapshot || EMPTY_SNAPSHOT} canUndoOps={Boolean(canvasContext?.canUndoOps)} embedded networkOnly autoConnect={Boolean(token.trim())} onApplyOps={applyOps} onUndoOps={undoOps} />
             </motion.aside>
         </motion.div>
     );

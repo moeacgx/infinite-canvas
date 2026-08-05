@@ -51,6 +51,7 @@ export function CanvasLocalAgentPanel({
     collapsed,
     embedded,
     headless,
+    networkOnly,
     autoConnect,
     onApplyOps,
     onUndoOps,
@@ -60,6 +61,7 @@ export function CanvasLocalAgentPanel({
     collapsed?: boolean;
     embedded?: boolean;
     headless?: boolean;
+    networkOnly?: boolean;
     autoConnect?: boolean;
     onApplyOps: (ops: CanvasAgentOp[]) => unknown;
     onUndoOps: () => CanvasAgentSnapshot | null;
@@ -310,6 +312,12 @@ export function CanvasLocalAgentPanel({
     };
 
     const handleToolCall = async (endpoint: string, token: string, payload: AgentPendingToolCall) => {
+        if (networkOnly) {
+            const error = "本地网络代理不执行对话或画布工具，请使用画布内的创作 Agent";
+            addEventLog("已拒绝工具调用", { name: payload.name, error });
+            await postToolResult(endpoint, token, clientIdRef.current, { requestId: payload.requestId, error });
+            return;
+        }
         if (requiresToolConfirmation(payload, confirmToolsRef.current)) {
             if (pendingToolRef.current) {
                 await postToolResult(endpoint, token, clientIdRef.current, { requestId: payload.requestId, error: "仍有待确认的画布工具调用" });
@@ -572,31 +580,41 @@ export function CanvasLocalAgentPanel({
         }
     };
 
+    const visibleActiveTab = networkOnly && activeTab !== "setup" && activeTab !== "log" ? "setup" : activeTab;
     const content = (
         <>
             <AgentPanelTabs
-                value={activeTab}
+                value={visibleActiveTab}
                 theme={theme}
-                items={[
-                    { value: "setup", label: "连接", icon: <PlugZap className="size-3.5" /> },
-                    { value: "chat", label: "对话" },
-                    { value: "history", label: "历史", icon: <History className="size-3.5" />, count: threads.length },
-                    { value: "log", label: "日志", icon: <Terminal className="size-3.5" />, count: eventLogs.length },
-                ]}
+                items={
+                    networkOnly
+                        ? [
+                              { value: "setup", label: "连接", icon: <PlugZap className="size-3.5" /> },
+                              { value: "log", label: "日志", icon: <Terminal className="size-3.5" />, count: eventLogs.length },
+                          ]
+                        : [
+                              { value: "setup", label: "连接", icon: <PlugZap className="size-3.5" /> },
+                              { value: "chat", label: "对话" },
+                              { value: "history", label: "历史", icon: <History className="size-3.5" />, count: threads.length },
+                              { value: "log", label: "日志", icon: <Terminal className="size-3.5" />, count: eventLogs.length },
+                          ]
+                }
                 onChange={(activeTab) => {
                     setAgentState({ activeTab });
                     if (activeTab === "history") void loadThreads();
                 }}
                 right={
-                    <>
-                        <Button size="small" type="text" disabled={!canUndoOps} icon={<RotateCcw className="size-3.5" />} onClick={undoLastTool}>
-                            撤销
-                        </Button>
-                    </>
+                    networkOnly ? null : (
+                        <>
+                            <Button size="small" type="text" disabled={!canUndoOps} icon={<RotateCcw className="size-3.5" />} onClick={undoLastTool}>
+                                撤销
+                            </Button>
+                        </>
+                    )
                 }
             />
 
-            {activeTab === "setup" ? (
+            {visibleActiveTab === "setup" ? (
                 <AgentConnectView
                     theme={theme}
                     url={url}
@@ -605,11 +623,12 @@ export function CanvasLocalAgentPanel({
                     connected={connected}
                     activity={activity}
                     connectError={connectError}
+                    networkOnly={networkOnly}
                     onUrlChange={(url) => setAgentState({ url, connectError: "" })}
                     onTokenChange={(token) => setAgentState({ token, connectError: "" })}
                     onToggleEnabled={toggleAgentConnection}
                 />
-            ) : activeTab === "history" ? (
+            ) : visibleActiveTab === "history" ? (
                 <AgentHistoryView
                     theme={theme}
                     threads={threads}
@@ -622,7 +641,7 @@ export function CanvasLocalAgentPanel({
                     onResumeThread={(threadId) => void resumeThread(threadId)}
                     onDeleteThread={confirmDeleteThread}
                 />
-            ) : activeTab === "log" ? (
+            ) : visibleActiveTab === "log" ? (
                 <AgentLogView
                     logs={eventLogs}
                     theme={theme}
@@ -778,6 +797,7 @@ function AgentConnectView({
     connected,
     activity,
     connectError,
+    networkOnly,
     onUrlChange,
     onTokenChange,
     onToggleEnabled,
@@ -789,6 +809,7 @@ function AgentConnectView({
     connected: boolean;
     activity: string;
     connectError: string;
+    networkOnly?: boolean;
     onUrlChange: (value: string) => void;
     onTokenChange: (value: string) => void;
     onToggleEnabled: () => void;
@@ -804,9 +825,9 @@ function AgentConnectView({
         <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto p-4">
             <div className="space-y-4">
                 <div>
-                    <div className="text-base font-semibold leading-6">连接本地 Agent</div>
+                    <div className="text-base font-semibold leading-6">{networkOnly ? "连接本地网络代理" : "连接本地 Agent"}</div>
                     <div className="mt-1 text-xs leading-5" style={{ color: theme.node.muted }}>
-                        安装 Codex 插件后，画布会优先自动连接本机 Agent。
+                        {networkOnly ? "用于用户自定义 API 在浏览器直连受限时的安全本机转发。" : "安装 Codex 插件后，画布会优先自动连接本机 Agent。"}
                     </div>
                 </div>
                 <div className="space-y-2">

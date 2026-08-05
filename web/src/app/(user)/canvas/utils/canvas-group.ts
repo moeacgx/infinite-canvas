@@ -1,22 +1,21 @@
 import type { CanvasNodeData } from "../types";
 
 const GROUP_NODE_TYPE = "group";
+export const GROUP_PADDING = 40;
 
 export function findGroupDropTarget(movedIds: Set<string>, nodes: CanvasNodeData[]) {
     if (nodes.some((node) => movedIds.has(node.id) && node.type === GROUP_NODE_TYPE)) return null;
     const movingNodes = nodes.filter((node) => movedIds.has(node.id) && node.type !== GROUP_NODE_TYPE);
     if (!movingNodes.length) return null;
     return (
-        [...nodes]
-            .reverse()
-            .find((group) => {
-                if (group.type !== GROUP_NODE_TYPE || movedIds.has(group.id)) return false;
-                return movingNodes.every((node) => {
-                    const centerX = node.position.x + node.width / 2;
-                    const centerY = node.position.y + node.height / 2;
-                    return centerX >= group.position.x && centerX <= group.position.x + group.width && centerY >= group.position.y && centerY <= group.position.y + group.height;
-                });
-            }) || null
+        [...nodes].reverse().find((group) => {
+            if (group.type !== GROUP_NODE_TYPE || movedIds.has(group.id)) return false;
+            return movingNodes.every((node) => {
+                const centerX = node.position.x + node.width / 2;
+                const centerY = node.position.y + node.height / 2;
+                return centerX >= group.position.x && centerX <= group.position.x + group.width && centerY >= group.position.y && centerY <= group.position.y + group.height;
+            });
+        }) || null
     );
 }
 
@@ -24,7 +23,7 @@ export function snapNodesIntoGroup(movedIds: Set<string>, nodes: CanvasNodeData[
     const movingNodes = nodes.filter((node) => movedIds.has(node.id) && node.type !== GROUP_NODE_TYPE);
     if (!movingNodes.length) return nodes;
     const padding = 24;
-    const bounds = nodeBounds(movingNodes);
+    const bounds = getNodeBounds(movingNodes);
     const left = group.position.x + padding;
     const top = group.position.y + padding;
     const right = group.position.x + group.width - padding;
@@ -41,13 +40,12 @@ export function findContainingGroupId(node: CanvasNodeData, nodes: CanvasNodeDat
     const centerX = node.position.x + node.width / 2;
     const centerY = node.position.y + node.height / 2;
     return (
-        [...nodes]
-            .reverse()
-            .find((group) => group.type === GROUP_NODE_TYPE && group.id !== node.id && centerX >= group.position.x && centerX <= group.position.x + group.width && centerY >= group.position.y && centerY <= group.position.y + group.height)?.id || undefined
+        [...nodes].reverse().find((group) => group.type === GROUP_NODE_TYPE && group.id !== node.id && centerX >= group.position.x && centerX <= group.position.x + group.width && centerY >= group.position.y && centerY <= group.position.y + group.height)
+            ?.id || undefined
     );
 }
 
-function nodeBounds(nodes: CanvasNodeData[]) {
+export function getNodeBounds(nodes: CanvasNodeData[]) {
     return nodes.reduce(
         (bounds, node) => ({
             left: Math.min(bounds.left, node.position.x),

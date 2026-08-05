@@ -10,21 +10,24 @@ import { CreditSymbol, requestCreditCost } from "@/constant/credits";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasImageSettingsPopover } from "./canvas-image-settings-popover";
+import { CanvasCameraControl } from "./canvas-camera-control";
 import { CanvasAudioSettingsPopover, type CanvasAudioSettingKey } from "./canvas-audio-settings-popover";
-import { CanvasVideoSettingsPopover } from "./canvas-video-settings-popover";
+import { CanvasVideoSettingsPopover, type CanvasVideoFrameOption, type CanvasVideoResourceOption } from "./canvas-video-settings-popover";
 import type { CanvasGenerationMode, CanvasNodeData, CanvasNodeMetadata } from "../types";
 
 type CanvasConfigNodePanelProps = {
     node: CanvasNodeData;
     isRunning: boolean;
     inputSummary: { textCount: number; imageCount: number; videoCount: number; audioCount: number };
+    videoFrameOptions?: CanvasVideoFrameOption[];
+    videoResourceOptions?: CanvasVideoResourceOption[];
     onConfigChange: (nodeId: string, patch: Partial<CanvasNodeMetadata>) => void;
     onGenerate: (nodeId: string) => void;
     onStop: (nodeId: string) => void;
     onComposerToggle: () => void;
 };
 
-export function CanvasConfigNodePanel({ node, isRunning, inputSummary, onConfigChange, onGenerate, onStop, onComposerToggle }: CanvasConfigNodePanelProps) {
+export function CanvasConfigNodePanel({ node, isRunning, inputSummary, videoFrameOptions = [], videoResourceOptions = [], onConfigChange, onGenerate, onStop, onComposerToggle }: CanvasConfigNodePanelProps) {
     const globalConfig = useEffectiveConfig();
     const modelCosts = useConfigStore((state) => state.publicSettings?.modelChannel.modelCosts);
     const showCreditBalance = useConfigStore((state) => state.publicSettings?.ui?.showCreditBalance === true);
@@ -102,12 +105,13 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, onConfigC
                 </button>
             </div>
 
-            <div className={`mb-2 grid min-w-0 cursor-default items-center gap-2 ${mode === "image" || mode === "video" || mode === "audio" ? "grid-cols-[minmax(0,1fr)_148px]" : "grid-cols-1"}`} onMouseDown={(event) => event.stopPropagation()}>
+            <div className={`mb-2 grid min-w-0 cursor-default items-center gap-2 ${mode === "image" || mode === "video" ? "grid-cols-[minmax(0,1fr)_148px_92px]" : mode === "audio" ? "grid-cols-[minmax(0,1fr)_148px]" : "grid-cols-1"}`} onMouseDown={(event) => event.stopPropagation()}>
                 <ModelPicker
                     className="canvas-compact-control h-10"
                     config={config}
                     value={config.model}
-                    onChange={(model) => onConfigChange(node.id, { model, modelOverride: true })}
+                    channelId={modelChannelId(config, mode)}
+                    onChange={(model, channelId) => onConfigChange(node.id, { model, channelId, modelOverride: true })}
                     capability={mode}
                     onMissingConfig={() => openConfigDialog(true)}
                     fullWidth
@@ -117,6 +121,13 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, onConfigC
                         config={config}
                         placement="topRight"
                         buttonClassName="canvas-compact-control !h-10 !w-full !justify-start !rounded-lg !px-2"
+                        frameOptions={videoFrameOptions}
+                        resourceOptions={videoResourceOptions}
+                        metadata={node.metadata}
+                        firstFrameNodeId={node.metadata?.firstFrameNodeId}
+                        lastFrameNodeId={node.metadata?.lastFrameNodeId}
+                        onFrameChange={(patch) => onConfigChange(node.id, patch)}
+                        onMetadataChange={(patch) => onConfigChange(node.id, patch)}
                         onConfigChange={(key, value) => onConfigChange(node.id, videoConfigPatch(key, value))}
                     />
                 ) : mode === "image" ? (
@@ -134,6 +145,9 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, onConfigC
                         buttonClassName="canvas-compact-control !h-10 !w-full !justify-start !rounded-lg !px-2"
                         onConfigChange={(key, value) => onConfigChange(node.id, audioConfigPatch(key, value))}
                     />
+                ) : null}
+                {mode === "image" || mode === "video" ? (
+                    <CanvasCameraControl value={node.metadata?.cameraControl} onChange={(cameraControl) => onConfigChange(node.id, { cameraControl })} buttonClassName="canvas-compact-control !h-10 !w-full !justify-start !rounded-lg !px-2" />
                 ) : null}
             </div>
 
@@ -179,6 +193,13 @@ function InputChip({ label, value, style }: { label: string; value: string; styl
     );
 }
 
+function modelChannelId(config: AiConfig, mode: CanvasGenerationMode) {
+    if (mode === "image") return config.imageChannelId;
+    if (mode === "video") return config.videoChannelId;
+    if (mode === "text") return config.textChannelId;
+    return config.audioChannelId || config.activeChannelId;
+}
+
 function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: CanvasGenerationMode): AiConfig {
     const model = resolveCapabilityModel(globalConfig, mode, node.metadata?.modelOverride ? node.metadata?.model : undefined);
     return {
@@ -189,7 +210,12 @@ function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: Can
         background: node.metadata?.background ?? globalConfig.background ?? defaultConfig.background,
         videoSeconds: node.metadata?.seconds || globalConfig.videoSeconds || defaultConfig.videoSeconds,
         vquality: node.metadata?.vquality || globalConfig.vquality || defaultConfig.vquality,
+        videoMode: node.metadata?.mode || globalConfig.videoMode || defaultConfig.videoMode,
+        videoNegativePrompt: node.metadata?.negativePrompt || globalConfig.videoNegativePrompt || defaultConfig.videoNegativePrompt,
+        videoMultiShot: node.metadata?.multiShot || globalConfig.videoMultiShot || defaultConfig.videoMultiShot,
+        videoShotType: node.metadata?.shotType || globalConfig.videoShotType || defaultConfig.videoShotType,
         videoGenerateAudio: node.metadata?.generateAudio || globalConfig.videoGenerateAudio || defaultConfig.videoGenerateAudio,
+        videoCharacterOrientation: node.metadata?.characterOrientation || globalConfig.videoCharacterOrientation || defaultConfig.videoCharacterOrientation,
         videoWatermark: node.metadata?.watermark || globalConfig.videoWatermark || defaultConfig.videoWatermark,
         audioVoice: node.metadata?.audioVoice || globalConfig.audioVoice || defaultConfig.audioVoice,
         audioFormat: node.metadata?.audioFormat || globalConfig.audioFormat || defaultConfig.audioFormat,
@@ -201,7 +227,12 @@ function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: Can
 
 function videoConfigPatch(key: keyof AiConfig, value: string) {
     if (key === "videoSeconds") return { seconds: value };
+    if (key === "videoMode") return { mode: value };
+    if (key === "videoNegativePrompt") return { negativePrompt: value };
+    if (key === "videoMultiShot") return { multiShot: value };
+    if (key === "videoShotType") return { shotType: value };
     if (key === "videoGenerateAudio") return { generateAudio: value };
+    if (key === "videoCharacterOrientation") return { characterOrientation: value };
     if (key === "videoWatermark") return { watermark: value };
     return { [key]: value };
 }

@@ -4,11 +4,17 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import { Button, Input, Modal, Slider } from "antd";
 import { Brush, Eraser, RotateCcw, WandSparkles, X } from "lucide-react";
 
+import { ModelPicker } from "@/components/model-picker";
 import { readImageMeta } from "@/lib/image-utils";
+import { downloadRemoteImage } from "@/services/image-storage";
+import type { AiConfig } from "@/stores/use-config-store";
 
 export type CanvasImageMaskEditPayload = {
     prompt: string;
     maskDataUrl: string;
+    markedDataUrl: string;
+    model?: string;
+    channelId?: string;
 };
 
 type DrawMode = "paint" | "erase";
@@ -17,7 +23,19 @@ const defaultBrushSize = 100;
 const maskFillColor = "rgba(37, 99, 235, .38)";
 const maskBorderColor = "rgba(255, 255, 255, .72)";
 
-export function CanvasNodeMaskEditDialog({ dataUrl, open, onClose, onConfirm }: { dataUrl: string; open: boolean; onClose: () => void; onConfirm: (payload: CanvasImageMaskEditPayload) => void }) {
+type Props = {
+    dataUrl: string;
+    open: boolean;
+    config?: AiConfig;
+    model?: string;
+    channelId?: string;
+    onModelChange?: (model: string, channelId?: string) => void;
+    onMissingConfig?: () => void;
+    onClose: () => void;
+    onConfirm: (payload: CanvasImageMaskEditPayload) => Promise<void> | void;
+};
+
+export function CanvasNodeMaskEditDialog({ dataUrl, open, config, model, channelId, onModelChange, onMissingConfig, onClose, onConfirm }: Props) {
     const maskCanvasRef = useRef<HTMLCanvasElement>(null);
     const previewCanvasRef = useRef<HTMLCanvasElement>(null);
     const drawingRef = useRef<{ active: boolean; last: { x: number; y: number } | null }>({ active: false, last: null });
@@ -26,6 +44,7 @@ export function CanvasNodeMaskEditDialog({ dataUrl, open, onClose, onConfirm }: 
     const [brushSize, setBrushSize] = useState(defaultBrushSize);
     const [mode, setMode] = useState<DrawMode>("paint");
     const [error, setError] = useState("");
+    const [submitting, setSubmitting] = useState(false);
 
     useEffect(() => {
         if (!open) return;
@@ -33,6 +52,7 @@ export function CanvasNodeMaskEditDialog({ dataUrl, open, onClose, onConfirm }: 
         setBrushSize(defaultBrushSize);
         setMode("paint");
         setError("");
+        setSubmitting(false);
         void readImageMeta(dataUrl).then(setImage);
     }, [dataUrl, open]);
 
@@ -91,17 +111,31 @@ export function CanvasNodeMaskEditDialog({ dataUrl, open, onClose, onConfirm }: 
         setError("");
     };
 
-    const submit = () => {
+    const submit = async () => {
         const nextPrompt = prompt.trim();
         const canvas = maskCanvasRef.current;
         if (!nextPrompt) return setError("请输入修改要求");
         if (!canvas) return;
         if (!canvasHasPaint(canvas)) return setError("请先涂抹局部区域");
-        onConfirm({ prompt: nextPrompt, maskDataUrl: buildEditMask(canvas) });
+        setSubmitting(true);
+        try {
+            const markedDataUrl = await buildMarkedReference(dataUrl, canvas);
+            await onConfirm({
+                prompt: nextPrompt,
+                maskDataUrl: buildEditMask(canvas),
+                markedDataUrl,
+                model: model || config?.model,
+                channelId: channelId || config?.imageChannelId,
+            });
+        } catch {
+            setError("生成标记参考图失败");
+        } finally {
+            setSubmitting(false);
+        }
     };
 
     return (
-        <Modal title={null} open={open && Boolean(dataUrl)} onCancel={onClose} footer={null} width={980} centered destroyOnHidden>
+        <Modal title={null} open={open && Boolean(dataUrl)} onCancel={submitting ? undefined : onClose} footer={null} width={980} centered destroyOnHidden closable={!submitting} mask={{ closable: !submitting }}>
             <div className="grid gap-5 lg:grid-cols-[minmax(360px,1fr)_320px]">
                 <div className="flex min-h-[360px] items-center justify-center rounded-xl border border-black/10 bg-transparent p-0 dark:border-white/10">
                     <div className="relative inline-block max-w-full overflow-hidden rounded-lg bg-transparent select-none">
@@ -162,16 +196,32 @@ export function CanvasNodeMaskEditDialog({ dataUrl, open, onClose, onConfirm }: 
                         {error ? <div className="text-xs font-medium text-[#ef4444]">{error}</div> : null}
                     </div>
 
+                    {config ? (
+                        <div className="space-y-2">
+                            <div className="text-sm font-medium opacity-75">模型</div>
+                            <ModelPicker
+                                className="canvas-compact-control h-10"
+                                config={{ ...config, model: model || config.model, imageChannelId: channelId || config.imageChannelId }}
+                                value={model || config.model}
+                                channelId={channelId || config.imageChannelId}
+                                onChange={(nextModel, nextChannelId) => onModelChange?.(nextModel, nextChannelId)}
+                                capability="image"
+                                onMissingConfig={onMissingConfig}
+                                fullWidth
+                            />
+                        </div>
+                    ) : null}
+
                     <div className="mt-auto flex items-center justify-between gap-2">
-                        <Button icon={<RotateCcw className="size-4" />} onClick={resetMask}>
+                        <Button icon={<RotateCcw className="size-4" />} onClick={resetMask} disabled={submitting}>
                             重置
                         </Button>
                         <div className="flex items-center gap-2">
-                            <Button icon={<X className="size-4" />} onClick={onClose}>
+                            <Button icon={<X className="size-4" />} onClick={onClose} disabled={submitting}>
                                 取消
                             </Button>
-                            <Button type="primary" icon={<WandSparkles className="size-4" />} onClick={submit}>
-                                AI 修改
+                            <Button type="primary" icon={submitting ? undefined : <WandSparkles className="size-4" />} onClick={() => void submit()} loading={submitting} disabled={submitting}>
+                                {submitting ? "正在处理..." : "AI 修改"}
                             </Button>
                         </div>
                     </div>
@@ -276,4 +326,43 @@ function buildEditMask(selectionCanvas: HTMLCanvasElement) {
     }
     context.putImageData(mask, 0, 0);
     return canvas.toDataURL("image/png");
+}
+
+async function buildMarkedReference(sourceDataUrl: string, selectionCanvas: HTMLCanvasElement) {
+    const canvas = document.createElement("canvas");
+    canvas.width = selectionCanvas.width;
+    canvas.height = selectionCanvas.height;
+    const context = canvas.getContext("2d");
+    if (!context) return selectionCanvas.toDataURL("image/png");
+
+    const image = await loadCanvasImage(await toDrawableDataUrl(sourceDataUrl));
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    context.fillStyle = maskFillColor;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.globalCompositeOperation = "destination-in";
+    context.drawImage(selectionCanvas, 0, 0);
+    context.globalCompositeOperation = "destination-over";
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    context.globalCompositeOperation = "source-over";
+    return canvas.toDataURL("image/png");
+}
+
+async function toDrawableDataUrl(src: string) {
+    if (/^(data|blob):/i.test(src)) return src;
+    const blob = await downloadRemoteImage(src);
+    return new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(new Error("读取图片失败"));
+        reader.readAsDataURL(blob);
+    });
+}
+
+function loadCanvasImage(src: string) {
+    return new Promise<HTMLImageElement>((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error("读取图片失败"));
+        image.src = src;
+    });
 }

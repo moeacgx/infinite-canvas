@@ -21,7 +21,8 @@ test("生图和视频工作台默认使用底部布局并持久化用户选择",
         assert.match(source, new RegExp(title));
     }
 
-    assert.match(imageSource, /workbenchLayout === "bottom" \? "h-full overflow-y-auto pb-72 md:pb-60 lg:pb-60"/);
+    assert.match(imageSource, /className="min-h-\[360px\] flex-1 pb-40 lg:pb-44"/);
+    assert.match(imageSource, /pointer-events-none fixed inset-x-0 bottom-5/);
     assert.match(videoSource, /workbenchLayout === "bottom" \? "h-full overflow-y-auto pb-56 sm:pb-52 lg:pb-52"/);
 });
 

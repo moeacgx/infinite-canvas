@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getVideoMaxSeconds, assertVideoSecondsSupported } from "../src/lib/video-model-capabilities.ts";
+import { assertVideoSecondsSupported, getVideoMaxSeconds, supportsVideoAudioGeneration } from "../src/lib/video-model-capabilities.ts";
 import { defaultConfig, type AiConfig } from "../src/stores/use-config-store.ts";
 
 function makeConfig(overrides: Partial<AiConfig> = {}): AiConfig {
@@ -40,4 +40,13 @@ test("overlong Grok requests fail before dispatch", () => {
     assert.throws(() => assertVideoSecondsSupported(makeConfig({ videoSeconds: "16" })), /15/);
     assert.doesNotThrow(() => assertVideoSecondsSupported(makeConfig({ videoSeconds: "15" })));
     assert.doesNotThrow(() => assertVideoSecondsSupported(makeConfig({ videoModel: "other-video", videoSeconds: "20" })));
+});
+
+test("音频生成只对明确支持的模型开放", () => {
+    assert.equal(defaultConfig.videoGenerateAudio, "false");
+    assert.equal(supportsVideoAudioGeneration("grok-imagine-video-1.5"), false);
+    assert.equal(supportsVideoAudioGeneration("custom-video-model"), false);
+    assert.equal(supportsVideoAudioGeneration("kling-v2.6"), true);
+    assert.equal(supportsVideoAudioGeneration("bytedance/seedance_2"), true);
+    assert.equal(supportsVideoAudioGeneration("kling-v3-motion-control"), false);
 });

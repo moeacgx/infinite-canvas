@@ -39,8 +39,9 @@ export type ImageQuickToolsConfig = {
 };
 
 export const IMAGE_QUICK_TOOLS_STORAGE_KEY = "canvas-image-quick-tools-v6";
+export const PANORAMA_QUICK_TOOLS_STORAGE_KEY = "canvas-panorama-quick-tools-v1";
 
-const defaultBaseToolIds: ImageQuickToolId[] = ["info", "delete", "saveAsset", "download", "edit"];
+const defaultBaseToolIds: ImageQuickToolId[] = ["info", "delete", "saveAsset", "download"];
 
 export const imageToolDefinitions: ImageToolDefinition[] = [
     {
@@ -85,7 +86,7 @@ export const imageToolDefinitions: ImageToolDefinition[] = [
         defaultVisible: true,
         panelLabel: "局部编辑",
         label: "局部编辑",
-        title: "添加蒙版遮罩后局部修改",
+        title: "对图片进行局部修改",
         icon: () => <Brush className="size-4" />,
         run: (node, handlers) => handlers.onMaskEdit(node),
     },
@@ -136,7 +137,7 @@ export const imageToolDefinitions: ImageToolDefinition[] = [
     },
     {
         id: "view",
-        defaultVisible: true,
+        defaultVisible: false,
         panelLabel: "查看大图",
         label: "查看大图",
         title: "查看图片详情",
@@ -146,6 +147,7 @@ export const imageToolDefinitions: ImageToolDefinition[] = [
 ];
 
 export const defaultImageQuickToolIds: ImageQuickToolId[] = [...defaultBaseToolIds, ...imageToolDefinitions.filter((tool) => tool.defaultVisible).map((tool) => tool.id)];
+export const defaultPanoramaQuickToolIds: ImageQuickToolId[] = defaultImageQuickToolIds.filter((id) => id !== "replace");
 
 export function buildImageToolbarTools(node: CanvasNodeData, handlers: ImageToolHandlers) {
     return imageToolDefinitions.map((tool) => ({

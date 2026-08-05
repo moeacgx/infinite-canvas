@@ -4,6 +4,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import { defaultConfig, resolveCapabilityModel } from "./use-config-store.ts";
+
 const root = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(resolve(root, "use-config-store.ts"), "utf8");
 const initSource = readFileSync(resolve(root, "../components/layout/client-root-init.tsx"), "utf8");
@@ -16,6 +18,14 @@ const userStatusSource = readFileSync(resolve(root, "../components/layout/user-s
 const assistantPanelSource = readFileSync(resolve(root, "../app/(user)/canvas/components/canvas-assistant-panel.tsx"), "utf8");
 const nodePromptPanelSource = readFileSync(resolve(root, "../app/(user)/canvas/components/canvas-node-prompt-panel.tsx"), "utf8");
 const configNodePanelSource = readFileSync(resolve(root, "../app/(user)/canvas/components/canvas-config-node-panel.tsx"), "utf8");
+
+function sourceSection(value, start, end) {
+    const startIndex = value.indexOf(start);
+    const endIndex = value.indexOf(end, startIndex + start.length);
+    assert.notEqual(startIndex, -1, `缺少源码片段：${start}`);
+    assert.notEqual(endIndex, -1, `缺少源码片段：${end}`);
+    return value.slice(startIndex, endIndex);
+}
 
 test("New API effective config is resolved from fetched models instead of returning raw persisted config", () => {
     assert.match(source, /export function applyFetchedModelsToConfig/);
@@ -111,31 +121,44 @@ test("image and chat requests reject empty models before calling New API", () =>
 });
 
 test("image generation and edits use the selected image model instead of stale generic model", () => {
-    assert.match(source, /export function resolveCapabilityModel/);
-    assert.match(source, /if \(selected && models\.includes\(selected\)\) return selected/);
-    assert.doesNotMatch(source, /selected && \(!models\.length/);
-    assert.doesNotMatch(source, /return models\[0\][^;]*config\.model/);
-    assert.match(source, /defaultConfig\[defaultModelKey\(capability\)\]/);
-    assert.doesNotMatch(source, /imageModel:\s*config\.imageModel \|\| config\.model/);
-    assert.match(imageSource, /resolveCapabilityModel/);
-    assert.match(imageSource, /requestGeneration[\s\S]*channelModel\s*=\s*resolveCapabilityModel\(config,\s*"image"\)[\s\S]*resolveModelRequestConfig\(config,\s*channelModel\)[\s\S]*model:\s*requestConfig\.model/);
-    assert.match(imageSource, /requestEdit[\s\S]*channelModel\s*=\s*resolveCapabilityModel\(config,\s*"image"\)[\s\S]*resolveModelRequestConfig\(config,\s*channelModel\)[\s\S]*formData\.set\("model",\s*requestConfig\.model\)/);
-    assert.doesNotMatch(imageSource, /resolveCapabilityModel\(config,\s*"image",\s*config\.model\)/);
-    assert.doesNotMatch(imageSource, /requestGeneration[\s\S]{0,500}model:\s*config\.model/);
-    assert.doesNotMatch(imageSource, /requestEdit[\s\S]{0,500}formData\.set\("model",\s*config\.model\)/);
+    const config = {
+        ...defaultConfig,
+        model: "stale-text-model",
+        imageModel: "selected-image-model",
+        imageModels: ["selected-image-model", "fallback-image-model"],
+    };
+    assert.equal(resolveCapabilityModel(config, "image"), "selected-image-model");
+    assert.equal(resolveCapabilityModel(config, "image", "fallback-image-model"), "fallback-image-model");
+    assert.equal(resolveCapabilityModel({ ...config, imageModel: "removed-image-model" }, "image"), "selected-image-model");
+
+    const generationSource = sourceSection(imageSource, "export async function requestGeneration", "async function requestNewApiImageTask");
+    const editSource = sourceSection(imageSource, "export async function requestEdit", "export async function requestImageQuestion");
+    for (const requestSource of [generationSource, editSource]) {
+        assert.match(requestSource, /channelModel\s*=\s*resolveCapabilityModel\(config,\s*"image"\)/);
+        assert.match(requestSource, /requestConfig\s*=\s*resolveModelRequestConfig\(config,\s*channelModel\)/);
+        assert.doesNotMatch(requestSource, /resolveCapabilityModel\(config,\s*"image",\s*config\.model\)/);
+    }
+    assert.match(generationSource, /model:\s*requestConfig\.model/);
+    assert.doesNotMatch(generationSource, /model:\s*config\.model/);
+    assert.match(editSource, /formData\.set\("model",\s*requestConfig\.model\)/);
+    assert.doesNotMatch(editSource, /formData\.set\("model",\s*config\.model\)/);
 });
 
 test("image workbench snapshots persist the selected image model explicitly", () => {
     const imagePageSource = readFileSync(resolve(root, "../app/(user)/image/page.tsx"), "utf8");
+    const snapshotSource = sourceSection(imagePageSource, "const buildRequestSnapshot", "const runGenerationTask");
     assert.match(imagePageSource, /resolveCapabilityModel\(effectiveConfig,\s*"image"\)/);
-    assert.match(imagePageSource, /buildRequestSnapshot[\s\S]*config:\s*\{[\s\S]*imageModel:\s*model[\s\S]*count:\s*"1"/);
+    assert.match(snapshotSource, /requestModel\s*=\s*resolveCapabilityModel\(baseConfig,\s*"image",/);
+    assert.match(snapshotSource, /requestConfig\s*=\s*\{[^}]*model:\s*requestModel,\s*imageModel:\s*requestModel,[^}]*count:\s*"1"/s);
+    assert.match(snapshotSource, /displayConfig:\s*buildGenerationLogConfig\(\{\s*\.\.\.requestConfig,\s*count:\s*String\(taskCount\)\s*\}\)/);
+    assert.match(imagePageSource, /background:\s*config\.background/);
 });
 
-test("canvas assistant image mode resolves the capability model before submitting edits", () => {
+test("canvas creative agent resolves the text model before delegating media tools", () => {
     assert.match(assistantPanelSource, /resolveCapabilityModel/);
-    assert.match(assistantPanelSource, /const model = resolveCapabilityModel\(effectiveConfig,\s*nextMode === "image" \? "image" : "text"\)/);
-    assert.match(assistantPanelSource, /requestConfig[\s\S]*model,[\s\S]*imageModel:\s*model/);
-    assert.match(assistantPanelSource, /const activeModel = resolveCapabilityModel\(config,\s*mode === "image" \? "image" : "text"\)/);
+    assert.match(assistantPanelSource, /const textModel = resolveCapabilityModel\(effectiveConfig,\s*"text",\s*effectiveConfig\.textModel \|\| effectiveConfig\.model\)/);
+    assert.match(assistantPanelSource, /requestConfig[\s\S]*model:\s*textModel,[\s\S]*textModel/);
+    assert.match(assistantPanelSource, /runCanvasAgent[\s\S]*onExecuteAction/);
 });
 
 test("canvas image nodes ignore stale unavailable saved models", () => {
@@ -143,7 +166,7 @@ test("canvas image nodes ignore stale unavailable saved models", () => {
     assert.match(canvasClientSource, /resolveCapabilityModel/);
     assert.match(canvasClientSource, /function preferredNodeModel/);
     assert.match(canvasClientSource, /node\.metadata\.modelOverride \|\| node\.type === CanvasNodeType\.Config/);
-    assert.match(canvasClientSource, /mode !== "image" && node\.type !== CanvasNodeType\.Image/);
+    assert.match(canvasClientSource, /mode !== "image" && !isCanvasImageNodeType\(node\.type\)/);
     assert.match(canvasClientSource, /buildGenerationConfig[\s\S]*resolveCapabilityModel\(config,\s*mode,\s*preferredModel\)/);
     assert.match(canvasClientSource, /function buildSavedImageGenerationConfig/);
     assert.match(canvasClientSource, /buildSavedImageGenerationConfig[\s\S]*resolveCapabilityModel\(config,\s*"image",\s*metadata\.model\)[\s\S]*imageModel:\s*model/);
@@ -184,7 +207,6 @@ test("Admin public UI switches hide login entry and credit balance displays", ()
     assert.match(userStatusSource, /showLoginEntry/);
     assert.match(userStatusSource, /!user && showLoginEntry/);
     assert.match(userStatusSource, /showCreditBalance/);
-    assert.match(assistantPanelSource, /showCreditBalance/);
     assert.match(nodePromptPanelSource, /showCreditBalance/);
     assert.match(configNodePanelSource, /showCreditBalance/);
 });

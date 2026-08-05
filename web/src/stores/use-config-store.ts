@@ -31,6 +31,32 @@ export type ModelChannel = {
 
 export type ModelScriptMap = Record<string, Partial<Record<ModelCapability, string>>>;
 
+export type VideoMultiPromptItem = { prompt: string; duration: string };
+export type VideoElementReference = {
+    id: string;
+    kind: "image" | "video" | "audio";
+    name: string;
+    type: string;
+    dataUrl?: string;
+    url?: string;
+    storageKey?: string;
+    bytes?: number;
+    width?: number;
+    height?: number;
+    durationMs?: number;
+};
+export type VideoElementItem = { name: string; description: string; references: VideoElementReference[] };
+export type PublicModelChannel = {
+    id?: string;
+    name?: string;
+    baseUrl?: string;
+    models?: string[];
+    weight?: number;
+    timeout?: number;
+    enabled?: boolean;
+    remark?: string;
+};
+
 export type AiConfig = {
     channelMode: "remote" | "local" | "newapi";
     baseUrl: string;
@@ -53,9 +79,16 @@ export type AiConfig = {
     audioSpeed: string;
     audioInstructions: string;
     videoSeconds: string;
+    videoMode: string;
+    videoNegativePrompt: string;
+    videoMultiShot: string;
+    videoShotType: string;
+    videoMultiPrompt: VideoMultiPromptItem[];
+    videoElementList: VideoElementItem[];
     vquality: string;
     videoGenerateAudio: string;
     videoWatermark: string;
+    videoCharacterOrientation: string;
     systemPrompt: string;
     models: string[];
     imageModels: string[];
@@ -64,9 +97,29 @@ export type AiConfig = {
     audioModels: string[];
     quality: string;
     size: string;
+    videoSize: string;
     background: string;
     count: string;
     canvasImageCount: string;
+    timeout: string;
+    apiMode: string;
+    streamImages: string;
+    streamPartialImages: string;
+    responseFormatB64Json: string;
+    codexCli: string;
+    systemPrompts: {
+        image: string;
+        video: string;
+        text: string;
+        workflow: string;
+        workflowAgent: string;
+    };
+    publicChannels: PublicModelChannel[];
+    activeChannelId: string;
+    imageChannelId: string;
+    videoChannelId: string;
+    textChannelId: string;
+    audioChannelId: string;
 };
 
 export type WebdavSyncConfig = {
@@ -146,9 +199,16 @@ export const defaultConfig: AiConfig = {
     audioSpeed: "1",
     audioInstructions: "",
     videoSeconds: "6",
+    videoMode: "std",
+    videoNegativePrompt: "",
+    videoMultiShot: "false",
+    videoShotType: "intelligence",
+    videoMultiPrompt: [{ prompt: "", duration: "1" }],
+    videoElementList: [{ name: "", description: "", references: [] }],
     vquality: "720",
-    videoGenerateAudio: "true",
+    videoGenerateAudio: "false",
     videoWatermark: "false",
+    videoCharacterOrientation: "video",
     systemPrompt: "",
     models: [],
     imageModels: [],
@@ -157,9 +217,29 @@ export const defaultConfig: AiConfig = {
     audioModels: [],
     quality: "auto",
     size: "1:1",
+    videoSize: "1280x720",
     background: "",
     count: "1",
     canvasImageCount: "3",
+    timeout: "600",
+    apiMode: "images",
+    streamImages: "",
+    streamPartialImages: "1",
+    responseFormatB64Json: "",
+    codexCli: "",
+    systemPrompts: {
+        image: "",
+        video: "",
+        text: "",
+        workflow: "",
+        workflowAgent: "",
+    },
+    publicChannels: [],
+    activeChannelId: "",
+    imageChannelId: "",
+    videoChannelId: "",
+    textChannelId: "",
+    audioChannelId: "",
 };
 
 export const defaultWebdavSyncConfig: WebdavSyncConfig = {
@@ -233,7 +313,14 @@ function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSetti
         textModel: textModels.includes(config.textModel) ? config.textModel : fallbackTextModel || fallbackModel,
         audioModel: audioModels.includes(config.audioModel) ? config.audioModel : fallbackAudioModel,
         systemPrompt: modelChannel.systemPrompt,
+        publicChannels: publicChannelsFromSettings(modelChannel),
     };
+}
+
+function publicChannelsFromSettings(modelChannel: AdminPublicSettings["modelChannel"]): PublicModelChannel[] {
+    const channels = (modelChannel as AdminPublicSettings["modelChannel"] & { channels?: PublicModelChannel[] }).channels;
+    if (Array.isArray(channels) && channels.length) return channels;
+    return modelChannel.availableModels.length ? [{ id: "remote", name: "云端渠道", models: modelChannel.availableModels }] : [];
 }
 
 export function channelModeAllowed(modelChannel: AdminPublicSettings["modelChannel"] | null | undefined, mode: ChannelMode) {
@@ -477,10 +564,31 @@ export const useConfigStore = create<ConfigStore>()(
                         audioSpeed: config.audioSpeed || defaultConfig.audioSpeed,
                         audioInstructions: config.audioInstructions || "",
                         videoSeconds: config.videoSeconds || "6",
+                        videoMode: config.videoMode || defaultConfig.videoMode,
+                        videoNegativePrompt: config.videoNegativePrompt || "",
+                        videoMultiShot: config.videoMultiShot || "false",
+                        videoShotType: config.videoShotType || defaultConfig.videoShotType,
+                        videoMultiPrompt: normalizeVideoMultiPrompt(config.videoMultiPrompt),
+                        videoElementList: normalizeVideoElementList(config.videoElementList),
                         vquality: config.vquality || "720",
-                        videoGenerateAudio: config.videoGenerateAudio || "true",
+                        videoGenerateAudio: config.videoGenerateAudio || defaultConfig.videoGenerateAudio,
                         videoWatermark: config.videoWatermark || "false",
+                        videoCharacterOrientation: config.videoCharacterOrientation || defaultConfig.videoCharacterOrientation,
+                        videoSize: config.videoSize || defaultConfig.videoSize,
                         canvasImageCount: config.canvasImageCount || "3",
+                        timeout: config.timeout || defaultConfig.timeout,
+                        apiMode: config.apiMode || defaultConfig.apiMode,
+                        streamImages: config.streamImages || "",
+                        streamPartialImages: config.streamPartialImages || defaultConfig.streamPartialImages,
+                        responseFormatB64Json: config.responseFormatB64Json || "",
+                        codexCli: config.codexCli || "",
+                        systemPrompts: { ...defaultConfig.systemPrompts, ...(config.systemPrompts || {}) },
+                        publicChannels: Array.isArray(config.publicChannels) ? config.publicChannels : [],
+                        activeChannelId: config.activeChannelId || "",
+                        imageChannelId: config.imageChannelId || "",
+                        videoChannelId: config.videoChannelId || "",
+                        textChannelId: config.textChannelId || "",
+                        audioChannelId: config.audioChannelId || "",
                         imageModels: config.channelMode === "local" ? normalizedConfig.imageModels : Array.isArray(persistedConfig.imageModels) ? normalizeModelList(config.imageModels) : filterModelsByCapability(config.models, "image"),
                         videoModels: config.channelMode === "local" ? normalizedConfig.videoModels : Array.isArray(persistedConfig.videoModels) ? normalizeModelList(config.videoModels) : filterModelsByCapability(config.models, "video"),
                         textModels: config.channelMode === "local" ? normalizedConfig.textModels : Array.isArray(persistedConfig.textModels) ? normalizeModelList(config.textModels) : filterModelsByCapability(config.models, "text"),
@@ -494,6 +602,20 @@ export const useConfigStore = create<ConfigStore>()(
 
 function normalizeModelList(models: string[]) {
     return Array.from(new Set((models || []).map((model) => model.trim()).filter(Boolean)));
+}
+
+function normalizeVideoMultiPrompt(value: VideoMultiPromptItem[] | undefined) {
+    if (!Array.isArray(value) || !value.length) return defaultConfig.videoMultiPrompt;
+    return value.map((item) => ({ prompt: typeof item?.prompt === "string" ? item.prompt : "", duration: typeof item?.duration === "string" ? item.duration : "1" }));
+}
+
+function normalizeVideoElementList(value: VideoElementItem[] | undefined) {
+    if (!Array.isArray(value) || !value.length) return defaultConfig.videoElementList;
+    return value.map((item) => ({
+        name: typeof item?.name === "string" ? item.name : "",
+        description: typeof item?.description === "string" ? item.description : "",
+        references: Array.isArray(item?.references) ? item.references : [],
+    }));
 }
 
 function normalizeCapabilityModelList(models: string[] | undefined, allModels: string[], capability: ModelCapability) {
@@ -572,6 +694,22 @@ export function resolveModelChannel(config: AiConfig, value: string) {
     const channels = config.channels || [];
     const matched = decoded ? channels.find((channel) => channel.id === decoded.channelId) : channels.find((channel) => channel.models.includes(model));
     return matched || channels[0] || createModelChannel({ id: "default", name: "默认渠道", baseUrl: config.baseUrl, apiKey: config.apiKey, apiFormat: config.apiFormat, models: config.models.map(modelOptionName) });
+}
+
+export function normalizeLocalChannels(config: Partial<AiConfig>) {
+    const fallback = { ...defaultConfig, ...config } as AiConfig;
+    return normalizeChannels(fallback);
+}
+
+export function localChannelForActiveModel(config: AiConfig) {
+    const decoded = decodeChannelModel(config.model || config.imageModel || config.videoModel || config.textModel || config.audioModel);
+    const activeId = decoded?.channelId || config.activeChannelId;
+    const channels = normalizeLocalChannels(config);
+    if (activeId) {
+        const active = channels.find((channel) => channel.id === activeId);
+        if (active) return active;
+    }
+    return resolveModelChannel(config, config.model || config.imageModel || config.videoModel || config.textModel || config.audioModel);
 }
 
 export function resolveModelRequestConfig(config: AiConfig, value: string): AiConfig {

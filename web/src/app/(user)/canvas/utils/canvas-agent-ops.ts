@@ -3,6 +3,7 @@ import { nanoid } from "nanoid";
 import { getNodeSpec } from "../constants";
 import { isRegisteredNodeType } from "../../../../lib/canvas/node-registry";
 import { CanvasNodeType, type CanvasConnection, type CanvasNodeData, type CanvasNodeMetadata, type CanvasNodeTypeId, type ViewportTransform } from "../types";
+import { deleteCanvasNodes } from "./canvas-node-deletion";
 
 export type CanvasAgentOp =
     | { type: "add_node"; id?: string; nodeType?: CanvasNodeTypeId; title?: string; position?: { x: number; y: number }; x?: number; y?: number; width?: number; height?: number; metadata?: CanvasNodeMetadata }
@@ -28,7 +29,42 @@ const MAX_COORDINATE = 1_000_000;
 const MIN_NODE_SIZE = 48;
 const MAX_NODE_SIZE = 8192;
 const METADATA_KEYS = new Set<keyof CanvasNodeMetadata>([
-    "content", "composerContent", "prompt", "status", "errorDetails", "fontSize", "generationMode", "generationType", "model", "modelOverride", "size", "quality", "count", "seconds", "vquality", "generateAudio", "watermark", "audioVoice", "audioFormat", "audioSpeed", "audioInstructions", "references", "naturalWidth", "naturalHeight", "freeResize", "isBatchRoot", "batchRootId", "batchChildIds", "batchUsesReferenceImages", "primaryImageId", "imageBatchExpanded", "storageKey", "mimeType", "bytes", "durationMs", "groupId",
+    "content",
+    "composerContent",
+    "prompt",
+    "status",
+    "errorDetails",
+    "fontSize",
+    "generationMode",
+    "generationType",
+    "model",
+    "modelOverride",
+    "size",
+    "quality",
+    "count",
+    "seconds",
+    "vquality",
+    "generateAudio",
+    "watermark",
+    "audioVoice",
+    "audioFormat",
+    "audioSpeed",
+    "audioInstructions",
+    "references",
+    "naturalWidth",
+    "naturalHeight",
+    "freeResize",
+    "isBatchRoot",
+    "batchRootId",
+    "batchChildIds",
+    "batchUsesReferenceImages",
+    "primaryImageId",
+    "imageBatchExpanded",
+    "storageKey",
+    "mimeType",
+    "bytes",
+    "durationMs",
+    "groupId",
 ]);
 
 export function summarizeCanvasAgentOps(ops?: CanvasAgentOp[]) {
@@ -85,11 +121,10 @@ export function applyCanvasAgentOps(snapshot: CanvasAgentSnapshot, ops?: CanvasA
         }
         if (op.type === "delete_node") {
             const ids = new Set((op.ids || (op.id ? [op.id] : op.nodeType ? nodes.filter((node) => node.type === op.nodeType).map((node) => node.id) : [])).map(safeId).filter((id): id is string => Boolean(id)));
-            nodes = nodes
-                .filter((node) => !ids.has(node.id))
-                .map((node) => (node.metadata?.groupId && ids.has(node.metadata.groupId) ? { ...node, metadata: { ...node.metadata, groupId: undefined } } : node));
-            connections = connections.filter((conn) => !ids.has(conn.fromNodeId) && !ids.has(conn.toNodeId));
-            selectedNodeIds = selectedNodeIds.filter((id) => !ids.has(id));
+            const deletion = deleteCanvasNodes({ nodes, connections }, ids);
+            nodes = deletion.nodes;
+            connections = deletion.connections;
+            if (deletion.deletedNodeIds.size) selectedNodeIds = [];
         }
         if (op.type === "delete_connections") {
             const ids = new Set((op.ids || (op.id ? [op.id] : [])).map(safeId).filter((id): id is string => Boolean(id)));
@@ -158,7 +193,11 @@ function safeMetadata(value: unknown): CanvasNodeMetadata {
         if (typeof item === "string") result[key] = item.slice(0, key === "content" ? 16 * 1024 * 1024 : 100_000);
         else if (typeof item === "boolean") result[key] = item;
         else if (typeof item === "number" && Number.isFinite(item)) result[key] = item;
-        else if (Array.isArray(item)) result[key] = item.filter((entry): entry is string => typeof entry === "string").slice(0, 128).map((entry) => entry.slice(0, 1_000_000));
+        else if (Array.isArray(item))
+            result[key] = item
+                .filter((entry): entry is string => typeof entry === "string")
+                .slice(0, 128)
+                .map((entry) => entry.slice(0, 1_000_000));
     });
     return result as CanvasNodeMetadata;
 }

@@ -3,13 +3,18 @@
 import localforage from "localforage";
 import { nanoid } from "nanoid";
 
+import { apiGet } from "@/services/api/request";
+import { canUseGlobalStorage, loadUserStorageProvider, type StorageConfig, type UserStorageProvider } from "@/services/image-storage";
+import { useUserStore } from "@/stores/use-user-store";
+
 export type UploadedFile = { url: string; storageKey: string; bytes: number; mimeType: string; width?: number; height?: number; durationMs?: number };
 
 const store = localforage.createInstance({ name: "infinite-canvas", storeName: "media_files" });
 const objectUrls = new Map<string, string>();
+let storageConfigPromise: Promise<StorageConfig> | null = null;
 
 export async function uploadMediaFile(input: string | Blob, prefix = "file"): Promise<UploadedFile> {
-    const blob = typeof input === "string" ? await (await fetch(input)).blob() : input;
+    const blob = typeof input === "string" ? await downloadRemoteMedia(input) : input;
     const storageKey = `${prefix}:${nanoid()}`;
     await store.setItem(storageKey, blob);
     const url = URL.createObjectURL(blob);
@@ -18,15 +23,99 @@ export async function uploadMediaFile(input: string | Blob, prefix = "file"): Pr
     return { url, storageKey, bytes: blob.size, mimeType: blob.type || "application/octet-stream", ...meta };
 }
 
+export async function uploadAssetMediaFile(file: File, prefix = "asset-media"): Promise<UploadedFile> {
+    try {
+        return await uploadMediaBlobToServer(file, file.name || `${prefix}-${nanoid()}`);
+    } catch (error) {
+        if (error instanceof Error && !error.message.includes("服务端对象存储未启用")) throw error;
+        return uploadMediaFile(file, prefix);
+    }
+}
+
+export async function downloadRemoteMedia(url: string) {
+    const token = useUserStore.getState().token;
+    const response = await fetch(getMediaProxyUrl(url), {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    if (!response.ok) throw new Error(`媒体下载失败：${response.status}`);
+    const blob = await response.blob();
+    if (blob.type.includes("json") || blob.type.startsWith("text/")) {
+        const text = await blob.text().catch(() => "");
+        let message = "";
+        try {
+            const payload = JSON.parse(text) as { msg?: string; message?: string };
+            message = payload.msg || payload.message || "";
+        } catch {
+            message = text;
+        }
+        throw new Error(message || "媒体下载失败");
+    }
+    return blob;
+}
+
+export function getMediaProxyUrl(url: string) {
+    if (!/^https?:\/\//i.test(url)) return url;
+    try {
+        if (typeof window !== "undefined" && new URL(url, window.location.href).origin === window.location.origin) return url;
+    } catch {
+        return url;
+    }
+    return `/api/proxy-media?url=${encodeURIComponent(url)}`;
+}
+
+export async function uploadRemoteMediaToServer(url: string, filename: string): Promise<UploadedFile> {
+    const blob = await downloadRemoteMedia(url);
+    return uploadMediaBlobToServer(blob, filename);
+}
+
+async function uploadMediaBlobToServer(blob: Blob, filename: string): Promise<UploadedFile> {
+    const config = await loadStorageConfig().catch(() => null);
+    const userProvider = config?.allowUserProvider ? loadUserStorageProvider() : null;
+    if (!config || (!canUseGlobalStorage(config) && !userProvider)) throw new Error("服务端对象存储未启用");
+    const token = useUserStore.getState().token;
+    if (!token) throw new Error("请先登录后再同步视频");
+    const formData = new FormData();
+    formData.append("file", blob, filename);
+    if (userProvider) formData.append("provider", JSON.stringify(toProviderPayload(userProvider)));
+    const response = await fetch("/api/v1/files", { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: formData });
+    const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string; data?: UploadedFile } | null;
+    if (!response.ok || payload?.code !== 0 || !payload.data) throw new Error(payload?.msg || "媒体同步失败");
+    const mimeType = payload.data.mimeType || blob.type || "application/octet-stream";
+    const meta = mimeType.startsWith("video/") ? await readVideoMeta(payload.data.url) : mimeType.startsWith("audio/") ? await readAudioMeta(payload.data.url) : {};
+    return { ...payload.data, bytes: payload.data.bytes || blob.size, mimeType, ...meta };
+}
+
+async function loadStorageConfig() {
+    storageConfigPromise ||= apiGet<StorageConfig>("/api/storage/config");
+    return storageConfigPromise;
+}
+
+export function clearStorageConfigCache() {
+    storageConfigPromise = null;
+}
+
+export async function uploadMediaBlob(blob: Blob, filename: string): Promise<UploadedFile> {
+    return uploadMediaBlobToServer(blob, filename);
+}
+
 export async function resolveMediaUrl(storageKey?: string, fallback = "") {
     if (!storageKey) return fallback;
     const cached = objectUrls.get(storageKey);
     if (cached) return cached;
-    const blob = await store.getItem<Blob>(storageKey);
-    if (!blob) return fallback;
-    const url = URL.createObjectURL(blob);
-    objectUrls.set(storageKey, url);
-    return url;
+    const blob = await store.getItem<Blob>(storageKey).catch(() => null);
+    if (blob) {
+        const url = URL.createObjectURL(blob);
+        objectUrls.set(storageKey, url);
+        return url;
+    }
+    if (storageKey.startsWith("server:")) {
+        const id = storageKey.slice("server:".length);
+        if (fallback && !fallback.startsWith("blob:")) return fallback;
+        const info = await apiGet<{ publicUrl?: string }>(`/api/files/${encodeURIComponent(id)}`).catch(() => null);
+        if (!info) return fallback;
+        return info.publicUrl || `/api/files/${encodeURIComponent(id)}/content`;
+    }
+    return fallback;
 }
 
 export async function getMediaBlob(storageKey: string) {
@@ -40,9 +129,36 @@ export async function setMediaBlob(storageKey: string, blob: Blob) {
     return url;
 }
 
+async function deleteServerMedia(storageKey: string) {
+    const id = storageKey.slice("server:".length);
+    if (!id) return;
+    const token = useUserStore.getState().token;
+    if (!token) return;
+    const provider = loadUserStorageProvider();
+    const response = await fetch(`/api/v1/files/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(provider ? { provider: toProviderPayload(provider) } : {}),
+    });
+    const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string } | null;
+    if (!response.ok || payload?.code !== 0) throw new Error(payload?.msg || "删除服务端媒体失败");
+}
+
 export async function deleteStoredMedia(keys: Iterable<string>) {
+    const { useAssetStore } = await import("@/stores/use-asset-store");
+    const assetKeys = new Set(
+        useAssetStore
+            .getState()
+            .assets.map((asset) => (asset.kind !== "image" && asset.kind !== "text" ? asset.data.storageKey : null))
+            .filter((key): key is string => Boolean(key)),
+    );
     await Promise.all(
         Array.from(new Set(keys)).map(async (key) => {
+            if (assetKeys.has(key)) return;
+            if (key.startsWith("server:")) {
+                await deleteServerMedia(key);
+                return;
+            }
             const url = objectUrls.get(key);
             if (url) URL.revokeObjectURL(url);
             objectUrls.delete(key);
@@ -85,4 +201,18 @@ function readAudioMeta(url: string) {
         audio.onerror = done;
         audio.src = url;
     });
+}
+
+function toProviderPayload(provider: UserStorageProvider) {
+    return {
+        name: provider.name,
+        type: provider.type || "s3",
+        endpoint: provider.endpoint,
+        region: provider.region || "auto",
+        bucket: provider.bucket,
+        accessKeyId: provider.accessKeyId,
+        secretAccessKey: provider.secretAccessKey,
+        publicBaseUrl: provider.publicBaseUrl,
+        pathPrefix: provider.pathPrefix,
+    };
 }
