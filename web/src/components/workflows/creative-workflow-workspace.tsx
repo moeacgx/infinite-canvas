@@ -1,7 +1,7 @@
 "use client";
 
 import { App, Button, Checkbox, Empty, Image, Input, Modal, Select, Space, Switch, Tag, Typography } from "antd";
-import { AlertCircle, ArrowDown, ArrowUp, Bot, CheckCircle2, Copy, Download, Edit3, FilePlus2, Globe2, Layers3, LoaderCircle, LockKeyhole, Play, Plus, Sparkles, Trash2, WandSparkles } from "lucide-react";
+import { AlertCircle, ArrowDown, ArrowUp, Bot, CheckCircle2, Copy, Download, Edit3, FilePlus2, Globe2, Layers3, LoaderCircle, LockKeyhole, Maximize2, Play, Plus, Sparkles, Trash2, WandSparkles } from "lucide-react";
 import localforage from "localforage";
 import { nanoid } from "nanoid";
 import { saveAs } from "file-saver";
@@ -224,8 +224,13 @@ export function CreativeWorkflowWorkspace({
     const [inputValues, setInputValues] = useState<Record<string, string>>({});
     const [workflowReferences, setWorkflowReferences] = useState<ReferenceImage[]>([]);
     const workflowReferenceInputRef = useRef<HTMLInputElement>(null);
+    const runnerOpenedAtRef = useRef(0);
     const [workflowAssetPickerOpen, setWorkflowAssetPickerOpen] = useState(false);
     const [runResults, setRunResults] = useState<WorkflowRunResult[]>([]);
+    const [resultPreviewOpen, setResultPreviewOpen] = useState(false);
+    const [resultPreviewIndex, setResultPreviewIndex] = useState(0);
+    const [runnerPreviewOpen, setRunnerPreviewOpen] = useState(false);
+    const [runnerPreviewIndex, setRunnerPreviewIndex] = useState(0);
     const [workflowTasks, setWorkflowTasks] = useState<WorkflowTask[]>([]);
     const [seriesDrafts, setSeriesDrafts] = useState<SeriesPromptDraft[]>([]);
     const [seriesDraftLoading, setSeriesDraftLoading] = useState(false);
@@ -260,6 +265,12 @@ export function CreativeWorkflowWorkspace({
 
     const renderedPrompt = useMemo(() => (runningWorkflow ? renderWorkflowPrompt(runningWorkflow, inputValues) : ""), [inputValues, runningWorkflow]);
     const runningTaskCount = workflowTasks.filter((task) => task.status === "running").length;
+    const runnerTasks = runningWorkflow
+        ? workflowTasks
+              .filter((task) => task.workflowId === runningWorkflow.id && task.startedAt >= runnerOpenedAtRef.current)
+              .sort((a, b) => (a.seriesIndex ?? Number.MAX_SAFE_INTEGER) - (b.seriesIndex ?? Number.MAX_SAFE_INTEGER) || a.startedAt - b.startedAt)
+        : [];
+    const runnerImages = runnerTasks.flatMap((task) => task.images);
     const activeSeriesDrafts = seriesDrafts.filter((item) => item.status !== "success");
     const agentModel = agentTextModel || effectiveConfig.textModel || "";
     const agentChannelId = agentTextChannelId || effectiveConfig.textChannelId;
@@ -326,6 +337,7 @@ export function CreativeWorkflowWorkspace({
 
     const openRunner = (workflow: CreativeWorkflow) => {
         seriesDraftsLoadedRef.current = false;
+        runnerOpenedAtRef.current = Date.now();
         setRunningWorkflow(workflow);
         setInputValues(createDefaultInputValues(workflow));
         setWorkflowReferences([]);
@@ -976,15 +988,23 @@ export function CreativeWorkflowWorkspace({
 
                 {!hideTaskList && runResults.length ? (
                     <section className="space-y-3">
-                        <div className="flex items-center gap-2 text-base font-semibold">
-                            <Sparkles className="size-4" />
-                            最近运行结果
-                            <Tag className="m-0">{runResults.length} 张</Tag>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 text-base font-semibold">
+                                <Sparkles className="size-4" />
+                                最近运行结果
+                                <Tag className="m-0">{runResults.length} 张</Tag>
+                            </div>
+                            <Button size="small" icon={<Maximize2 className="size-3.5" />} onClick={() => { setResultPreviewIndex(0); setResultPreviewOpen(true); }}>
+                                查看全部 {runResults.length} 张
+                            </Button>
                         </div>
                         <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
                             {runResults.map((result, index) => (
                                 <div key={result.id} className="overflow-hidden rounded-lg border border-stone-200 bg-white dark:border-stone-800 dark:bg-stone-900">
-                                    <Image src={result.imageUrl} alt={result.workflowName} className="aspect-[4/3] object-cover" />
+                                    <div className="relative aspect-[4/3] bg-stone-100 dark:bg-stone-950">
+                                        <Image preview={false} src={result.imageUrl} alt={result.workflowName} width="100%" height="100%" className="!h-full !w-full cursor-zoom-in object-cover" onClick={() => { setResultPreviewIndex(index); setResultPreviewOpen(true); }} />
+                                        <Button aria-label="查看原图" title="查看原图" className="!absolute !bottom-2 !right-2 !z-10 !bg-white/90 dark:!bg-stone-950/90" size="small" icon={<Maximize2 className="size-3.5" />} onClick={() => { setResultPreviewIndex(index); setResultPreviewOpen(true); }} />
+                                    </div>
                                     <div className="space-y-1 p-2 text-xs">
                                         <div className="line-clamp-1 font-medium">{result.workflowName}</div>
                                         <div className="flex flex-wrap gap-1 text-stone-500">
@@ -1002,6 +1022,7 @@ export function CreativeWorkflowWorkspace({
                                 </div>
                             ))}
                         </div>
+                        <Image.PreviewGroup items={runResults.map((result, index) => ({ src: result.imageUrl, alt: `${result.workflowName} ${index + 1}` }))} preview={{ open: resultPreviewOpen, current: resultPreviewIndex, onOpenChange: setResultPreviewOpen, onChange: setResultPreviewIndex, countRender: (current, total) => `第 ${current} / ${total} 张` }} />
                     </section>
                 ) : null}
             </div>
@@ -1151,7 +1172,7 @@ export function CreativeWorkflowWorkspace({
             <Modal title={runningWorkflow?.name || "运行工作流"} open={Boolean(runningWorkflow)} width={980} onCancel={closeRunner} footer={null} destroyOnHidden>
                 {runningWorkflow ? (
                     <div className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
-                        <div className="space-y-3">
+                        <div className="max-h-[70vh] space-y-3 overflow-y-auto pr-1">
                             <div className="rounded-lg border border-stone-200 p-3 dark:border-stone-800">
                                 <div className="text-sm font-medium">变量输入</div>
                                 <div className="mt-3 space-y-3">
@@ -1272,6 +1293,26 @@ export function CreativeWorkflowWorkspace({
                                     )}
                                 </div>
                             ) : null}
+                            {runnerTasks.length ? (
+                                <section className="space-y-2">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <div className="flex items-center gap-2 text-sm font-medium">
+                                            <Sparkles className="size-4" />
+                                            工作流生成结果
+                                            <Tag className="m-0">{runnerImages.length} 张</Tag>
+                                        </div>
+                                        {runnerImages.length ? (
+                                            <Button size="small" icon={<Maximize2 className="size-3.5" />} onClick={() => { setRunnerPreviewIndex(0); setRunnerPreviewOpen(true); }}>
+                                                查看全部 {runnerImages.length} 张
+                                            </Button>
+                                        ) : null}
+                                    </div>
+                                    {runnerTasks.map((task) => (
+                                        <WorkflowTaskCard key={task.id} task={task} now={now} onCopyPrompt={() => void navigator.clipboard.writeText(task.prompt)} onDownload={(image, index) => saveAs(image.imageUrl, `workflow-task-${index + 1}.png`)} onPreviewImage={(image) => { setRunnerPreviewIndex(Math.max(0, runnerImages.findIndex((item) => item.id === image.id))); setRunnerPreviewOpen(true); }} />
+                                    ))}
+                                    <Image.PreviewGroup items={runnerImages.map((image, index) => ({ src: image.imageUrl, alt: `${image.workflowName} ${index + 1}` }))} preview={{ open: runnerPreviewOpen, current: runnerPreviewIndex, onOpenChange: setRunnerPreviewOpen, onChange: setRunnerPreviewIndex, countRender: (current, total) => `第 ${current} / ${total} 张` }} />
+                                </section>
+                            ) : null}
                         </div>
                     </div>
                 ) : null}
@@ -1323,7 +1364,19 @@ function WorkflowCard({ workflow, onRun, onEdit, onCopy, onDelete }: { workflow:
     );
 }
 
-function WorkflowTaskCard({ task, now, onCopyPrompt, onDownload }: { task: WorkflowTask; now: number; onCopyPrompt: () => void; onDownload: (image: WorkflowRunResult, index: number) => void }) {
+function WorkflowTaskCard({ task, now, onCopyPrompt, onDownload, onPreviewImage }: { task: WorkflowTask; now: number; onCopyPrompt: () => void; onDownload: (image: WorkflowRunResult, index: number) => void; onPreviewImage?: (image: WorkflowRunResult) => void }) {
+    const [previewOpen, setPreviewOpen] = useState(false);
+    const [previewIndex, setPreviewIndex] = useState(0);
+    const openPreviewAt = (index: number) => {
+        const image = task.images[index];
+        if (!image) return;
+        if (onPreviewImage) {
+            onPreviewImage(image);
+            return;
+        }
+        setPreviewIndex(index);
+        setPreviewOpen(true);
+    };
     const elapsedMs = task.status === "running" ? now - task.startedAt : task.durationMs || (task.endedAt || task.startedAt) - task.startedAt;
     const statusView = {
         running: { label: "运行中", color: "processing", icon: <LoaderCircle className="size-4 animate-spin" /> },
@@ -1347,9 +1400,16 @@ function WorkflowTaskCard({ task, now, onCopyPrompt, onDownload }: { task: Workf
                         <Tag className="m-0">{formatDate(task.startedAt)}</Tag>
                     </div>
                 </div>
-                <Button size="small" icon={<Copy className="size-3.5" />} onClick={onCopyPrompt}>
-                    复制提示词
-                </Button>
+                <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                    {task.images.length ? (
+                        <Button size="small" icon={<Maximize2 className="size-3.5" />} onClick={() => openPreviewAt(0)}>
+                            {task.images.length > 1 ? `查看 ${task.images.length} 张` : "查看原图"}
+                        </Button>
+                    ) : null}
+                    <Button size="small" icon={<Copy className="size-3.5" />} onClick={onCopyPrompt}>
+                        复制提示词
+                    </Button>
+                </div>
             </div>
             <div className="space-y-3 p-3">
                 <div className="line-clamp-2 whitespace-pre-wrap text-sm text-stone-600 dark:text-stone-300">{task.prompt}</div>
@@ -1378,7 +1438,7 @@ function WorkflowTaskCard({ task, now, onCopyPrompt, onDownload }: { task: Workf
                     <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
                         {task.images.map((image, index) => (
                             <div key={image.id} className="overflow-hidden rounded-md border border-stone-200 bg-stone-100 dark:border-stone-800 dark:bg-stone-950">
-                                <Image src={image.imageUrl} alt={`${task.workflowName} ${index + 1}`} className="aspect-[4/3] object-cover" />
+                                <Image preview={false} src={image.imageUrl} alt={`${task.workflowName} ${index + 1}`} width="100%" className="aspect-[4/3] !w-full cursor-zoom-in object-cover" onClick={() => openPreviewAt(index)} />
                                 <div className="flex items-center justify-between gap-2 px-2 py-1.5 text-[10px] text-stone-500">
                                     <span className="truncate">
                                         {image.width}x{image.height} · {formatBytes(image.bytes)}
@@ -1391,6 +1451,7 @@ function WorkflowTaskCard({ task, now, onCopyPrompt, onDownload }: { task: Workf
                 ) : task.status === "running" ? (
                     <div className="flex h-28 items-center justify-center rounded-md border border-dashed border-stone-300 text-sm text-stone-500 dark:border-stone-800">生成中 {formatDuration(elapsedMs)}</div>
                 ) : null}
+                {!onPreviewImage ? <Image.PreviewGroup items={task.images.map((image, index) => ({ src: image.imageUrl, alt: `${task.workflowName} ${index + 1}` }))} preview={{ open: previewOpen, current: previewIndex, onOpenChange: setPreviewOpen, onChange: setPreviewIndex, countRender: (current, total) => `第 ${current} / ${total} 张` }} /> : null}
             </div>
         </article>
     );
