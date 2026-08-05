@@ -9,8 +9,9 @@ import { formatBytes, getDataUrlByteSize } from "@/lib/image-utils";
 import { useCopyText } from "@/hooks/use-copy-text";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasNodeType, type CanvasNodeData, type ViewportTransform } from "../types";
+import { isCanvasImageNodeType, isPanoramaNodeType } from "../utils/canvas-panorama";
 import { ImageToolSettingsModal, type ImageToolbarSettingsTool } from "./canvas-image-toolbar-settings-modal";
-import { IMAGE_QUICK_TOOLS_STORAGE_KEY, buildImageToolbarTools, defaultImageQuickToolIds, readImageQuickToolsConfig, type ImageQuickToolId } from "./canvas-image-toolbar-tools";
+import { IMAGE_QUICK_TOOLS_STORAGE_KEY, PANORAMA_QUICK_TOOLS_STORAGE_KEY, buildImageToolbarTools, defaultImageQuickToolIds, defaultPanoramaQuickToolIds, readImageQuickToolsConfig, type ImageQuickToolId } from "./canvas-image-toolbar-tools";
 
 type CanvasNodeHoverToolbarProps = {
     node: CanvasNodeData | null;
@@ -77,25 +78,39 @@ export function CanvasNodeHoverToolbar({
     onDelete,
     extraTools = [],
 }: CanvasNodeHoverToolbarProps) {
-    const [quickImageToolIds, setQuickImageToolIds] = useState<ImageQuickToolId[]>(defaultImageQuickToolIds);
-    const [showImageToolLabels, setShowImageToolLabels] = useState(true);
+    const [quickToolsConfigs, setQuickToolsConfigs] = useState(() => ({
+        [IMAGE_QUICK_TOOLS_STORAGE_KEY]: { ids: defaultImageQuickToolIds, showLabels: true },
+        [PANORAMA_QUICK_TOOLS_STORAGE_KEY]: { ids: defaultPanoramaQuickToolIds, showLabels: true },
+    }));
     const [draftImageToolIds, setDraftImageToolIds] = useState<ImageQuickToolId[]>(defaultImageQuickToolIds);
     const [draftShowImageToolLabels, setDraftShowImageToolLabels] = useState(true);
     const [imageToolSettingsOpen, setImageToolSettingsOpen] = useState(false);
     const { message } = App.useApp();
     const copyText = useCopyText();
+    const isPanorama = isPanoramaNodeType(node?.type);
+    const quickToolsStorageKey = isPanorama ? PANORAMA_QUICK_TOOLS_STORAGE_KEY : IMAGE_QUICK_TOOLS_STORAGE_KEY;
+    const { ids: quickImageToolIds, showLabels: showImageToolLabels } = quickToolsConfigs[quickToolsStorageKey];
 
     useEffect(() => {
-        try {
-            const stored = window.localStorage.getItem(IMAGE_QUICK_TOOLS_STORAGE_KEY);
-            if (!stored) return;
-            const parsed = JSON.parse(stored) as unknown;
-            const config = readImageQuickToolsConfig(parsed);
-            setQuickImageToolIds(config.ids);
-            setShowImageToolLabels(config.showLabels);
-        } catch {
-            window.localStorage.removeItem(IMAGE_QUICK_TOOLS_STORAGE_KEY);
-        }
+        const readQuickToolsConfig = (storageKey: string, defaultIds: ImageQuickToolId[]) => {
+            try {
+                const stored = window.localStorage.getItem(storageKey);
+                if (stored === null) return { ids: defaultIds, showLabels: true };
+                const config = readImageQuickToolsConfig(JSON.parse(stored) as unknown);
+                return storageKey === PANORAMA_QUICK_TOOLS_STORAGE_KEY ? { ...config, ids: config.ids.filter((id) => id !== "replace") } : config;
+            } catch {
+                try {
+                    window.localStorage.removeItem(storageKey);
+                } catch {
+                    // localStorage 不可用时沿用默认配置。
+                }
+                return { ids: defaultIds, showLabels: true };
+            }
+        };
+        setQuickToolsConfigs({
+            [IMAGE_QUICK_TOOLS_STORAGE_KEY]: readQuickToolsConfig(IMAGE_QUICK_TOOLS_STORAGE_KEY, defaultImageQuickToolIds),
+            [PANORAMA_QUICK_TOOLS_STORAGE_KEY]: readQuickToolsConfig(PANORAMA_QUICK_TOOLS_STORAGE_KEY, defaultPanoramaQuickToolIds),
+        });
     }, []);
 
     useEffect(() => {
@@ -107,7 +122,7 @@ export function CanvasNodeHoverToolbar({
     const nodeId = node.id;
     const left = viewport.x + (node.position.x + node.width / 2) * viewport.k;
     const top = viewport.y + node.position.y * viewport.k - 14;
-    const isImage = node.type === CanvasNodeType.Image;
+    const isImage = isCanvasImageNodeType(node.type);
     const isVideo = node.type === CanvasNodeType.Video;
     const isAudio = node.type === CanvasNodeType.Audio;
     const hasImage = isImage && Boolean(node.metadata?.content);
@@ -119,14 +134,16 @@ export function CanvasNodeHoverToolbar({
     const canRetry = node.metadata?.status === "error";
     const quickImageToolIdSet = new Set(quickImageToolIds);
     const copyImagePrompt = (target: CanvasNodeData) => {
-        const prompt = target.metadata?.prompt?.trim();
+        const prompt = (isPanoramaNodeType(target.type) ? target.metadata?.panoramaSourcePrompt : target.metadata?.prompt)?.trim();
         if (!prompt) {
             message.warning("暂无可复制的提示词");
             return;
         }
         copyText(prompt, "提示词已复制");
     };
-    const imageTools = buildImageToolbarTools(node, { onUpload, onToggleFreeResize, onMaskEdit, onCrop, onSplit, onUpscale, onSuperResolve, onAngle, onViewImage, onCopyPrompt: copyImagePrompt, onReversePrompt });
+    const imageTools = buildImageToolbarTools(node, { onUpload, onToggleFreeResize, onMaskEdit, onCrop, onSplit, onUpscale, onSuperResolve, onAngle, onViewImage, onCopyPrompt: copyImagePrompt, onReversePrompt }).filter(
+        (tool) => !isPanorama || tool.id !== "replace",
+    );
 
     function openImageToolSettings() {
         onKeep(nodeId);
@@ -154,7 +171,7 @@ export function CanvasNodeHoverToolbar({
         ...(isAudio ? [{ id: "uploadAudio", title: hasAudio ? "替换音频" : "上传音频", label: hasAudio ? "替换音频" : "上传音频", icon: <Music2 className="size-4" />, onClick: () => onUpload(node) }] : []),
         ...(hasImage ? imageTools.map((tool) => ({ id: tool.id, title: tool.title, label: tool.label, icon: tool.icon, active: tool.active, onClick: tool.onClick })) : []),
     ];
-    const toolbarTools = hasImage ? [...baseToolbarTools, ...nodeToolbarTools].filter((tool) => quickImageToolIdSet.has(tool.id as ImageQuickToolId)) : [...baseToolbarTools, ...nodeToolbarTools, ...extraTools];
+    const toolbarTools = hasImage ? [...[...baseToolbarTools, ...nodeToolbarTools].filter((tool) => quickImageToolIdSet.has(tool.id as ImageQuickToolId)), ...extraTools] : [...baseToolbarTools, ...nodeToolbarTools, ...extraTools];
     const selectableImageToolbarTools = [...baseToolbarTools, ...nodeToolbarTools].filter((tool) => tool.id !== "retry") as ImageToolbarSettingsTool[];
 
     const closeImageToolSettings = () => {
@@ -172,18 +189,22 @@ export function CanvasNodeHoverToolbar({
     };
 
     const saveImageToolSettings = () => {
-        const config = { ids: draftImageToolIds, showLabels: draftShowImageToolLabels };
-        setQuickImageToolIds(config.ids);
-        setShowImageToolLabels(config.showLabels);
-        window.localStorage.setItem(IMAGE_QUICK_TOOLS_STORAGE_KEY, JSON.stringify(config));
+        const config = { ids: isPanorama ? draftImageToolIds.filter((id) => id !== "replace") : draftImageToolIds, showLabels: draftShowImageToolLabels };
+        try {
+            window.localStorage.setItem(quickToolsStorageKey, JSON.stringify(config));
+        } catch {
+            message.error("快捷工具配置保存失败");
+            return;
+        }
+        setQuickToolsConfigs((current) => ({ ...current, [quickToolsStorageKey]: config }));
         closeImageToolSettings();
     };
 
     return (
         <>
             <div
-                className="absolute z-[70] flex h-12 -translate-x-1/2 -translate-y-full items-center overflow-visible rounded-[18px] border border-black/10 bg-white text-[15px] text-[#242529] shadow-[0_8px_28px_rgba(15,23,42,.12)]"
-                style={{ left, top }}
+                className="absolute z-[70] flex flex-wrap -translate-x-1/2 -translate-y-full items-center justify-center overflow-visible rounded-[18px] border border-black/10 bg-white text-[15px] text-[#242529] shadow-[0_8px_28px_rgba(15,23,42,.12)]"
+                style={{ left, top, width: "min(800px, calc(100vw - 32px))" }}
                 onMouseEnter={() => onKeep(node.id)}
                 onMouseLeave={() => {
                     if (!imageToolSettingsOpen) onLeave();
@@ -215,13 +236,14 @@ export function CanvasNodeHoverToolbar({
 export function CanvasNodeInfoModal({ node, open, onClose }: { node: CanvasNodeData | null; open: boolean; onClose: () => void }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const [view, setView] = useState<"info" | "json">("info");
-    const imageBytes = node?.type === CanvasNodeType.Image && node.metadata?.content ? getDataUrlByteSize(node.metadata.content) : 0;
-    const batchCount = node?.type === CanvasNodeType.Image ? node.metadata?.batchChildIds?.length || 0 : 0;
+    const imageBytes = isCanvasImageNodeType(node?.type) && node?.metadata?.content ? getDataUrlByteSize(node.metadata.content) : 0;
+    const batchCount = isCanvasImageNodeType(node?.type) ? node?.metadata?.batchChildIds?.length || 0 : 0;
     const json = useMemo(() => {
         if (!node) return "";
         return JSON.stringify(
             node,
             (key, value) => {
+                if (key === "panoramaFinalPrompt") return undefined;
                 if (key === "content" && typeof value === "string" && value.startsWith("data:image/")) {
                     return "[base64 image]";
                 }
@@ -258,12 +280,33 @@ export function CanvasNodeInfoModal({ node, open, onClose }: { node: CanvasNodeD
                         <div className="thin-scrollbar h-full space-y-3 overflow-auto pr-1">
                             <InfoRow label="ID" value={node.id} />
                             <InfoRow label="名称" value={node.title || "未命名节点"} />
-                            <InfoRow label="类型" value={node.type === CanvasNodeType.Text ? "文本" : node.type === CanvasNodeType.Image ? "图片" : node.type === CanvasNodeType.Video ? "视频" : node.type === CanvasNodeType.Audio ? "音频" : node.type === CanvasNodeType.Group ? "组" : "生成配置"} />
+                            <InfoRow
+                                label="类型"
+                                value={
+                                    node.type === CanvasNodeType.Text
+                                        ? "文本"
+                                        : node.type === CanvasNodeType.Image
+                                          ? "图片"
+                                          : node.type === CanvasNodeType.Panorama
+                                            ? "全景图"
+                                            : node.type === CanvasNodeType.Video
+                                              ? "视频"
+                                              : node.type === CanvasNodeType.Audio
+                                                ? "音频"
+                                                : node.type === CanvasNodeType.Director
+                                                  ? "导演台"
+                                                  : node.type === CanvasNodeType.Group
+                                                    ? "组"
+                                                    : "生成配置"
+                                }
+                            />
                             <InfoRow label="尺寸" value={`${Math.round(node.width)} x ${Math.round(node.height)}`} />
                             <InfoRow label="位置" value={`${Math.round(node.position.x)}, ${Math.round(node.position.y)}`} />
                             <InfoRow label="状态" value={node.metadata?.status || "idle"} />
                             {batchCount > 1 ? <InfoRow label="图片组" value={`${batchCount} 张`} /> : null}
-                            {node.metadata?.prompt ? <InfoRow label="提示词" value={node.metadata.prompt} /> : null}
+                            {(isPanoramaNodeType(node.type) ? node.metadata?.panoramaSourcePrompt : node.metadata?.prompt) ? (
+                                <InfoRow label="提示词" value={isPanoramaNodeType(node.type) ? node.metadata?.panoramaSourcePrompt : node.metadata?.prompt} />
+                            ) : null}
                             {imageBytes ? <InfoRow label="图片大小" value={formatBytes(imageBytes)} /> : null}
                             {node.metadata?.errorDetails ? (
                                 <div className="rounded-lg border p-3 text-red-400" style={{ borderColor: theme.node.stroke }}>

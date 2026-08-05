@@ -60,7 +60,7 @@ function getConnectedConfigResourceNodes(nodeId: string, nodes: CanvasNodeData[]
 function labelResourceNodes(nodes: CanvasNodeData[], active: boolean) {
     const counts: Record<CanvasResourceKind, number> = { image: 0, video: 0, audio: 0, text: 0 };
     return nodes.flatMap((node): CanvasResourceReference[] => {
-        const resource = nodeResource(node);
+        const resource = getCanvasNodeResource(node);
         const kind = resource?.kind;
         if (!kind) return [];
         const index = counts[kind]++;
@@ -92,10 +92,10 @@ function isResourceNode(node: CanvasNodeData) {
 }
 
 function resourceKind(node: CanvasNodeData): CanvasResourceKind | null {
-    return nodeResource(node)?.kind || null;
+    return getCanvasNodeResource(node)?.kind || null;
 }
 
-function nodeResource(node: CanvasNodeData) {
+export function getCanvasNodeResource(node: CanvasNodeData) {
     const pluginResource = getNodeDefinition(node.type)?.resource;
     if (pluginResource) {
         try {

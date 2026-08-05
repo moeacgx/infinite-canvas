@@ -18,7 +18,7 @@ import { dataUrlToFile } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
 import { imageToDataUrl, setImageBlob } from "@/services/image-storage";
 import type { ReferenceImage } from "@/types/image";
-import { aiApiUrl, aiHeaders, aiRequestConfig, withSystemMessage, withSystemPrompt, refreshRemoteUser, readApiErrorMessage, readAxiosError } from "@/services/api/ai-utils";
+import { aiApiUrl, aiHeaders, aiRequestConfig, withSystemMessage, withSystemPrompt, refreshRemoteUser, isRequestCanceled, readApiErrorMessage, readAxiosError } from "@/services/api/ai-utils";
 import { fetchGeminiModels, requestGeminiImages, streamGeminiChat } from "@/services/api/gemini";
 import { channelAxiosRequest, channelFetch } from "@/services/api/channel-request";
 import { isEventStreamResponse, parseImagesApiStream, parseResponsesApiStream, parseResponsesImageData } from "@/services/api/image-stream";
@@ -54,6 +54,47 @@ type ResponsesApiResponse = {
 };
 type RequestOptions = { signal?: AbortSignal };
 type GeneratedImage = { id: string; dataUrl: string };
+
+export type CanvasImageTask = {
+    id: string;
+    object?: string;
+    source?: string;
+    source_id?: string;
+    node_id?: string;
+    channelId?: string;
+    userChannelId?: string;
+    channelName?: string;
+    model?: string;
+    prompt?: string;
+    status: "queued" | "processing" | "completed" | "failed" | string;
+    progress?: number;
+    url?: string;
+    image_url?: string;
+    storageKey?: string;
+    width?: number;
+    height?: number;
+    mimeType?: string;
+    bytes?: number;
+    started_at?: string;
+    startedAt?: string;
+    created_at?: string;
+    createdAt?: string;
+    completed_at?: string;
+    error?: { message?: string };
+    error_detail?: string;
+};
+
+export type CanvasImageTaskOptions = { nodeId?: string; source?: "canvas" | "image-workbench" | "workflow"; sourceId?: string; clientTaskId?: string };
+
+export class ImageRequestError extends Error {
+    detail?: string;
+
+    constructor(message: string, detail?: unknown) {
+        super(message);
+        this.name = "ImageRequestError";
+        this.detail = typeof detail === "string" ? detail : detail === undefined ? undefined : JSON.stringify(detail);
+    }
+}
 
 const QUALITY_BASE: Record<string, number> = {
     low: 1024,
@@ -205,7 +246,7 @@ async function resolveImageDataUrl(item: Record<string, unknown>, config?: AiCon
 }
 
 async function resolveImageValue(value: string, config?: AiConfig, signal?: AbortSignal) {
-    if (config && isNewApiConfig(config) && value.startsWith("/canvas/v1/images/tasks/")) return downloadNewApiImageContent(config, value);
+    if (config && isNewApiConfig(config) && value.startsWith("/canvas/v1/images/tasks/")) return downloadNewApiImageContent(config, value, signal);
     const resolvedValue = config ? resolveRelativeImageUrl(config.baseUrl, value) : value;
     if (config?.channelMode === "local" && /^https?:/i.test(resolvedValue)) return downloadLocalImageContent(config, resolvedValue, signal);
     return resolvedValue;
@@ -261,12 +302,13 @@ async function downloadLocalImageContent(config: AiConfig, url: string, signal?:
     return setImageBlob(`image:${nanoid()}`, response.data);
 }
 
-async function downloadNewApiImageContent(config: AiConfig, path: string) {
+async function downloadNewApiImageContent(config: AiConfig, path: string, signal?: AbortSignal) {
     const response = await channelAxiosRequest<Blob>(config, {
         method: "GET",
         url: newApiCanvasUrl(config.baseUrl, path),
         ...aiRequestConfig(config, undefined, undefined, "image"),
         responseType: "blob",
+        signal,
     });
     const storageKey = `image:${nanoid()}`;
     return setImageBlob(storageKey, response.data);
@@ -331,7 +373,7 @@ async function requestResponsesImages(
     channelOptions: ImageChannelOptions,
     signal?: AbortSignal,
 ) {
-    const inputImages = await Promise.all(references.map((image) => imageToDataUrl(image)));
+    const inputImages = await Promise.all(references.map((image) => imageToDataUrl(image, signal)));
     return requestConcurrentImages(n, signal, () => requestResponsesImage(config, prompt, inputImages, quality, size, background, channelOptions, signal));
 }
 
@@ -515,6 +557,7 @@ async function requestNewApiImageTask(config: AiConfig, payload: Record<string, 
         refreshRemoteUser(config);
         return images;
     } catch (error) {
+        if (isRequestCanceled(error, options?.signal)) throw new DOMException("请求已取消", "AbortError");
         throw new Error(readAxiosError(error, "请求失败"));
     }
 }
@@ -562,8 +605,8 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
         const quality = normalizeQuality(config.quality);
         const requestSize = resolveRequestSize(quality, config.size);
         const background = normalizeBackground(config.background);
-        const images = await Promise.all(references.map((image) => imageToDataUrl(image)));
-        const maskDataUrl = mask ? await imageToDataUrl(mask) : "";
+        const images = await Promise.all(references.map((image) => imageToDataUrl(image, options?.signal)));
+        const maskDataUrl = mask ? await imageToDataUrl(mask, options?.signal) : "";
         try {
             const result = await runModelPlugin({
                 capability: "image",
@@ -622,7 +665,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     if (background) {
         formData.set("background", background);
     }
-    const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
+    const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image, options?.signal) })));
     files.forEach((file) => formData.append("image", file));
     if (mask) formData.set("mask", dataUrlToFile(mask));
 
@@ -801,4 +844,43 @@ function uniqueSortedModels(models: string[]) {
 
 function assertImageModel(model: string) {
     if (!model.trim()) throw new Error("请先选择模型");
+}
+
+export async function createCanvasImageTask(
+    config: AiConfig & { seedIndex?: number; seedCount?: number },
+    prompt: string,
+    references: ReferenceImage[],
+    options: CanvasImageTaskOptions = {},
+): Promise<CanvasImageTask> {
+    const [image] = references.length
+        ? await requestEdit({ ...config, count: "1" }, prompt, references)
+        : await requestGeneration({ ...config, count: "1" }, prompt);
+    if (!image) throw new ImageRequestError("接口没有返回图片");
+    const now = new Date().toISOString();
+    return {
+        id: options.clientTaskId || nanoid(),
+        source: options.source || "canvas",
+        source_id: options.sourceId || "",
+        node_id: options.nodeId || "",
+        model: config.model || config.imageModel,
+        prompt,
+        status: "completed",
+        progress: 100,
+        image_url: image.dataUrl,
+        createdAt: now,
+        created_at: now,
+        completed_at: now,
+    };
+}
+
+export async function listCanvasImageTasks(_config: AiConfig, _sources: Array<"image-workbench" | "workflow" | "canvas"> = []): Promise<CanvasImageTask[]> {
+    return [];
+}
+
+export async function batchCanvasImageTaskStatus(_config: AiConfig, _ids: string[]): Promise<CanvasImageTask[]> {
+    return [];
+}
+
+export async function deleteCanvasImageTask(_config: AiConfig, _task?: CanvasImageTask | null) {
+    return;
 }

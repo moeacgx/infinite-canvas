@@ -97,7 +97,7 @@ export async function requestGeminiImages(config: AiConfig, prompt: string, refe
 
 async function requestGeminiImagesOnce(config: AiConfig, prompt: string, references: ReferenceImage[], options?: RequestOptions) {
     const parts: GeminiPart[] = [{ text: prompt }];
-    for (const image of references) parts.push(toGeminiImagePart(await imageToDataUrl(image)));
+    for (const image of references) parts.push(toGeminiImagePart(await imageToDataUrl(image, options?.signal)));
     const response = await channelAxiosRequest<GeminiPayload>(config, {
         method: "POST",
         url: geminiApiUrl(config, "generateContent"),

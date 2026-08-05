@@ -5,17 +5,29 @@ import { dataUrlToFile } from "@/lib/image-utils";
 import { isRequestCanceled, readAxiosError } from "@/services/api/ai-utils";
 import { channelAxiosRequest } from "@/services/api/channel-request";
 import { resolveModelPluginResultUrl, runModelPlugin } from "@/services/api/model-plugin";
-import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
-import { imageToDataUrl } from "@/services/image-storage";
-import { assertVideoSecondsSupported } from "@/lib/video-model-capabilities";
+import { getMediaBlob, resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
+import { imageToDataUrl, resolveImageUrl } from "@/services/image-storage";
+import { assertVideoSecondsSupported, modelKey, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
 import { isTransientVideoPollError, reachedVideoPollFailureLimit } from "@/lib/video-polling";
 import { boolConfig, buildSeedancePromptText, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceVideoReferenceError, SEEDANCE_REFERENCE_LIMITS } from "@/lib/seedance-video";
-import { buildApiUrl, isNewApiConfig, resolveCapabilityModel, resolveModelRequestConfig, resolveModelScript, resolveNewApiGroup, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import {
+    buildApiUrl,
+    isNewApiConfig,
+    modelOptionName,
+    resolveCapabilityModel,
+    resolveModelChannel,
+    resolveModelRequestConfig,
+    resolveModelScript,
+    resolveNewApiGroup,
+    type AiConfig,
+    type ModelCapability,
+    type VideoElementReference,
+} from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
-type VideoResponse = { id: string; status?: string; error?: { message?: string } };
+type VideoResponse = { id: string; status?: string; progress?: number; video_url?: string; url?: string; error?: { message?: string } };
 type ApiVideoResponse = VideoResponse | { code?: number; data?: VideoResponse | null; msg?: string };
 type SeedanceTask = {
     id: string;
@@ -37,8 +49,17 @@ type SeedancePayload = {
 
 export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string };
 export type VideoGenerationTask = { id: string; provider: "openai" | "seedance" | "plugin"; model: string; channelModel?: string };
-export type VideoGenerationTaskState = { status: "pending" } | { status: "retrying"; error: string } | { status: "completed"; result: VideoGenerationResult } | { status: "failed"; error: string };
+export type VideoGenerationTaskState = { status: "pending"; progress?: number } | { status: "retrying"; error: string } | { status: "completed"; result: VideoGenerationResult } | { status: "failed"; error: string };
+export type VideoReferenceInput = {
+    references?: ReferenceImage[];
+    videoReferences?: ReferenceVideo[];
+    audioReferences?: ReferenceAudio[];
+    firstFrame?: ReferenceImage | null;
+    lastFrame?: ReferenceImage | null;
+};
+type NormalizedVideoReferenceInput = Required<VideoReferenceInput>;
 type RequestOptions = { signal?: AbortSignal };
+type WaitForVideoTaskOptions = RequestOptions & { onProgress?: (progress: number | undefined) => void };
 
 const pluginVideoResults = new Map<string, { result: VideoGenerationResult; timer: ReturnType<typeof setTimeout> }>();
 
@@ -79,8 +100,23 @@ function refreshRemoteUser(config: AiConfig) {
     if (config.channelMode === "remote") void useUserStore.getState().hydrateUser();
 }
 
-export async function requestVideoGeneration(config: AiConfig, prompt: string, references: ReferenceImage[] = [], videoReferences: ReferenceVideo[] = [], audioReferences: ReferenceAudio[] = [], options?: RequestOptions): Promise<VideoGenerationResult> {
-    const task = await createVideoGenerationTask(config, prompt, references, videoReferences, audioReferences, options);
+export function requestVideoGeneration(config: AiConfig, prompt: string, input?: VideoReferenceInput, options?: RequestOptions): Promise<VideoGenerationResult>;
+export function requestVideoGeneration(config: AiConfig, prompt: string, references?: ReferenceImage[], videoReferences?: ReferenceVideo[], audioReferences?: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationResult>;
+export async function requestVideoGeneration(
+    config: AiConfig,
+    prompt: string,
+    input: ReferenceImage[] | VideoReferenceInput = [],
+    videoReferencesOrOptions: ReferenceVideo[] | RequestOptions = [],
+    audioReferences: ReferenceAudio[] = [],
+    options?: RequestOptions,
+): Promise<VideoGenerationResult> {
+    const requestOptions = Array.isArray(videoReferencesOrOptions) ? options : videoReferencesOrOptions;
+    const references = normalizeVideoReferenceInput(input, Array.isArray(videoReferencesOrOptions) ? videoReferencesOrOptions : [], audioReferences);
+    const task = await createVideoGenerationTask(config, prompt, references, requestOptions);
+    return waitForVideoGenerationTask(config, task, requestOptions);
+}
+
+export async function waitForVideoGenerationTask(config: AiConfig, task: VideoGenerationTask, options?: WaitForVideoTaskOptions): Promise<VideoGenerationResult> {
     const delayMs = task.provider === "seedance" ? 5000 : 2500;
     let consecutivePollFailures = 0;
     for (let attempt = 0; attempt < 120; attempt += 1) {
@@ -92,6 +128,7 @@ export async function requestVideoGeneration(config: AiConfig, prompt: string, r
             if (reachedVideoPollFailureLimit(consecutivePollFailures)) throw new Error(state.error);
         } else {
             consecutivePollFailures = 0;
+            options?.onProgress?.(state.progress);
         }
         if (attempt === 119) throw new Error(`${task.provider === "seedance" ? "Seedance " : ""}视频生成超时，请稍后重试`);
         await delay(delayMs, options?.signal);
@@ -99,22 +136,31 @@ export async function requestVideoGeneration(config: AiConfig, prompt: string, r
     throw new Error("视频生成超时，请稍后重试");
 }
 
-export async function createVideoGenerationTask(config: AiConfig, prompt: string, references: ReferenceImage[] = [], videoReferences: ReferenceVideo[] = [], audioReferences: ReferenceAudio[] = [], options?: RequestOptions): Promise<VideoGenerationTask> {
+export function createVideoGenerationTask(config: AiConfig, prompt: string, input: VideoReferenceInput, options?: RequestOptions): Promise<VideoGenerationTask>;
+export function createVideoGenerationTask(config: AiConfig, prompt: string, references?: ReferenceImage[], videoReferences?: ReferenceVideo[], audioReferences?: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationTask>;
+export async function createVideoGenerationTask(
+    config: AiConfig,
+    prompt: string,
+    input: ReferenceImage[] | VideoReferenceInput = [],
+    videoReferencesOrOptions: ReferenceVideo[] | RequestOptions = [],
+    audioReferences: ReferenceAudio[] = [],
+    options?: RequestOptions,
+): Promise<VideoGenerationTask> {
+    const requestOptions = Array.isArray(videoReferencesOrOptions) ? options : videoReferencesOrOptions;
+    const references = normalizeVideoReferenceInput(input, Array.isArray(videoReferencesOrOptions) ? videoReferencesOrOptions : [], audioReferences);
     const channelModel = resolveCapabilityModel(config, "video", config.model || config.videoModel);
     const requestConfig = resolveModelRequestConfig(config, channelModel);
     const model = requestConfig.model.trim();
     assertVideoConfig(requestConfig, model);
+    const requestPrompt = withVideoSystemPrompt(requestConfig, prompt);
     const script = resolveModelScript(config, channelModel, "video");
-    if (script) return createPluginVideoTask(requestConfig, channelModel, script, prompt, references, videoReferences, audioReferences, options);
+    if (script) return createPluginVideoTask(requestConfig, channelModel, script, requestPrompt, references.references, references.videoReferences, references.audioReferences, requestOptions);
     if (requestConfig.apiFormat === "gemini") throw new Error("Gemini 调用格式暂不支持视频生成，请为视频模型选择 OpenAI 格式渠道");
     if (isSeedanceVideoConfig({ ...requestConfig, model })) {
-        return createSeedanceTask(requestConfig, model, prompt, references, videoReferences, audioReferences, options, channelModel);
-    }
-    if (videoReferences.length || audioReferences.length) {
-        throw new Error("当前视频接口不支持参考视频或参考音频，请切换到 Seedance 2.0 / 火山 Agent Plan 模型，或移除参考素材");
+        return createSeedanceTask(requestConfig, model, requestPrompt, seedanceReferenceImages(references), references.videoReferences, references.audioReferences, requestOptions, channelModel);
     }
     assertVideoSecondsSupported(requestConfig, model);
-    return createOpenAIVideoTask(requestConfig, model, prompt, references, options, channelModel);
+    return createOpenAIVideoTask(requestConfig, model, requestPrompt, references, requestOptions, channelModel);
 }
 
 export async function pollVideoGenerationTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
@@ -141,9 +187,9 @@ async function createPluginVideoTask(
     options?: RequestOptions,
 ): Promise<VideoGenerationTask> {
     const [images, videos, audios] = await Promise.all([
-        Promise.all(references.map((image) => imageToDataUrl(image))),
-        Promise.all(videoReferences.map(resolveSeedanceVideoUrl)),
-        Promise.all(audioReferences.map(resolveSeedanceAudioUrl)),
+        Promise.all(references.map((image) => imageToDataUrl(image, options?.signal))),
+        Promise.all(videoReferences.map((video) => resolveSeedanceVideoUrl(video, options?.signal))),
+        Promise.all(audioReferences.map((audio) => resolveSeedanceAudioUrl(audio, options?.signal))),
     ]);
     try {
         const raw = await runModelPlugin({
@@ -206,16 +252,53 @@ export async function storeGeneratedVideo(result: VideoGenerationResult): Promis
     throw new Error("视频接口没有返回可播放的视频");
 }
 
-async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], options?: RequestOptions, channelModel?: string): Promise<VideoGenerationTask> {
+async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: string, input: NormalizedVideoReferenceInput, options?: RequestOptions, channelModel?: string): Promise<VideoGenerationTask> {
+    const kling = resolveKlingRequest(config, model, channelModel);
+    const motionControl = resolveKlingMotionControlRequest(config, model, channelModel);
     const body = new FormData();
     body.append("model", model);
     body.append("prompt", prompt);
-    body.append("seconds", normalizeVideoSeconds(config.videoSeconds));
-    if (normalizeVideoSize(config.size)) body.append("size", normalizeVideoSize(config.size)!);
-    body.append("resolution_name", normalizeVideoResolution(config.vquality));
-    body.append("preset", "normal");
-    const files = await Promise.all(references.slice(0, 7).map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
+    if (kling) {
+        body.append("mode", kling.variant === "v3" ? normalizeKlingV3Mode(config.videoMode) : normalizeKlingV26Mode(config.videoMode));
+        body.append("duration", kling.variant === "v3" ? normalizeKlingV3Duration(config.videoSeconds) : normalizeKlingV26Duration(config.videoSeconds));
+        body.append("aspect_ratio", normalizeKlingAspectRatio(config.size));
+        if (kling.provider !== "kie" && config.videoNegativePrompt.trim()) body.append("negative_prompt", config.videoNegativePrompt.trim());
+        if (kling.variant === "v3" && boolConfig(config.videoMultiShot, false)) {
+            body.append("multi_shot", "true");
+            if (kling.provider === "kie") {
+                body.append("multi_prompt", JSON.stringify(normalizeKieMultiPrompt(config.videoMultiPrompt)));
+            } else {
+                const shotType = normalizeKlingShotType(config.videoShotType);
+                body.append("shot_type", shotType);
+                if (shotType === "customize") body.append("multi_prompt", JSON.stringify(normalizeKlingMultiPrompt(config.videoMultiPrompt)));
+            }
+        }
+        if (kling.variant === "v3") {
+            const elements = await normalizeKlingElementList(config.videoElementList, kling.provider, options?.signal);
+            if (elements.length) body.append("element_list", JSON.stringify(elements));
+        }
+    } else if (motionControl) {
+        body.append("mode", normalizeVideoResolution(config.vquality) === "1080p" ? "pro" : "std");
+        body.append("character_orientation", normalizeCharacterOrientation(config.videoCharacterOrientation));
+    } else {
+        body.append("seconds", normalizeVideoSeconds(config.videoSeconds));
+        if (normalizeVideoSize(config.size)) body.append("size", normalizeVideoSize(config.size)!);
+        body.append("resolution_name", normalizeVideoResolution(config.vquality));
+        if (isKieGrokVideoRequest(config, model, channelModel)) body.append("mode", normalizeGrokVideoMode(config.videoMode));
+        else body.append("preset", "normal");
+    }
+    if (supportsVideoAudioGeneration(model)) {
+        const generateAudio = boolConfig(config.videoGenerateAudio, false) && (!kling || kling.variant !== "v26" || normalizeKlingV26Mode(config.videoMode) === "pro");
+        body.append("video_generate_audio", String(generateAudio));
+    }
+    const files = await Promise.all(input.references.slice(0, kling ? 2 : 9).map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image, options?.signal) })));
     files.forEach((file) => body.append("input_reference[]", file));
+    if (!kling && input.firstFrame) body.append("first_frame_url", await imageReferenceToFormValue(input.firstFrame, options?.signal));
+    if (!kling && input.lastFrame) body.append("last_frame_url", await imageReferenceToFormValue(input.lastFrame, options?.signal));
+    const videoFiles = kling ? [] : await Promise.all(input.videoReferences.map((video) => mediaReferenceToFormValue(video, options?.signal)));
+    videoFiles.forEach((file) => body.append("video_reference[]", file));
+    const audioFiles = kling ? [] : await Promise.all(input.audioReferences.map((audio) => mediaReferenceToFormValue(audio, options?.signal)));
+    audioFiles.forEach((file) => body.append("audio_reference[]", file));
     try {
         const created = unwrapVideoResponse((await channelAxiosRequest<ApiVideoResponse>(config, { method: "POST", url: aiApiUrl(config, "/videos"), data: body, ...aiRequestConfig(config, undefined, undefined, "video"), signal: options?.signal })).data);
         if (!created.id) throw new Error("视频接口没有返回任务 ID");
@@ -229,14 +312,19 @@ async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask, 
     const params = config.channelMode === "remote" || isNewApiConfig(config) ? { model: task.model } : undefined;
     try {
         const video = unwrapVideoResponse((await channelAxiosRequest<ApiVideoResponse>(config, { method: "GET", url: aiApiUrl(config, `/videos/${task.id}`), ...aiRequestConfig(config, undefined, params, "video"), signal: options?.signal })).data);
-        if (video.status === "completed") {
+        const resultUrl = video.video_url || video.url;
+        if (isCompletedVideoStatus(video.status) || resultUrl) {
+            if (resultUrl) {
+                refreshRemoteUser(config);
+                return { status: "completed", result: { url: resultUrl, mimeType: "video/mp4" } };
+            }
             const content = await channelAxiosRequest<Blob>(config, { method: "GET", url: aiApiUrl(config, `/videos/${task.id}/content`), ...aiRequestConfig(config, undefined, params, "video"), responseType: "blob", signal: options?.signal });
             await assertVideoBlob(content.data);
             refreshRemoteUser(config);
             return { status: "completed", result: { blob: content.data } };
         }
         if (video.status === "failed" || video.status === "cancelled") return { status: "failed", error: video.error?.message || "视频生成失败" };
-        return { status: "pending" };
+        return { status: "pending", ...(typeof video.progress === "number" ? { progress: video.progress } : {}) };
     } catch (error) {
         if (isTransientVideoPollError(error, options?.signal)) return { status: "retrying", error: readAxiosError(error, "视频任务查询暂时失败，请稍后重试") };
         throw new Error(readAxiosError(error, "视频任务查询失败"));
@@ -258,7 +346,7 @@ async function createSeedanceTask(
     }
     assertSeedanceVideoReferences(videoReferences);
     assertSeedanceAudioReferences(audioReferences);
-    const content = await buildSeedanceContent(config, prompt, references, videoReferences, audioReferences);
+    const content = await buildSeedanceContent(config, prompt, references, videoReferences, audioReferences, options?.signal);
     if (!content.length) throw new Error("请输入视频提示词，或连接参考图片/视频/音频");
     const payload = {
         model,
@@ -275,7 +363,9 @@ async function createSeedanceTask(
     }
 
     try {
-        const created = unwrapSeedanceTask((await channelAxiosRequest<ApiEnvelope<SeedanceTask>>(config, { method: "POST", url: seedanceApiUrl(config), data: payload, ...aiRequestConfig(config, "application/json", undefined, "video"), signal: options?.signal })).data);
+        const created = unwrapSeedanceTask(
+            (await channelAxiosRequest<ApiEnvelope<SeedanceTask>>(config, { method: "POST", url: seedanceApiUrl(config), data: payload, ...aiRequestConfig(config, "application/json", undefined, "video"), signal: options?.signal })).data,
+        );
         if (!created.id) throw new Error("Seedance 接口没有返回任务 ID");
         return { id: created.id, provider: "seedance", model, ...(channelModel ? { channelModel } : {}) };
     } catch (error) {
@@ -318,7 +408,9 @@ async function requestNewApiSeedanceGeneration(config: AiConfig, model: string, 
     };
 
     try {
-        const created = unwrapVideoResponse((await channelAxiosRequest<ApiVideoResponse>(config, { method: "POST", url: aiApiUrl(config, "/videos"), data: body, ...aiRequestConfig(config, "application/json", undefined, "video"), signal: options?.signal })).data);
+        const created = unwrapVideoResponse(
+            (await channelAxiosRequest<ApiVideoResponse>(config, { method: "POST", url: aiApiUrl(config, "/videos"), data: body, ...aiRequestConfig(config, "application/json", undefined, "video"), signal: options?.signal })).data,
+        );
         if (!created.id) throw new Error("Seedance 接口没有返回任务 ID");
         return { id: created.id, provider: "openai" as const, model, ...(channelModel ? { channelModel } : {}) };
     } catch (error) {
@@ -354,59 +446,86 @@ function seedanceApiUrl(config: AiConfig, taskId?: string) {
     return buildApiUrl(config.baseUrl, `/contents/generations/tasks${taskId ? `/${encodeURIComponent(taskId)}` : ""}`);
 }
 
-async function buildSeedanceContent(config: AiConfig, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]) {
+async function buildSeedanceContent(config: AiConfig, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[], signal?: AbortSignal) {
     const content: Array<Record<string, unknown>> = [];
     const text = buildSeedancePromptText(prompt, references, videoReferences, audioReferences);
     if (text) content.push({ type: "text", text });
     for (const image of references.slice(0, SEEDANCE_REFERENCE_LIMITS.images)) {
-        content.push({ type: "image_url", image_url: { url: await resolveSeedanceImageUrl(config, image) }, role: "reference_image" });
+        content.push({ type: "image_url", image_url: { url: await resolveSeedanceImageUrl(config, image, signal) }, role: "reference_image" });
     }
     for (const video of videoReferences.slice(0, SEEDANCE_REFERENCE_LIMITS.videos)) {
-        content.push({ type: "video_url", video_url: { url: await resolveSeedanceVideoUrl(video) }, role: "reference_video" });
+        content.push({ type: "video_url", video_url: { url: await resolveSeedanceVideoUrl(video, signal) }, role: "reference_video" });
     }
     for (const audio of audioReferences.slice(0, SEEDANCE_REFERENCE_LIMITS.audios)) {
-        content.push({ type: "audio_url", audio_url: { url: await resolveSeedanceAudioUrl(audio) }, role: "reference_audio" });
+        content.push({ type: "audio_url", audio_url: { url: await resolveSeedanceAudioUrl(audio, signal) }, role: "reference_audio" });
     }
     return content;
 }
 
-async function resolveSeedanceImageUrl(config: AiConfig, image: ReferenceImage) {
+async function resolveSeedanceImageUrl(config: AiConfig, image: ReferenceImage, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     const directUrl = image.url || image.dataUrl;
     if (isPublicMediaUrl(directUrl) || directUrl.startsWith("asset://")) return directUrl;
-    const dataUrl = await imageToDataUrl(image);
+    const dataUrl = await imageToDataUrl(image, signal);
     if (!dataUrl) throw new Error("参考图读取失败，请换一张图片或重新上传");
     if (config.channelMode === "remote") {
-        return uploadReferenceMedia(dataUrlToFile({ ...image, dataUrl }));
+        return uploadReferenceMedia(dataUrlToFile({ ...image, dataUrl }), signal);
     }
     return dataUrl;
 }
 
-async function resolveSeedanceVideoUrl(video: ReferenceVideo) {
+async function resolveSeedanceVideoUrl(video: ReferenceVideo, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     if (isPublicMediaUrl(video.url) || video.url.startsWith("asset://")) return video.url;
     let blob: Blob | null = null;
     if (video.storageKey) blob = await getMediaBlob(video.storageKey);
-    if (!blob && video.url?.startsWith("blob:")) blob = await (await fetch(video.url)).blob();
+    signal?.throwIfAborted();
+    if (!blob && video.url?.startsWith("blob:")) blob = await (await fetch(video.url, { signal })).blob();
     if (!blob) throw new Error("参考视频必须是公网 URL、素材 ID，或本地已保存的视频");
     const file = new File([blob], video.name || "reference-video.mp4", { type: video.type || blob.type || "video/mp4" });
-    return uploadReferenceMedia(file);
+    return uploadReferenceMedia(file, signal);
 }
 
-async function resolveSeedanceAudioUrl(audio: ReferenceAudio) {
+async function resolveSeedanceAudioUrl(audio: ReferenceAudio, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     if (isPublicMediaUrl(audio.url) || audio.url.startsWith("asset://")) return audio.url;
     let blob: Blob | null = null;
     if (audio.storageKey) blob = await getMediaBlob(audio.storageKey);
-    if (!blob && audio.url?.startsWith("blob:")) blob = await (await fetch(audio.url)).blob();
+    signal?.throwIfAborted();
+    if (!blob && audio.url?.startsWith("blob:")) blob = await (await fetch(audio.url, { signal })).blob();
     if (!blob) throw new Error("参考音频必须是公网 URL、素材 ID，或本地已保存的音频");
     const file = new File([blob], audio.name || "reference-audio.mp3", { type: audio.type || blob.type || "audio/mpeg" });
-    return uploadReferenceMedia(file);
+    return uploadReferenceMedia(file, signal);
 }
 
-async function uploadReferenceMedia(file: File) {
+async function mediaReferenceToFormValue(media: ReferenceVideo | ReferenceAudio, signal?: AbortSignal): Promise<string | File> {
+    signal?.throwIfAborted();
+    const resolvedUrl = await resolveMediaUrl(media.storageKey, media.url);
+    for (const value of [resolvedUrl, media.url]) {
+        if (isPublicMediaUrl(value) || value.startsWith("asset://")) return value;
+    }
+    let blob: Blob | null = null;
+    if (media.storageKey) blob = await getMediaBlob(media.storageKey);
+    signal?.throwIfAborted();
+    const localUrl = resolvedUrl || media.url;
+    if (!blob && localUrl?.startsWith("blob:")) blob = await (await fetch(localUrl, { signal })).blob();
+    if (!blob) throw new Error(`${media.type.startsWith("audio/") ? "参考音频" : "参考视频"}读取失败，请重新上传或使用公网 URL`);
+    return new File([blob], media.name || "reference", { type: media.type || blob.type || "application/octet-stream" });
+}
+
+async function uploadReferenceMedia(file: File, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     const token = useUserStore.getState().token;
     if (!token) throw new Error("使用本地参考素材需要先登录，并在服务端配置 PUBLIC_BASE_URL");
     const body = new FormData();
     body.append("file", file, file.name);
-    const response = await axios.post<ApiEnvelope<ReferenceMediaUploadResponse>>("/api/v1/media/references", body, { headers: { Authorization: `Bearer ${token}` } });
+    let response;
+    try {
+        response = await axios.post<ApiEnvelope<ReferenceMediaUploadResponse>>("/api/v1/media/references", body, { headers: { Authorization: `Bearer ${token}` }, signal });
+    } catch (error) {
+        if (isRequestCanceled(error, signal)) throw new DOMException("请求已取消", "AbortError");
+        throw error;
+    }
     const payload = unwrapEnvelope(response.data, "参考素材上传失败");
     if (!payload.url) throw new Error("参考素材上传后没有返回公网 URL");
     return payload.url;
@@ -431,6 +550,157 @@ function assertVideoConfig(config: AiConfig, model: string) {
     if (config.channelMode === "local" && !config.apiKey.trim()) throw new Error("请先配置 API Key");
 }
 
+function normalizeVideoReferenceInput(input: ReferenceImage[] | VideoReferenceInput, videoReferences: ReferenceVideo[] = [], audioReferences: ReferenceAudio[] = []): NormalizedVideoReferenceInput {
+    if (Array.isArray(input)) return { references: input, videoReferences, audioReferences, firstFrame: null, lastFrame: null };
+    return {
+        references: input.references || [],
+        videoReferences: input.videoReferences || [],
+        audioReferences: input.audioReferences || [],
+        firstFrame: input.firstFrame || null,
+        lastFrame: input.lastFrame || null,
+    };
+}
+
+function seedanceReferenceImages(input: NormalizedVideoReferenceInput) {
+    const references = [input.firstFrame, ...input.references, input.lastFrame].filter((item): item is ReferenceImage => Boolean(item));
+    return references.filter((item, index) => references.findIndex((candidate) => candidate.id === item.id) === index);
+}
+
+type KlingRequest = { provider: "apimart" | "kie"; variant: "v26" | "v3" };
+
+function resolveKlingRequest(config: AiConfig, model: string, channelModel?: string): KlingRequest | null {
+    const key = modelKey(model);
+    const channel = videoChannelText(config, model, channelModel);
+    if (key === "kling-v2-6") return { provider: channel.includes("kie") ? "kie" : "apimart", variant: "v26" };
+    if (key === "kling-v3") return { provider: channel.includes("kie") ? "kie" : "apimart", variant: "v3" };
+    if (key === "kling-3-0-video") return { provider: "kie", variant: "v3" };
+    return null;
+}
+
+function resolveKlingMotionControlRequest(config: AiConfig, model: string, channelModel?: string) {
+    const key = modelKey(model);
+    if (!["kling-v2-6-motion-control", "kling-v3-motion-control", "kling-2-6-motion-control", "kling-3-0-motion-control"].includes(key)) return false;
+    const channel = videoChannelText(config, model, channelModel);
+    return channel.includes("apimart") || channel.includes("kie") || key.includes("motion-control");
+}
+
+function isKieGrokVideoRequest(config: AiConfig, model: string, channelModel?: string) {
+    return modelKey(model).includes("grok") && videoChannelText(config, model, channelModel).includes("kie");
+}
+
+function videoChannelText(config: AiConfig, model: string, channelModel?: string) {
+    if (config.channelMode === "local") {
+        const channel = resolveModelChannel(config, channelModel || model);
+        return [channel.id, channel.name, channel.baseUrl].filter(Boolean).join(" ").toLowerCase();
+    }
+    const activeId = config.videoChannelId || config.activeChannelId;
+    const channel = config.publicChannels.find((item) => item.id === activeId) || config.publicChannels.find((item) => item.models?.some((value) => modelOptionName(value) === model)) || config.publicChannels[0];
+    return [channel?.id, channel?.name, channel?.baseUrl, channel?.remark].filter(Boolean).join(" ").toLowerCase();
+}
+
+function normalizeKlingV26Mode(value: string) {
+    return value === "pro" ? "pro" : "std";
+}
+
+function normalizeKlingV3Mode(value: string) {
+    return value === "4k" ? "4k" : value === "pro" ? "pro" : "std";
+}
+
+function normalizeKlingV26Duration(value: string) {
+    return String(value).trim() === "10" ? "10" : "5";
+}
+
+function normalizeKlingV3Duration(value: string) {
+    const seconds = Math.floor(Number(value) || 3);
+    return String(Math.max(3, Math.min(15, seconds)));
+}
+
+function normalizeKlingAspectRatio(value: string) {
+    const normalized = String(value || "")
+        .trim()
+        .toLowerCase();
+    if (["9:16", "720x1280", "1080x1920"].includes(normalized)) return "9:16";
+    if (["1:1", "1024x1024", "1080x1080"].includes(normalized)) return "1:1";
+    return "16:9";
+}
+
+function normalizeKlingShotType(value: string) {
+    return value === "customize" ? "customize" : "intelligence";
+}
+
+function normalizeKlingMultiPrompt(value: AiConfig["videoMultiPrompt"]) {
+    const items = Array.isArray(value) && value.length ? value : [{ prompt: "", duration: "1" }];
+    return items.map((item, index) => ({ index: index + 1, prompt: item.prompt || "", duration: normalizeKlingMultiPromptDuration(item.duration) }));
+}
+
+function normalizeKieMultiPrompt(value: AiConfig["videoMultiPrompt"]) {
+    return normalizeKlingMultiPrompt(value).map(({ prompt, duration }) => ({ prompt, duration }));
+}
+
+function normalizeKlingMultiPromptDuration(value: string) {
+    return Math.max(1, Math.min(15, Math.floor(Number(value) || 1)));
+}
+
+async function normalizeKlingElementList(value: AiConfig["videoElementList"], provider: KlingRequest["provider"], signal?: AbortSignal) {
+    const result: Array<Record<string, unknown>> = [];
+    for (const item of (Array.isArray(value) ? value : []).slice(0, 3)) {
+        const references = (
+            await Promise.all(
+                (Array.isArray(item.references) ? item.references : []).slice(0, 4).map(async (reference) => ({
+                    kind: reference.kind,
+                    url: await elementReferenceToInputUrl(reference, signal),
+                })),
+            )
+        ).filter((reference) => reference.url);
+        if (!references.length) continue;
+        result.push(provider === "kie" ? { name: item.name || "", description: item.description || "", references } : { name: item.name || "", description: item.description || "", element_input_urls: references.map((reference) => reference.url) });
+    }
+    return result;
+}
+
+async function elementReferenceToInputUrl(reference: VideoElementReference, signal?: AbortSignal) {
+    signal?.throwIfAborted();
+    if (reference.kind === "image") {
+        const resolvedUrl = await resolveImageUrl(reference.storageKey, "");
+        for (const value of [reference.url, resolvedUrl]) {
+            const url = publicHttpUrl(value);
+            if (url) return url;
+        }
+        if (reference.dataUrl) return reference.dataUrl;
+        return imageToDataUrl({ dataUrl: reference.url || resolvedUrl, storageKey: reference.storageKey }, signal);
+    }
+    const resolvedUrl = await resolveMediaUrl(reference.storageKey, reference.url || "");
+    return publicHttpUrl(resolvedUrl) || publicHttpUrl(reference.url) || resolvedUrl || reference.url || "";
+}
+
+async function imageReferenceToFormValue(image: ReferenceImage, signal?: AbortSignal) {
+    const resolvedUrl = await resolveImageUrl(image.storageKey, "");
+    for (const value of [image.url, resolvedUrl, image.dataUrl]) {
+        const url = publicHttpUrl(value);
+        if (url) return url;
+    }
+    return dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image, signal) });
+}
+
+function publicHttpUrl(value?: string) {
+    if (!value || value.startsWith("blob:") || value.startsWith("data:")) return "";
+    try {
+        const url = new URL(value, typeof window === "undefined" ? undefined : window.location.origin);
+        if (!["http:", "https:"].includes(url.protocol) || ["localhost", "127.0.0.1", "::1"].includes(url.hostname)) return "";
+        return url.href;
+    } catch {
+        return "";
+    }
+}
+
+function normalizeCharacterOrientation(value: string) {
+    return value === "image" ? "image" : "video";
+}
+
+function normalizeGrokVideoMode(value: string) {
+    return value === "fun" || value === "spicy" ? value : "normal";
+}
+
 function normalizeVideoSeconds(value: string) {
     const seconds = Math.floor(Number(value) || 6);
     return String(Math.max(1, Math.min(20, seconds)));
@@ -452,6 +722,15 @@ function normalizeVideoResolution(value: string) {
 
 function unwrapVideoResponse(payload: ApiVideoResponse) {
     return unwrapEnvelope(payload, "接口没有返回视频任务");
+}
+
+function isCompletedVideoStatus(status?: string) {
+    return ["completed", "complete", "done", "succeeded", "success"].includes((status || "").toLowerCase());
+}
+
+function withVideoSystemPrompt(config: AiConfig, prompt: string) {
+    const systemPrompt = (config.systemPrompts?.video || config.systemPrompt).trim();
+    return systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
 }
 
 function unwrapSeedanceTask(payload: ApiEnvelope<SeedanceTask>) {

@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { Button, Modal } from "antd";
-import { Check, Lock, LockOpen, X } from "lucide-react";
+import { Button, Dropdown, Modal } from "antd";
+import { Check, ChevronDown, Lock, LockOpen, X } from "lucide-react";
 
 import { readImageMeta } from "@/lib/image-utils";
 
@@ -20,15 +20,20 @@ const handles: ResizeHandle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 const minSize = 0.06;
 const defaultCrop = { x: 0.12, y: 0.12, width: 0.76, height: 0.76 };
 
-export function CanvasNodeCropDialog({ dataUrl, open, onClose, onConfirm }: { dataUrl: string; open: boolean; onClose: () => void; onConfirm: (crop: CanvasImageCropRect) => void }) {
+export function CanvasNodeCropDialog({ dataUrl, open, onClose, onConfirm }: { dataUrl: string; open: boolean; onClose: () => void; onConfirm: (crop: CanvasImageCropRect) => Promise<void> | void }) {
     const boxRef = useRef<HTMLDivElement>(null);
     const [crop, setCrop] = useState<CanvasImageCropRect>(defaultCrop);
-    const [locked, setLocked] = useState(false);
+    const [aspectRatio, setAspectRatio] = useState<number | null>(null);
+    const [loading, setLoading] = useState(false);
     const [image, setImage] = useState<{ width: number; height: number } | null>(null);
     const cropSize = image ? { width: Math.max(1, Math.round(crop.width * image.width)), height: Math.max(1, Math.round(crop.height * image.height)) } : null;
 
     useEffect(() => {
-        if (open) setCrop(defaultCrop);
+        if (open) {
+            setCrop(defaultCrop);
+            setAspectRatio(null);
+            setLoading(false);
+        }
     }, [dataUrl, open]);
 
     useEffect(() => {
@@ -37,6 +42,7 @@ export function CanvasNodeCropDialog({ dataUrl, open, onClose, onConfirm }: { da
     }, [dataUrl, open]);
 
     const startDrag = (mode: DragMode, event: ReactPointerEvent, handle?: ResizeHandle) => {
+        if (loading) return;
         const box = boxRef.current?.getBoundingClientRect();
         if (!box) return;
         event.preventDefault();
@@ -45,7 +51,7 @@ export function CanvasNodeCropDialog({ dataUrl, open, onClose, onConfirm }: { da
         const move = (event: PointerEvent) => {
             const dx = (event.clientX - start.x) / box.width;
             const dy = (event.clientY - start.y) / box.height;
-            setCrop(mode === "move" ? moveCrop(start.crop, dx, dy) : resizeCrop(start.crop, dx, dy, handle || "se", locked, box));
+            setCrop(mode === "move" ? moveCrop(start.crop, dx, dy) : resizeCrop(start.crop, dx, dy, handle || "se", aspectRatio, box));
         };
         const up = () => {
             document.removeEventListener("pointermove", move);
@@ -55,8 +61,61 @@ export function CanvasNodeCropDialog({ dataUrl, open, onClose, onConfirm }: { da
         document.addEventListener("pointerup", up);
     };
 
+    const applyRatio = (ratio: number | null) => {
+        setAspectRatio(ratio);
+        if (ratio === null) return;
+        const box = boxRef.current?.getBoundingClientRect();
+        if (!box) return;
+
+        let width = 0.76;
+        let height = (width * box.width) / (ratio * box.height);
+        if (height > 0.76) {
+            height = 0.76;
+            width = (height * ratio * box.height) / box.width;
+        }
+        setCrop({ x: (1 - width) / 2, y: (1 - height) / 2, width, height });
+    };
+
+    const handleConfirm = async () => {
+        setLoading(true);
+        try {
+            await onConfirm(crop);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const ratioMenu = {
+        items: [
+            { key: "free", label: "自由比例" },
+            { key: "original", label: "原始比例" },
+            { key: "1:1", label: "1:1 比例" },
+            { key: "4:3", label: "4:3 比例" },
+            { key: "16:9", label: "16:9 比例" },
+            { key: "3:4", label: "3:4 比例" },
+            { key: "9:16", label: "9:16 比例" },
+        ],
+        onClick: ({ key }: { key: string }) => {
+            if (key === "free") return applyRatio(null);
+            if (key === "original") return image ? applyRatio(image.width / image.height) : undefined;
+            const [width, height] = key.split(":").map(Number);
+            applyRatio(width / height);
+        },
+    };
+
+    const ratioLabel = (() => {
+        if (aspectRatio === null) return "自由比例";
+        if (image && Math.abs(aspectRatio - image.width / image.height) < 0.01) return "原始比例";
+        if (Math.abs(aspectRatio - 1) < 0.01) return "1:1 比例";
+        if (Math.abs(aspectRatio - 4 / 3) < 0.01) return "4:3 比例";
+        if (Math.abs(aspectRatio - 16 / 9) < 0.01) return "16:9 比例";
+        if (Math.abs(aspectRatio - 3 / 4) < 0.01) return "3:4 比例";
+        if (Math.abs(aspectRatio - 9 / 16) < 0.01) return "9:16 比例";
+        return "比例锁定";
+    })();
+
     return (
-        <Modal title="裁剪图片" open={open && Boolean(dataUrl)} onCancel={onClose} footer={null} width={780} centered destroyOnHidden>
+        <Modal title="裁剪图片" open={open && Boolean(dataUrl)} onCancel={loading ? undefined : onClose} footer={null} width={780} centered destroyOnHidden closable={!loading} mask={{ closable: !loading }}>
             <div className="space-y-4">
                 <div className="flex justify-center">
                     <div ref={boxRef} className="relative inline-block max-w-full overflow-hidden rounded-lg bg-black select-none">
@@ -84,18 +143,28 @@ export function CanvasNodeCropDialog({ dataUrl, open, onClose, onConfirm }: { da
                             </span>
                         ) : null}
                     </div>
-                    <Button icon={locked ? <Lock className="size-4" /> : <LockOpen className="size-4" />} onClick={() => setLocked((value) => !value)}>
-                        {locked ? "锁定比例" : "自由比例"}
-                    </Button>
+                    <Dropdown menu={ratioMenu} disabled={loading}>
+                        <Button icon={aspectRatio === null ? <LockOpen className="size-4" /> : <Lock className="size-4" />}>
+                            {ratioLabel} <ChevronDown className="ml-1 inline-block size-3.5" />
+                        </Button>
+                    </Dropdown>
                 </div>
 
                 <div className="flex items-center justify-end gap-2">
-                    <Button onClick={() => setCrop(defaultCrop)}>重置</Button>
-                    <Button icon={<X className="size-4" />} onClick={onClose}>
+                    <Button
+                        disabled={loading}
+                        onClick={() => {
+                            setCrop(defaultCrop);
+                            setAspectRatio(null);
+                        }}
+                    >
+                        重置
+                    </Button>
+                    <Button disabled={loading} icon={<X className="size-4" />} onClick={onClose}>
                         取消
                     </Button>
-                    <Button type="primary" icon={<Check className="size-4" />} onClick={() => onConfirm(crop)}>
-                        确认裁剪
+                    <Button type="primary" loading={loading} icon={loading ? undefined : <Check className="size-4" />} onClick={() => void handleConfirm()}>
+                        {loading ? "正在裁剪..." : "确认裁剪"}
                     </Button>
                 </div>
             </div>
@@ -118,7 +187,7 @@ function moveCrop(crop: CanvasImageCropRect, dx: number, dy: number): CanvasImag
     return { ...crop, x: clamp(crop.x + dx, 0, 1 - crop.width), y: clamp(crop.y + dy, 0, 1 - crop.height) };
 }
 
-function resizeCrop(crop: CanvasImageCropRect, dx: number, dy: number, handle: ResizeHandle, locked: boolean, box: DOMRect): CanvasImageCropRect {
+function resizeCrop(crop: CanvasImageCropRect, dx: number, dy: number, handle: ResizeHandle, aspectRatio: number | null, box: DOMRect): CanvasImageCropRect {
     let next = { ...crop };
     if (handle.includes("e")) next.width = crop.width + dx;
     if (handle.includes("s")) next.height = crop.height + dy;
@@ -130,15 +199,23 @@ function resizeCrop(crop: CanvasImageCropRect, dx: number, dy: number, handle: R
         next.y = crop.y + dy;
         next.height = crop.height - dy;
     }
-    if (locked) {
-        const size = Math.max(next.width * box.width, next.height * box.height);
-        next.width = size / box.width;
-        next.height = size / box.height;
-        if (handle.includes("w")) next.x = crop.x + crop.width - next.width;
-        if (handle.includes("n")) next.y = crop.y + crop.height - next.height;
+    if (aspectRatio !== null) {
+        if (handle === "n" || handle === "s") {
+            next.width = (next.height * box.height * aspectRatio) / box.width;
+            next.x = crop.x + (crop.width - next.width) / 2;
+        } else if (handle === "e" || handle === "w") {
+            next.height = (next.width * box.width) / (aspectRatio * box.height);
+            next.y = crop.y + (crop.height - next.height) / 2;
+        } else {
+            next.height = (next.width * box.width) / (aspectRatio * box.height);
+            if (handle.includes("n")) next.y = crop.y + crop.height - next.height;
+        }
     }
     next.width = clamp(next.width, minSize, 1);
     next.height = clamp(next.height, minSize, 1);
+    if (aspectRatio !== null && Math.abs((next.width * box.width) / (next.height * box.height) - aspectRatio) > 0.01) {
+        next.height = (next.width * box.width) / (aspectRatio * box.height);
+    }
     next.x = clamp(next.x, 0, 1 - next.width);
     next.y = clamp(next.y, 0, 1 - next.height);
     return next;

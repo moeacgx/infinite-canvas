@@ -9,7 +9,13 @@ import (
 )
 
 func New() *gin.Engine {
-	router := gin.Default()
+	router := gin.New()
+	// 图片代理的 url 参数可能包含对象存储签名，不能写入访问日志。
+	// 其他路由继续使用与 gin.Default 相同的日志和恢复中间件。
+	router.Use(
+		gin.LoggerWithConfig(gin.LoggerConfig{SkipPaths: []string{"/api/proxy-image", "/api/proxy-media"}}),
+		gin.Recovery(),
+	)
 	router.RedirectTrailingSlash = false
 	_ = router.SetTrustedProxies(nil)
 	api := router.Group("/api")
@@ -28,6 +34,9 @@ func New() *gin.Engine {
 	api.HEAD("/media/references/:id", func(c *gin.Context) {
 		handler.ReferenceMedia(c.Writer, c.Request, c.Param("id"))
 	})
+	api.GET("/proxy-image", middleware.UserAuth, gin.WrapF(handler.ProxyImage))
+	api.GET("/proxy-media", middleware.UserAuth, gin.WrapF(handler.ProxyMedia))
+	api.HEAD("/proxy-media", middleware.UserAuth, gin.WrapF(handler.ProxyMedia))
 	v1 := api.Group("/v1", middleware.UserAuth)
 	v1.POST("/images/generations", gin.WrapF(handler.AIImagesGenerations))
 	v1.POST("/images/edits", gin.WrapF(handler.AIImagesEdits))

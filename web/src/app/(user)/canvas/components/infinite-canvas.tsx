@@ -196,9 +196,7 @@ export function InfiniteCanvas({ containerRef, viewport, backgroundMode = "lines
             <CanvasGrid viewport={viewport} mode={backgroundMode} />
             <div
                 className="absolute origin-top-left"
-                style={{
-                    transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.k})`,
-                }}
+                style={{ transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.k})`, "--canvas-inverse-scale": 1 / viewport.k } as React.CSSProperties}
             >
                 {children}
             </div>

@@ -5,12 +5,13 @@ import { Cpu } from "lucide-react";
 
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { isNewApiConfig, modelOptionLabel, selectableModelsByCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import { decodeChannelModel, isNewApiConfig, modelOptionLabel, selectableModelsByCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 
 type ModelPickerProps = {
     config: AiConfig;
     value?: string;
-    onChange: (model: string) => void;
+    channelId?: string;
+    onChange: (model: string, channelId: string | undefined) => void;
     capability?: ModelCapability;
     className?: string;
     fullWidth?: boolean;
@@ -45,7 +46,7 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
                 if (nextOpen) window.dispatchEvent(new CustomEvent("model-picker-open", { detail: pickerId }));
                 setOpen(nextOpen);
             }}
-            onValueChange={onChange}
+            onValueChange={(nextValue) => onChange(nextValue, decodeChannelModel(nextValue)?.channelId)}
         >
             <SelectTrigger
                 className={cn(
