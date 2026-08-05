@@ -109,7 +109,7 @@ function getVideoConfig() {
             modelName: modelOptionName(model),
             size: config.videoSize || "1280x720",
             seconds: config.videoSeconds || "6",
-            resolution: config.vquality || "720",
+            resolution: normalizeAgentVideoResolution(config.vquality),
             generateAudio: config.videoGenerateAudio !== "false",
             watermark: config.videoWatermark === "true",
         },
@@ -126,7 +126,11 @@ function runVideoWorkbench(input: SiteToolInput, navigate: Navigate) {
     applyModel(store.config, "video", input.model, (value) => store.updateConfig("videoModel", value), applied);
     applyString(input.size, (value) => store.updateConfig("videoSize", value), "size", applied);
     applyString(input.seconds, (value) => store.updateConfig("videoSeconds", value), "seconds", applied);
-    applyString(input.resolution, (value) => store.updateConfig("vquality", value), "resolution", applied);
+    if (typeof input.resolution === "string" && input.resolution.trim()) {
+        const resolution = normalizeAgentVideoResolution(input.resolution);
+        store.updateConfig("vquality", resolution);
+        applied.resolution = resolution;
+    }
     if (typeof input.generateAudio === "boolean") {
         store.updateConfig("videoGenerateAudio", String(input.generateAudio));
         applied.generateAudio = input.generateAudio;
@@ -140,6 +144,16 @@ function runVideoWorkbench(input: SiteToolInput, navigate: Navigate) {
     useWorkbenchAgentStore.getState().dispatchVideo({ prompt, run });
     navigate("/video");
     return { ok: true, navigated: "/video", prompt, run, applied, note: run ? "已跳转视频创作台并触发生成" : "已跳转视频创作台并填入参数" };
+}
+
+function normalizeAgentVideoResolution(value: unknown) {
+    const resolution = String(value || "")
+        .trim()
+        .toLowerCase();
+    if (resolution === "low" || resolution === "480p") return "480";
+    if (["auto", "medium", "high", "720p"].includes(resolution)) return "720";
+    if (resolution === "1080p") return "1080";
+    return ["480", "720", "1080"].includes(resolution) ? resolution : "720";
 }
 
 async function searchPrompts(input: SiteToolInput) {

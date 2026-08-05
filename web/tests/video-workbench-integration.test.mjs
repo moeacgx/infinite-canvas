@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const pageSource = readFileSync(new URL("../src/app/(user)/video/page.tsx", import.meta.url), "utf8");
+const syncLogSource = pageSource.slice(pageSource.indexOf("const syncLogVideo"), pageSource.indexOf("const saveResultToAssets"));
 
 test("视频工作台保留请求语义和原有键盘布局回归保护", () => {
     assert.match(pageSource, /createBaseVideoGenerationTask\(config, prompt, normalized, \{ signal: options\.signal \}\)/);
@@ -23,7 +24,10 @@ test("视频工作台保留请求语义和原有键盘布局回归保护", () =>
     assert.match(pageSource, /safeResolveMediaUrl\(reference\.storageKey/);
     assert.match(pageSource, /function isCloudVideo[\s\S]{0,100}storageKey\.startsWith\("server:"\)/);
     assert.match(pageSource, /cloud \? "云端存储" : video\.storageKey \? "本地缓存" : "AI 临时URL"/);
-    assert.match(pageSource, /setLogs\(\(value\) => value\.map\(\(item\) => \(item\.id === log\.id \? nextLog : item\)\)\)/);
+    assert.match(syncLogSource, /deletedLogIdsRef\.current\.has\(log\.id\)[\s\S]{0,260}logsRef\.current\.find\(\(item\) => item\.id === log\.id\)/);
+    assert.match(syncLogSource, /await saveGenerationLog\(nextLog\);[\s\S]{0,600}await persistVideoLog\(nextLog\);[\s\S]{0,320}deleteAccountVideoLogs\(\[nextLog\]\)/);
+    assert.match(syncLogSource, /await saveGenerationLog\(nextLog\);[\s\S]{0,180}catch \(error\)[\s\S]{0,120}await cleanupSyncedVideo\(\)/);
+    assert.match(syncLogSource, /cleanupSyncedVideo[\s\S]{0,220}deleteStoredMedia\(\[synced\.storageKey\]\)/);
     assert.match(pageSource, /max-h-\[calc\(100dvh-2\.5rem\)\][^"\n]*overflow-y-auto/);
     assert.match(pageSource, /const seedance = isSeedanceVideoConfig\(\{ \.\.\.configValue, model: modelValue \}\);[\s\S]{0,1800}if \(seedance\) \{/);
     assert.match(pageSource, /filterCurrentModelAudioReferences[\s\S]{0,180}isSeedanceVideoConfig/);

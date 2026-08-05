@@ -33,7 +33,9 @@ test("付费或写入型站点工具需要确认并支持停止 Codex", () => {
 test("视频工作台 Agent 读写独立视频尺寸", () => {
     const videoToolSource = siteTools.slice(siteTools.indexOf("function runVideoWorkbench"), siteTools.indexOf("async function searchPrompts"));
     assert.match(siteTools, /size:\s*config\.videoSize\s*\|\|\s*"1280x720"/);
+    assert.match(siteTools, /resolution:\s*normalizeAgentVideoResolution\(config\.vquality\)/);
     assert.match(siteTools, /resolutionOptions:\s*\["480", "720", "1080"\]/);
     assert.match(videoToolSource, /input\.size,[\s\S]{0,100}updateConfig\("videoSize", value\)/);
+    assert.match(videoToolSource, /typeof input\.resolution === "string"[\s\S]{0,180}normalizeAgentVideoResolution\(input\.resolution\)[\s\S]{0,100}updateConfig\("vquality", resolution\)/);
     assert.doesNotMatch(videoToolSource, /updateConfig\("size", value\)/);
 });

@@ -32,8 +32,8 @@ test("工作流历史保留实际渠道，任务取消信号会传递到图片�
     assert.match(workspaceSource, /workflowControllersRef = useRef\(new Map<string, AbortController>\(\)\)/);
     assert.match(workspaceSource, /requestEdit\(\{ \.\.\.runConfig, count: "1" \}, prompt, references, undefined, \{ signal \}\)/);
     assert.match(workspaceSource, /requestGeneration\(\{ \.\.\.runConfig, count: "1" \}, prompt, \{ signal \}\)/);
-    assert.match(workspaceSource, /controller\.abort\(\)[\s\S]*正在取消工作流任务/);
-    assert.match(workspaceSource, /task\.status === "running"[\s\S]*<Square[\s\S]*取消/);
+    assert.match(workspaceSource, /const cancelWorkflowTask[\s\S]{0,240}controller\.abort\(\)[\s\S]{0,120}正在取消工作流任务/);
+    assert.match(workspaceSource, /task\.status === "running" \?[\s\S]{0,200}<Square[\s\S]{0,120}取消/);
     assert.match(workspaceSource, /const task = startWorkflowImageTask[\s\S]{0,520}if \(!task\)[\s\S]{0,220}status: "failed"/);
     assert.match(workspaceSource, /await imageLogStore\.setItem\(log\.id, serializeHistoryLog\(log\)\);[\s\S]{0,420}if \(signal\.aborted\)[\s\S]{0,280}imageLogStore\.removeItem\(log\.id\)/);
     assert.match(workspaceSource, /let workflowCategoryWriteChain: Promise<void> = Promise\.resolve\(\)/);

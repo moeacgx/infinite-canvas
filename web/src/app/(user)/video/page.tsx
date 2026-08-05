@@ -1064,11 +1064,34 @@ export default function VideoPage() {
     const syncLogVideo = async (log: GenerationLog, video: GeneratedVideo, index: number) => {
         const synced = await syncVideo(video, index);
         if (!synced) return;
-        const nextLog = { ...log, video: synced };
-        await logStore.setItem(log.id, serializeLog(nextLog));
-        setLogs((value) => value.map((item) => (item.id === log.id ? nextLog : item)));
+        const cleanupSyncedVideo = () => (synced.storageKey && synced.storageKey !== video.storageKey ? deleteStoredMedia([synced.storageKey]).catch(() => undefined) : Promise.resolve());
+        if (deletedLogIdsRef.current.has(log.id)) {
+            await cleanupSyncedVideo();
+            return;
+        }
+        const currentLog = logsRef.current.find((item) => item.id === log.id);
+        if (!currentLog) {
+            await cleanupSyncedVideo();
+            return;
+        }
+        const nextLog = { ...currentLog, video: synced };
+        try {
+            await saveGenerationLog(nextLog);
+        } catch (error) {
+            await cleanupSyncedVideo();
+            if (!deletedLogIdsRef.current.has(log.id)) message.error(error instanceof Error ? `视频同步结果保存失败：${error.message}` : "视频同步结果保存失败");
+            return;
+        }
+        if (deletedLogIdsRef.current.has(log.id)) {
+            await cleanupSyncedVideo();
+            return;
+        }
         await persistVideoLog(nextLog);
-        if (previewLog?.id === log.id) setPreviewLog(nextLog);
+        if (deletedLogIdsRef.current.has(log.id)) {
+            await Promise.all([logStore.removeItem(log.id), deleteAccountVideoLogs([nextLog]), cleanupSyncedVideo()]);
+            return;
+        }
+        setPreviewLog((current) => (current?.id === log.id ? nextLog : current));
     };
 
     const saveResultToAssets = (video: GeneratedVideo, sourcePrompt: string) => {

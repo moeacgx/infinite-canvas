@@ -538,7 +538,7 @@ export default function ImagePage() {
                             ...snapshot.requestConfig,
                             seedIndex: index,
                             seedCount: taskCount,
-                        } as any,
+                        } as AiConfig & { seedIndex?: number; seedCount?: number },
                     },
                     controller.signal,
                 );
