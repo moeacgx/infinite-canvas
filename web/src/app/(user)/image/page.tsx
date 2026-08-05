@@ -14,6 +14,7 @@ import {
     History,
     ImagePlus,
     LoaderCircle,
+    Maximize2,
     PanelBottom,
     PanelLeft,
     PenLine,
@@ -1206,7 +1207,7 @@ export default function ImagePage() {
             <button
                 ref={workflowButtonRef}
                 type="button"
-                className="fixed z-50 inline-flex touch-none select-none items-center gap-2 rounded-full border border-sky-300/70 bg-white/90 px-4 py-3 text-sm font-semibold text-stone-950 shadow-[0_18px_50px_rgba(14,165,233,0.28),0_8px_18px_rgba(0,0,0,0.14)] ring-1 ring-white/70 backdrop-blur-xl transition hover:-translate-y-0.5 hover:border-sky-300 hover:bg-white hover:shadow-[0_22px_64px_rgba(14,165,233,0.36),0_10px_22px_rgba(0,0,0,0.18)] dark:border-sky-400/40 dark:bg-stone-900/88 dark:text-stone-100 dark:ring-white/10 dark:hover:bg-stone-900"
+                className="workflow-floating-button fixed z-50 inline-flex touch-none select-none items-center gap-2 rounded-full border border-sky-300/70 bg-white/90 px-4 py-3 text-sm font-semibold text-stone-950 shadow-[0_18px_50px_rgba(14,165,233,0.28),0_8px_18px_rgba(0,0,0,0.14)] ring-1 ring-white/70 backdrop-blur-xl transition hover:-translate-y-0.5 hover:border-sky-300 hover:bg-white hover:shadow-[0_22px_64px_rgba(14,165,233,0.36),0_10px_22px_rgba(0,0,0,0.18)] dark:border-sky-400/40 dark:bg-stone-900/88 dark:text-stone-100 dark:ring-white/10 dark:hover:bg-stone-900"
                 style={{
                     left: workflowButtonReady ? clampWorkflowButtonPosition(workflowButtonPosition).x : 24,
                     top: workflowButtonReady ? clampWorkflowButtonPosition(workflowButtonPosition).y : 320,
@@ -1640,6 +1641,9 @@ function ResultsPanel({
     const { message } = App.useApp();
     const [creatingCategory, setCreatingCategory] = useState(false);
     const [categoryName, setCategoryName] = useState("");
+    const [previewItems, setPreviewItems] = useState<Array<{ src: string; alt: string }>>([]);
+    const [previewIndex, setPreviewIndex] = useState(0);
+    const [previewOpen, setPreviewOpen] = useState(false);
     const liveImageIds = new Set(results.map((result) => result.image?.id).filter((id): id is string => Boolean(id)));
     const liveLogIds = new Set(results.flatMap(imageResultIdentityKeys));
     const baseVisibleLogs = logs.filter((log) => !imageLogIdentityKeys(log).some((key) => liveLogIds.has(key)) && !log.images.some((image) => liveImageIds.has(image.id)));
@@ -1650,6 +1654,22 @@ function ResultsPanel({
     const shouldShowGrid = totalCount > 0;
     const allVisibleLogsSelected = Boolean(visibleLogs.length) && visibleLogs.every((log) => selectedLogIds.includes(log.id));
     const toggleVisibleLogs = () => onSelectedLogIdsChange(allVisibleLogsSelected ? selectedLogIds.filter((id) => !visibleLogs.some((log) => log.id === id)) : Array.from(new Set([...selectedLogIds, ...visibleLogs.map((log) => log.id)])));
+    const openPreview = (items: Array<{ src: string; alt: string }>, current: number) => {
+        if (!items.length) return;
+        setPreviewItems(items);
+        setPreviewIndex(Math.max(0, Math.min(current, items.length - 1)));
+        setPreviewOpen(true);
+    };
+    const openResultPreview = (target: GenerationResult) => {
+        const groupedResults = target.workflowTaskId ? results.filter((item) => item.workflowTaskId === target.workflowTaskId) : [target];
+        const availableResults = groupedResults.filter((item): item is GenerationResult & { image: GeneratedImage } => item.status === "success" && Boolean(item.image?.dataUrl));
+        const current = Math.max(0, availableResults.findIndex((item) => item.id === target.id));
+        openPreview(availableResults.map((item, index) => ({ src: item.image.dataUrl, alt: `${item.workflowName || "生成结果"} ${index + 1}` })), current);
+    };
+    const openLogPreview = (log: GenerationLog, current = 0) => {
+        const images = log.images.filter((image) => Boolean(image.dataUrl));
+        openPreview(images.map((image, index) => ({ src: image.dataUrl, alt: `${log.workflowName || log.title || "历史结果"} ${index + 1}` })), current);
+    };
     const createCategory = async () => {
         const name = categoryName.trim();
         if (!name) {
@@ -1711,7 +1731,7 @@ function ResultsPanel({
                 <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
                     {results.map((result, index) =>
                         result.status === "success" && result.image ? (
-                            <ResultImageCard key={result.id} result={result} image={result.image} index={index} onCopyPrompt={onCopyPrompt} onEdit={onEdit} onDownload={onDownload} onSaveAsset={onSaveAsset} syncing={syncingImageIds.includes(result.image.id)} onSync={(image) => onSyncResult(result.id, image, index)} />
+                            <ResultImageCard key={result.id} result={result} image={result.image} index={index} onPreview={() => openResultPreview(result)} onCopyPrompt={onCopyPrompt} onEdit={onEdit} onDownload={onDownload} onSaveAsset={onSaveAsset} syncing={syncingImageIds.includes(result.image.id)} onSync={(image) => onSyncResult(result.id, image, index)} />
                         ) : result.status === "failed" ? (
                             <FailedImageCard key={result.id} result={result} error={result.error || "生成失败"} onCopyPrompt={onCopyPrompt} onRetry={() => onRetry(result)} />
                         ) : (
@@ -1741,6 +1761,7 @@ function ResultsPanel({
                             onClearCategories={() => onClearLogCategories(log)}
                             onCreateCategory={onCreateCategory}
                             onPreview={() => onPreviewLog(log)}
+                            onOpenPreview={(current) => openLogPreview(log, current)}
                             onRetry={() => onRetryLog(log)}
                             onCopyPrompt={onCopyPrompt}
                             onEdit={onEdit}
@@ -1760,6 +1781,7 @@ function ResultsPanel({
             <Modal title="新建分类" open={creatingCategory} onCancel={() => setCreatingCategory(false)} onOk={() => void createCategory()} okText="创建" cancelText="取消" destroyOnHidden>
                 <Input value={categoryName} autoFocus placeholder="输入分类名称" onChange={(event) => setCategoryName(event.target.value)} onPressEnter={() => void createCategory()} />
             </Modal>
+            <Image.PreviewGroup items={previewItems} preview={{ open: previewOpen, current: previewIndex, onOpenChange: setPreviewOpen, onChange: setPreviewIndex, countRender: (current, total) => `第 ${current} / ${total} 张` }} />
         </div>
     );
 }
@@ -1868,6 +1890,7 @@ function ResultImageCard({
     result,
     image,
     index,
+    onPreview,
     onCopyPrompt,
     onEdit,
     onDownload,
@@ -1878,6 +1901,7 @@ function ResultImageCard({
     result: GenerationResult;
     image: GeneratedImage;
     index: number;
+    onPreview: () => void;
     onCopyPrompt: (text: string) => void | Promise<void>;
     onEdit: (image: GeneratedImage, index: number) => void;
     onDownload: (image: GeneratedImage, index: number) => void;
@@ -1893,7 +1917,8 @@ function ResultImageCard({
                     <Tag className="m-0 text-[10px]" color="blue">新生成</Tag>
                 </div>
                 <ReferenceThumbnailOverlay references={result.references} className="left-1.5 top-1.5" />
-                <Image src={image.dataUrl} alt={`生成结果 ${index + 1}`} className="aspect-[4/3] object-cover" />
+                <Image preview={false} src={image.dataUrl} alt={`生成结果 ${index + 1}`} width="100%" height="100%" className="!h-full !w-full cursor-zoom-in object-cover" onClick={onPreview} />
+                <Button aria-label="查看原图" title="查看原图" className="!absolute !bottom-2 !right-2 !z-10 !bg-white/90 dark:!bg-stone-950/90" size="small" icon={<Maximize2 className="size-3.5" />} onClick={onPreview} />
             </div>
             <TaskInfo result={result} onCopyPrompt={onCopyPrompt} />
             <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 border-t border-stone-200 px-2.5 py-2 dark:border-stone-800">
@@ -2013,6 +2038,7 @@ function HistoryLogCard({
     onClearCategories,
     onCreateCategory,
     onPreview,
+    onOpenPreview,
     onRetry,
     onCopyPrompt,
     onEdit,
@@ -2032,6 +2058,7 @@ function HistoryLogCard({
     onClearCategories: () => void;
     onCreateCategory: (name: string) => Promise<GenerationCategory | null>;
     onPreview: () => void;
+    onOpenPreview: (current?: number) => void;
     onRetry: () => void;
     onCopyPrompt: (text: string) => void | Promise<void>;
     onEdit: (image: GeneratedImage, index: number) => void;
@@ -2084,7 +2111,7 @@ function HistoryLogCard({
                     <Tag className="m-0 text-[10px]">{log.imageCount} 张</Tag>
                 </div>
                 {firstImage ? (
-                    <Image src={firstImage.dataUrl} alt={`历史结果 ${index + 1}`} className="aspect-[4/3] object-cover" />
+                    <Image preview={false} src={firstImage.dataUrl} alt={`历史结果 ${index + 1}`} width="100%" height="100%" className="!h-full !w-full cursor-zoom-in object-cover" onClick={() => onOpenPreview(0)} />
                 ) : (
                     <div className="flex size-full flex-col items-center justify-center gap-2 p-5 text-center text-sm text-red-500">
                         <AlertCircle className="size-7" />
@@ -2093,8 +2120,10 @@ function HistoryLogCard({
                 )}
                 {displayImages.length > 1 ? (
                     <div className="absolute bottom-1.5 left-1.5 right-1.5 flex gap-1 overflow-hidden">
-                        {displayImages.slice(0, 4).map((image) => (
-                            <img key={image.id} src={image.dataUrl} alt="" className="size-8 shrink-0 rounded border border-white/80 object-cover shadow-sm dark:border-stone-900/80" />
+                        {displayImages.slice(0, 4).map((image, imageIndex) => (
+                            <button key={image.id} type="button" title={`查看第 ${imageIndex + 1} 张原图`} className="size-8 shrink-0 overflow-hidden rounded border border-white/80 shadow-sm dark:border-stone-900/80" onClick={() => onOpenPreview(imageIndex)}>
+                                <img src={image.dataUrl} alt={`第 ${imageIndex + 1} 张缩略图`} className="size-full object-cover" />
+                            </button>
                         ))}
                     </div>
                 ) : null}
@@ -2144,6 +2173,9 @@ function HistoryLogCard({
             </div>
             <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 border-t border-stone-200 px-2.5 py-2 dark:border-stone-800">
                 <div ref={categoryMenuRef} className="relative flex flex-wrap gap-1">
+                    <Button size="small" icon={<Maximize2 className="size-3.5" />} disabled={!displayImages.length} onClick={() => closeThen(() => onOpenPreview(0))}>
+                        {displayImages.length > 1 ? `查看全部 ${displayImages.length} 张` : "查看原图"}
+                    </Button>
                     <Button size="small" onClick={() => closeThen(onPreview)}>
                         载入
                     </Button>
