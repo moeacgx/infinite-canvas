@@ -37,12 +37,7 @@ import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/app/(user)/canvas/components/asset-picker-modal";
 import { canvasThemes } from "@/lib/canvas-theme";
-import {
-    CreativeWorkflowWorkspace,
-    type WorkflowExternalTaskFailure,
-    type WorkflowExternalTaskStart,
-    type WorkflowExternalTaskSuccess,
-} from "@/components/workflows/creative-workflow-workspace";
+import { CreativeWorkflowWorkspace, type WorkflowExternalTaskFailure, type WorkflowExternalTaskStart, type WorkflowExternalTaskSuccess } from "@/components/workflows/creative-workflow-workspace";
 import { decodeChannelModel, normalizeLocalChannels, resolveCapabilityModel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
@@ -115,7 +110,10 @@ type GenerationLog = {
     lastPolledAt?: number;
 };
 
-type GenerationLogConfig = Pick<AiConfig, "channelMode" | "model" | "imageModel" | "activeChannelId" | "imageChannelId" | "quality" | "size" | "count" | "background" | "apiMode" | "streamImages" | "streamPartialImages" | "responseFormatB64Json" | "codexCli">;
+type GenerationLogConfig = Pick<
+    AiConfig,
+    "channelMode" | "model" | "imageModel" | "activeChannelId" | "imageChannelId" | "quality" | "size" | "count" | "background" | "apiMode" | "streamImages" | "streamPartialImages" | "responseFormatB64Json" | "codexCli"
+>;
 type RequestSnapshot = { text: string; requestConfig: AiConfig; displayConfig: GenerationLogConfig; references: ReferenceImage[] };
 type GenerationCategory = { id: string; name: string; createdAt: number };
 type ResultViewMode = "all" | "category";
@@ -167,6 +165,7 @@ export default function ImagePage() {
     const [pendingAgentRun, setPendingAgentRun] = useState<{ id: string; prompt?: string } | null>(null);
     const saveLogChainRef = useRef<Promise<void>>(Promise.resolve());
     const pollingLogIdsRef = useRef(new Set<string>());
+    const deletedLogIdsRef = useRef(new Set<string>());
     const logsRef = useRef<GenerationLog[]>([]);
     const effectiveConfigRef = useRef(effectiveConfig);
 
@@ -263,7 +262,6 @@ export default function ImagePage() {
         },
         [],
     );
-
 
     useEffect(() => {
         effectiveConfigRef.current = effectiveConfig;
@@ -453,7 +451,12 @@ export default function ImagePage() {
 
     const retryLog = async (log: GenerationLog) => {
         const retryChannelId = imageTaskChannelId(log.task);
-        const snapshot = buildRequestSnapshot({ promptText: log.prompt, referenceItems: log.references, taskCount: Number(log.config.count) || 1, configOverride: { ...log.config, ...(retryChannelId ? { imageChannelId: retryChannelId, activeChannelId: retryChannelId } : {}) } });
+        const snapshot = buildRequestSnapshot({
+            promptText: log.prompt,
+            referenceItems: log.references,
+            taskCount: Number(log.config.count) || 1,
+            configOverride: { ...log.config, ...(retryChannelId ? { imageChannelId: retryChannelId, activeChannelId: retryChannelId } : {}) },
+        });
         if (!snapshot) return;
         await submitGenerationBatch(snapshot);
     };
@@ -494,12 +497,11 @@ export default function ImagePage() {
 
     const createPersistentImageTask = async (pendingLog: GenerationLog, snapshot: RequestSnapshot, index: number, taskCount: number) => {
         try {
-            const task = await createCanvasImageTask(
-                { ...snapshot.requestConfig, seedIndex: index, seedCount: taskCount, count: "1" } as AiConfig & { seedIndex?: number; seedCount?: number },
-                snapshot.text,
-                snapshot.references,
-                { source: "image-workbench", sourceId: pendingLog.id, clientTaskId: imageLogTaskId(pendingLog) },
-            );
+            const task = await createCanvasImageTask({ ...snapshot.requestConfig, seedIndex: index, seedCount: taskCount, count: "1" } as AiConfig & { seedIndex?: number; seedCount?: number }, snapshot.text, snapshot.references, {
+                source: "image-workbench",
+                sourceId: pendingLog.id,
+                clientTaskId: imageLogTaskId(pendingLog),
+            });
             const nextLog = { ...pendingLog, task, lastPolledAt: Date.now() };
             await saveLog(nextLog);
             setResults((value) => updateResultByLogId(value, pendingLog.id, { taskLogId: nextLog.id, task, progress: task.progress, lastPolledAt: nextLog.lastPolledAt }));
@@ -528,14 +530,18 @@ export default function ImagePage() {
         const tasks = taskIds.map(async (id, index) => {
             const taskStartedAt = performance.now();
             try {
-                const image = await runGenerationTask(id, {
-                    ...snapshot,
-                    requestConfig: {
-                        ...snapshot.requestConfig,
-                        seedIndex: index,
-                        seedCount: taskCount,
-                    } as any,
-                }, controller.signal);
+                const image = await runGenerationTask(
+                    id,
+                    {
+                        ...snapshot,
+                        requestConfig: {
+                            ...snapshot.requestConfig,
+                            seedIndex: index,
+                            seedCount: taskCount,
+                        } as AiConfig & { seedIndex?: number; seedCount?: number },
+                    },
+                    controller.signal,
+                );
 
                 if (!image) {
                     throw new Error("接口没有返回图片");
@@ -636,7 +642,7 @@ export default function ImagePage() {
         }
     };
 
-    const saveResultToAssets = async (image: GeneratedImage, index: number) => {
+    const saveResultToAssets = async (image: GeneratedImage, index: number, sourcePrompt: string) => {
         const stored = image.storageKey
             ? {
                   url: await resolveImageUrl(image.storageKey, image.dataUrl),
@@ -654,7 +660,7 @@ export default function ImagePage() {
             tags: [],
             source: "生图工作台",
             data: { dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType },
-            metadata: { source: "image-page", prompt },
+            metadata: { source: "image-page", prompt: sourcePrompt },
         });
         message.success("已加入我的素材");
     };
@@ -690,11 +696,22 @@ export default function ImagePage() {
     const syncLogImage = async (log: GenerationLog, image: GeneratedImage, index: number) => {
         const synced = await syncImage(image, index);
         if (!synced) return;
-        const nextLog = { ...log, images: log.images.map((item) => item.id === image.id ? synced : item) };
-        await logStore.setItem(log.id, serializeLog(nextLog));
-        const nextLogs = logs.map((item) => item.id === log.id ? nextLog : item);
-        setLogs(nextLogs);
-        await persistImageHistory(nextLogs, categories);
+        const cleanupSyncedImage = () => (synced.storageKey && synced.storageKey !== image.storageKey ? deleteStoredImages([synced.storageKey]).catch(() => undefined) : Promise.resolve());
+        if (deletedLogIdsRef.current.has(log.id)) {
+            await cleanupSyncedImage();
+            return;
+        }
+        const currentLog = logsRef.current.find((item) => item.id === log.id);
+        if (!currentLog) {
+            await cleanupSyncedImage();
+            return;
+        }
+        const nextLog = { ...currentLog, images: currentLog.images.map((item) => (item.id === image.id ? synced : item)) };
+        await saveLog(nextLog);
+        if (deletedLogIdsRef.current.has(log.id)) {
+            await cleanupSyncedImage();
+            return;
+        }
         if (previewLog?.id === log.id) setPreviewLog(nextLog);
     };
 
@@ -725,7 +742,10 @@ export default function ImagePage() {
                 setReferences((value) => [...value, reference]);
             } else {
                 const stored = await uploadImage(payload.dataUrl);
-                setReferences((value) => [...value, { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey, source: payload.source === "library" ? "library" : "upload", temporary: payload.source !== "library" }]);
+                setReferences((value) => [
+                    ...value,
+                    { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey, source: payload.source === "library" ? "library" : "upload", temporary: payload.source !== "library" },
+                ]);
             }
         } else {
             message.warning("视频素材不能作为生图参考图");
@@ -745,12 +765,18 @@ export default function ImagePage() {
         const deletedLogs = logs.filter((log) => selectedLogIds.includes(log.id));
         const nextLogs = logs.filter((log) => !selectedLogIds.includes(log.id));
         const imageKeys = disposableLogStorageKeys(deletedLogs, nextLogs);
-        void Promise.all([deleteStoredImages(imageKeys), ...deletedLogs.map((log) => logStore.removeItem(log.id))]).then(async () => {
-            setLogs(nextLogs);
-            setReferences((value) => value.filter((item) => !item.storageKey || !imageKeys.includes(item.storageKey)));
-            await persistImageHistory(nextLogs, categories);
-            await refreshLogs();
-        });
+        deletedLogs.forEach((log) => deletedLogIdsRef.current.add(log.id));
+        setLogs(nextLogs);
+        logsRef.current = nextLogs;
+        setResults((value) => value.filter((result) => !deletedLogs.some((log) => imageResultMatchesLog(result, log))));
+        void saveLogChainRef.current
+            .catch(() => undefined)
+            .then(() => Promise.all([deleteStoredImages(imageKeys), ...deletedLogs.map((log) => logStore.removeItem(log.id)), ...deletedLogs.map((log) => deleteCanvasImageTask(imageTaskConfig(), log.task).catch(() => undefined))]))
+            .then(async () => {
+                setReferences((value) => value.filter((item) => !item.storageKey || !imageKeys.includes(item.storageKey)));
+                await persistImageHistory(nextLogs, categories);
+                await refreshLogs();
+            });
         if (previewLog && selectedLogIds.includes(previewLog.id)) {
             setPreviewLog(null);
             setResults((value) => value.filter((item) => item.status === "pending"));
@@ -769,8 +795,12 @@ export default function ImagePage() {
             onOk: async () => {
                 const nextLogs = logs.filter((item) => item.id !== log.id);
                 const imageKeys = disposableLogStorageKeys([log], nextLogs);
-                await Promise.all([deleteStoredImages(imageKeys), logStore.removeItem(log.id)]);
+                deletedLogIdsRef.current.add(log.id);
                 setLogs(nextLogs);
+                logsRef.current = nextLogs;
+                setResults((value) => value.filter((result) => !imageResultMatchesLog(result, log)));
+                await saveLogChainRef.current.catch(() => undefined);
+                await Promise.all([deleteStoredImages(imageKeys), logStore.removeItem(log.id), deleteCanvasImageTask(imageTaskConfig(), log.task).catch(() => undefined)]);
                 setReferences((value) => value.filter((item) => !item.storageKey || !imageKeys.includes(item.storageKey)));
                 await persistImageHistory(nextLogs, categories);
                 setSelectedLogIds((value) => value.filter((id) => id !== log.id));
@@ -781,6 +811,7 @@ export default function ImagePage() {
     };
 
     const saveLog = async (log: GenerationLog) => {
+        if (deletedLogIdsRef.current.has(log.id)) return;
         const prevChain = saveLogChainRef.current;
         const nextChain = (async () => {
             try {
@@ -788,12 +819,16 @@ export default function ImagePage() {
             } catch {
                 // 忽略上一轮写入错误，避免后续保存链永久中断。
             }
-            const storedLogs = await readStoredLogs();
+            if (deletedLogIdsRef.current.has(log.id)) return;
+            const storedLogs = (await readStoredLogs()).filter((item) => !deletedLogIdsRef.current.has(item.id));
+            if (deletedLogIdsRef.current.has(log.id)) return;
             const keys = new Set(imageLogIdentityKeys(log));
             const duplicateLogs = storedLogs.filter((item) => item.id !== log.id && imageLogIdentityKeys(item).some((key) => keys.has(key)));
             const nextLogs = dedupeGenerationLogs([log, ...storedLogs.filter((item) => item.id !== log.id)]);
+            if (deletedLogIdsRef.current.has(log.id)) return;
             setLogs(nextLogs);
             await Promise.all(duplicateLogs.map((item) => logStore.removeItem(item.id)));
+            if (deletedLogIdsRef.current.has(log.id)) return;
             await logStore.setItem(log.id, serializeLog(log));
             await persistImageHistory(nextLogs, categories);
         })();
@@ -802,7 +837,7 @@ export default function ImagePage() {
     };
 
     const refreshLogs = async () => {
-        const nextLogs = await readStoredLogs();
+        const nextLogs = (await readStoredLogs()).filter((log) => !deletedLogIdsRef.current.has(log.id));
         setLogs(nextLogs);
         return nextLogs;
     };
@@ -935,7 +970,12 @@ export default function ImagePage() {
         message.success("提示词已复制");
     };
 
-    const buildRequestSnapshot = ({ promptText = prompt, referenceItems = references, taskCount = generationCount, configOverride }: { promptText?: string; referenceItems?: ReferenceImage[]; taskCount?: number; configOverride?: Partial<GenerationLogConfig> } = {}) => {
+    const buildRequestSnapshot = ({
+        promptText = prompt,
+        referenceItems = references,
+        taskCount = generationCount,
+        configOverride,
+    }: { promptText?: string; referenceItems?: ReferenceImage[]; taskCount?: number; configOverride?: Partial<GenerationLogConfig> } = {}) => {
         const text = promptText.trim();
         if (!text) {
             message.error("请输入生图提示词");
@@ -961,9 +1001,7 @@ export default function ImagePage() {
     const runGenerationTask = async (resultId: string, snapshot: RequestSnapshot, signal?: AbortSignal) => {
         const itemStartedAt = performance.now();
         try {
-            const result = snapshot.references.length
-                ? await requestEdit(snapshot.requestConfig, snapshot.text, snapshot.references, undefined, { signal })
-                : await requestGeneration(snapshot.requestConfig, snapshot.text, { signal });
+            const result = snapshot.references.length ? await requestEdit(snapshot.requestConfig, snapshot.text, snapshot.references, undefined, { signal }) : await requestGeneration(snapshot.requestConfig, snapshot.text, { signal });
             const image = result[0];
             if (!image) throw new Error("接口没有返回图片");
             const meta = await readImageMeta(image.dataUrl);
@@ -982,7 +1020,12 @@ export default function ImagePage() {
 
     const retryResult = (result: GenerationResult) => {
         const retryChannelId = imageTaskChannelId(result.task);
-        const snapshot = buildRequestSnapshot({ promptText: result.prompt, referenceItems: result.references, taskCount: 1, configOverride: { ...result.config, ...(retryChannelId ? { imageChannelId: retryChannelId, activeChannelId: retryChannelId } : {}) } });
+        const snapshot = buildRequestSnapshot({
+            promptText: result.prompt,
+            referenceItems: result.references,
+            taskCount: 1,
+            configOverride: { ...result.config, ...(retryChannelId ? { imageChannelId: retryChannelId, activeChannelId: retryChannelId } : {}) },
+        });
         if (!snapshot) return;
         setResults((value) => value.filter((item) => item.id !== result.id));
         void submitGenerationBatch(snapshot);
@@ -1100,6 +1143,7 @@ export default function ImagePage() {
                             onPromptChange={setPrompt}
                             onOpenPromptLibrary={() => setPromptDialogOpen(true)}
                             onOpenAssetPicker={() => setAssetPickerOpen(true)}
+                            onOpenWorkflow={() => setWorkflowDrawerOpen(true)}
                             onPastePrompt={() => void pastePromptFromClipboard()}
                             onClearPrompt={clearPrompt}
                             onPasteReferences={() => void addReferencesFromClipboard()}
@@ -1192,6 +1236,7 @@ export default function ImagePage() {
                             onPromptChange={setPrompt}
                             onOpenPromptLibrary={() => setPromptDialogOpen(true)}
                             onOpenAssetPicker={() => setAssetPickerOpen(true)}
+                            onOpenWorkflow={() => setWorkflowDrawerOpen(true)}
                             onPastePrompt={() => void pastePromptFromClipboard()}
                             onClearPrompt={clearPrompt}
                             onPasteReferences={() => void addReferencesFromClipboard()}
@@ -1207,7 +1252,7 @@ export default function ImagePage() {
             <button
                 ref={workflowButtonRef}
                 type="button"
-                className="workflow-floating-button fixed z-50 inline-flex touch-none select-none items-center gap-2 rounded-full border border-sky-300/70 bg-white/90 px-4 py-3 text-sm font-semibold text-stone-950 shadow-[0_18px_50px_rgba(14,165,233,0.28),0_8px_18px_rgba(0,0,0,0.14)] ring-1 ring-white/70 backdrop-blur-xl transition hover:-translate-y-0.5 hover:border-sky-300 hover:bg-white hover:shadow-[0_22px_64px_rgba(14,165,233,0.36),0_10px_22px_rgba(0,0,0,0.18)] dark:border-sky-400/40 dark:bg-stone-900/88 dark:text-stone-100 dark:ring-white/10 dark:hover:bg-stone-900"
+                className="workflow-floating-button fixed z-50 hidden touch-none select-none items-center gap-2 rounded-full border border-sky-300/70 bg-white/90 px-4 py-3 text-sm font-semibold text-stone-950 shadow-[0_18px_50px_rgba(14,165,233,0.28),0_8px_18px_rgba(0,0,0,0.14)] ring-1 ring-white/70 backdrop-blur-xl transition hover:-translate-y-0.5 hover:border-sky-300 hover:bg-white hover:shadow-[0_22px_64px_rgba(14,165,233,0.36),0_10px_22px_rgba(0,0,0,0.18)] sm:inline-flex dark:border-sky-400/40 dark:bg-stone-900/88 dark:text-stone-100 dark:ring-white/10 dark:hover:bg-stone-900"
                 style={{
                     left: workflowButtonReady ? clampWorkflowButtonPosition(workflowButtonPosition).x : 24,
                     top: workflowButtonReady ? clampWorkflowButtonPosition(workflowButtonPosition).y : 320,
@@ -1229,7 +1274,7 @@ export default function ImagePage() {
                 <WandSparkles className="size-4 text-sky-500 dark:text-sky-300" />
                 工作流
             </button>
-            <Drawer title="创作工作流" placement="right" size="min(1120px, 92vw)" open={workflowDrawerOpen}  onClose={() => setWorkflowDrawerOpen(false)} styles={{ body: { padding: 0 } }} destroyOnHidden={false}>
+            <Drawer title="创作工作流" placement="right" size="min(1120px, 92vw)" open={workflowDrawerOpen} onClose={() => setWorkflowDrawerOpen(false)} styles={{ body: { padding: 0 } }} destroyOnHidden={false}>
                 <CreativeWorkflowWorkspace
                     embedded
                     hideTaskList
@@ -1239,7 +1284,7 @@ export default function ImagePage() {
                     onGenerationLogSaved={() => {
                         void (async () => {
                             const nextCategories = await readStoredCategories();
-                            const nextLogs = await readStoredLogs();
+                            const nextLogs = (await readStoredLogs()).filter((log) => !deletedLogIdsRef.current.has(log.id));
                             setCategories(nextCategories);
                             setLogs(nextLogs);
                             await persistImageHistory(nextLogs, nextCategories);
@@ -1302,6 +1347,7 @@ function WorkbenchPanel({
     onPromptChange,
     onOpenPromptLibrary,
     onOpenAssetPicker,
+    onOpenWorkflow,
     onPastePrompt,
     onClearPrompt,
     onPasteReferences,
@@ -1325,6 +1371,7 @@ function WorkbenchPanel({
     onPromptChange: (value: string) => void;
     onOpenPromptLibrary: () => void;
     onOpenAssetPicker: () => void;
+    onOpenWorkflow: () => void;
     onPastePrompt: () => void;
     onClearPrompt: () => void;
     onPasteReferences: () => void;
@@ -1358,6 +1405,7 @@ function WorkbenchPanel({
                                 <Button title="清空输入" icon={<Trash2 className="size-4" />} onClick={onClearPrompt} />
                                 <Button title="提示词库" icon={<BookOpen className="size-4" />} onClick={onOpenPromptLibrary} />
                                 <Button title="我的素材" icon={<FolderPlus className="size-4" />} onClick={onOpenAssetPicker} />
+                                <Button className="sm:hidden" title="创作工作流" aria-label="创作工作流" icon={<WandSparkles className="size-4" />} onClick={onOpenWorkflow} />
                                 <Button
                                     title="参数配置"
                                     className={`lg:hidden ${!bottomSettingsCollapsed ? "!bg-sky-500/10 !text-sky-500 !border-sky-500/30" : ""}`}
@@ -1365,7 +1413,14 @@ function WorkbenchPanel({
                                     onClick={() => setBottomSettingsCollapsed(!bottomSettingsCollapsed)}
                                 />
                                 <Button title="切换到侧边工作台" icon={<PanelLeft className="size-4" />} onClick={() => onLayoutChange("side")} />
-                                <Button type="primary" danger={pendingCount > 0} className="h-9 rounded-xl px-4 font-medium lg:!hidden" icon={pendingCount ? <Square className="size-4" /> : <Sparkles className="size-4" />} disabled={!pendingCount && !canGenerate} onClick={pendingCount ? onStop : onGenerate}>
+                                <Button
+                                    type="primary"
+                                    danger={pendingCount > 0}
+                                    className="h-9 rounded-xl px-4 font-medium lg:!hidden"
+                                    icon={pendingCount ? <Square className="size-4" /> : <Sparkles className="size-4" />}
+                                    disabled={!pendingCount && !canGenerate}
+                                    onClick={pendingCount ? onStop : onGenerate}
+                                >
                                     {pendingCount ? `停止 ${pendingCount} 个任务` : "开始创作"}
                                 </Button>
                             </div>
@@ -1407,7 +1462,14 @@ function WorkbenchPanel({
                             <QuickSelect label="质量" value={config.quality || "auto"} options={quickQualityOptions} onChange={(value) => updateConfig("quality", value)} />
                             <QuickNumber label="数量" value={config.count || "1"} min={1} max={10} onChange={(value) => updateConfig("count", value)} />
                             <ReferenceQuickActions references={references} onUploadReferences={onUploadReferences} />
-                            <Button type="primary" danger={pendingCount > 0} className="hidden h-11 min-w-28 rounded-xl lg:inline-flex" icon={pendingCount ? <Square className="size-4" /> : <Sparkles className="size-4" />} disabled={!pendingCount && !canGenerate} onClick={pendingCount ? onStop : onGenerate}>
+                            <Button
+                                type="primary"
+                                danger={pendingCount > 0}
+                                className="hidden h-11 min-w-28 rounded-xl lg:inline-flex"
+                                icon={pendingCount ? <Square className="size-4" /> : <Sparkles className="size-4" />}
+                                disabled={!pendingCount && !canGenerate}
+                                onClick={pendingCount ? onStop : onGenerate}
+                            >
                                 {pendingCount ? `停止 ${pendingCount} 个任务` : "开始创作"}
                             </Button>
                         </div>
@@ -1421,7 +1483,7 @@ function WorkbenchPanel({
     return (
         <div className="flex min-h-[420px] flex-col overflow-hidden rounded-lg border border-stone-200 bg-card shadow-sm dark:border-stone-800 lg:min-h-0">
             <div className="shrink-0 p-4 pb-3">
-                <WorkbenchHeader currentLayout={currentLayout} onLayoutChange={onLayoutChange} />
+                <WorkbenchHeader currentLayout={currentLayout} onLayoutChange={onLayoutChange} onOpenWorkflow={onOpenWorkflow} />
             </div>
             <div className="thin-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-3">
                 <section className="overflow-hidden rounded-lg border border-stone-200 bg-background dark:border-stone-800">
@@ -1430,10 +1492,18 @@ function WorkbenchPanel({
                     </div>
                     <div className="border-t border-stone-200 p-3 dark:border-stone-800 space-y-2">
                         <div className="flex flex-wrap gap-1">
-                            <Button size="small" icon={<ClipboardPaste className="size-3.5" />} onClick={onPastePrompt}>读取剪贴板</Button>
-                            <Button size="small" icon={<Trash2 className="size-3.5" />} onClick={onClearPrompt}>清空</Button>
-                            <Button size="small" icon={<BookOpen className="size-3.5" />} onClick={onOpenPromptLibrary}>提示词库</Button>
-                            <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={onOpenAssetPicker}>我的素材</Button>
+                            <Button size="small" icon={<ClipboardPaste className="size-3.5" />} onClick={onPastePrompt}>
+                                读取剪贴板
+                            </Button>
+                            <Button size="small" icon={<Trash2 className="size-3.5" />} onClick={onClearPrompt}>
+                                清空
+                            </Button>
+                            <Button size="small" icon={<BookOpen className="size-3.5" />} onClick={onOpenPromptLibrary}>
+                                提示词库
+                            </Button>
+                            <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={onOpenAssetPicker}>
+                                我的素材
+                            </Button>
                         </div>
                         <Input.TextArea value={prompt} onChange={(event) => onPromptChange(event.target.value)} rows={6} placeholder="描述画面主体、风格、构图、光线和用途" />
                     </div>
@@ -1446,9 +1516,15 @@ function WorkbenchPanel({
                     </div>
                     <div className="border-t border-stone-200 p-3 dark:border-stone-800 space-y-2">
                         <div className="flex flex-wrap gap-1">
-                            <Button size="small" icon={<ClipboardPaste className="size-3.5" />} onClick={onPasteReferences}>剪切板</Button>
-                            <Button size="small" icon={<Upload className="size-3.5" />} onClick={onUploadReferences}>上传</Button>
-                            <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={onOpenAssetPicker}>从素材库选择</Button>
+                            <Button size="small" icon={<ClipboardPaste className="size-3.5" />} onClick={onPasteReferences}>
+                                剪切板
+                            </Button>
+                            <Button size="small" icon={<Upload className="size-3.5" />} onClick={onUploadReferences}>
+                                上传
+                            </Button>
+                            <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={onOpenAssetPicker}>
+                                从素材库选择
+                            </Button>
                         </div>
                         <ReferenceStrip references={references} onRemoveReference={onRemoveReference} uploadingCount={uploadingCount} />
                     </div>
@@ -1459,7 +1535,15 @@ function WorkbenchPanel({
                 </div>
             </div>
             <div className="shrink-0 border-t border-stone-200 p-4 dark:border-stone-800">
-                <Button type="primary" danger={pendingCount > 0} size="large" block icon={pendingCount ? <Square className="size-4" /> : <Sparkles className="size-4" />} disabled={!pendingCount && !canGenerate} onClick={pendingCount ? onStop : onGenerate}>
+                <Button
+                    type="primary"
+                    danger={pendingCount > 0}
+                    size="large"
+                    block
+                    icon={pendingCount ? <Square className="size-4" /> : <Sparkles className="size-4" />}
+                    disabled={!pendingCount && !canGenerate}
+                    onClick={pendingCount ? onStop : onGenerate}
+                >
                     {pendingCount ? `停止生成（${pendingCount}）` : "开始生成"}
                 </Button>
             </div>
@@ -1467,18 +1551,19 @@ function WorkbenchPanel({
     );
 }
 
-function WorkbenchHeader({ currentLayout, onLayoutChange, compact = false }: { currentLayout: WorkbenchLayout; onLayoutChange: (layout: WorkbenchLayout) => void; compact?: boolean }) {
+function WorkbenchHeader({ currentLayout, onLayoutChange, onOpenWorkflow, compact = false }: { currentLayout: WorkbenchLayout; onLayoutChange: (layout: WorkbenchLayout) => void; onOpenWorkflow: () => void; compact?: boolean }) {
     return (
         <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
                 <h1 className={`${compact ? "text-base" : "text-2xl"} font-semibold text-stone-950 dark:text-stone-100`}>生图工作台</h1>
             </div>
             <div className="flex shrink-0 rounded-lg border border-stone-200 bg-stone-50 p-1 dark:border-stone-800 dark:bg-stone-900">
+                <Button className="sm:hidden" size="small" type="text" title="创作工作流" aria-label="创作工作流" icon={<WandSparkles className="size-3.5" />} onClick={onOpenWorkflow} />
                 <Button size="small" type={currentLayout === "side" ? "primary" : "text"} icon={<PanelLeft className="size-3.5" />} onClick={() => onLayoutChange("side")}>
-                    侧边
+                    <span className="hidden sm:inline">侧边</span>
                 </Button>
                 <Button size="small" type={currentLayout === "bottom" ? "primary" : "text"} icon={<PanelBottom className="size-3.5" />} onClick={() => onLayoutChange("bottom")}>
-                    底部
+                    <span className="hidden sm:inline">底部</span>
                 </Button>
             </div>
         </div>
@@ -1564,13 +1649,7 @@ function QuickNumber({ label, value, min, max, disabled, onChange }: { label: st
 }
 
 function settingsSummary(config: AiConfig, model: string) {
-    return [
-        model,
-        imageSizeLabel(config.size || "auto"),
-        imageQualityLabel(config.quality || "auto"),
-        `${config.count || "1"} 张`,
-        config.streamImages ? `流式 ${config.streamPartialImages || "1"}` : "非流式",
-    ].join(" · ");
+    return [model, imageSizeLabel(config.size || "auto"), imageQualityLabel(config.quality || "auto"), `${config.count || "1"} 张`, config.streamImages ? `流式 ${config.streamPartialImages || "1"}` : "非流式"].join(" · ");
 }
 
 function ResultsPanel({
@@ -1632,7 +1711,7 @@ function ResultsPanel({
     onCopyPrompt: (text: string) => void | Promise<void>;
     onEdit: (image: GeneratedImage, index: number) => void;
     onDownload: (image: GeneratedImage, index: number) => void;
-    onSaveAsset: (image: GeneratedImage, index: number) => void;
+    onSaveAsset: (image: GeneratedImage, index: number, prompt: string) => void;
     syncingImageIds: string[];
     onSyncResult: (resultId: string, image: GeneratedImage, index: number) => void;
     onSyncLog: (log: GenerationLog, image: GeneratedImage, index: number) => void;
@@ -1644,6 +1723,7 @@ function ResultsPanel({
     const [previewItems, setPreviewItems] = useState<Array<{ src: string; alt: string }>>([]);
     const [previewIndex, setPreviewIndex] = useState(0);
     const [previewOpen, setPreviewOpen] = useState(false);
+    const [previewLogId, setPreviewLogId] = useState<string | null>(null);
     const liveImageIds = new Set(results.map((result) => result.image?.id).filter((id): id is string => Boolean(id)));
     const liveLogIds = new Set(results.flatMap(imageResultIdentityKeys));
     const baseVisibleLogs = logs.filter((log) => !imageLogIdentityKeys(log).some((key) => liveLogIds.has(key)) && !log.images.some((image) => liveImageIds.has(image.id)));
@@ -1661,14 +1741,25 @@ function ResultsPanel({
         setPreviewOpen(true);
     };
     const openResultPreview = (target: GenerationResult) => {
+        setPreviewLogId(null);
         const groupedResults = target.workflowTaskId ? results.filter((item) => item.workflowTaskId === target.workflowTaskId) : [target];
         const availableResults = groupedResults.filter((item): item is GenerationResult & { image: GeneratedImage } => item.status === "success" && Boolean(item.image?.dataUrl));
-        const current = Math.max(0, availableResults.findIndex((item) => item.id === target.id));
-        openPreview(availableResults.map((item, index) => ({ src: item.image.dataUrl, alt: `${item.workflowName || "生成结果"} ${index + 1}` })), current);
+        const current = Math.max(
+            0,
+            availableResults.findIndex((item) => item.id === target.id),
+        );
+        openPreview(
+            availableResults.map((item, index) => ({ src: item.image.dataUrl, alt: `${item.workflowName || "生成结果"} ${index + 1}` })),
+            current,
+        );
     };
     const openLogPreview = (log: GenerationLog, current = 0) => {
         const images = log.images.filter((image) => Boolean(image.dataUrl));
-        openPreview(images.map((image, index) => ({ src: image.dataUrl, alt: `${log.workflowName || log.title || "历史结果"} ${index + 1}` })), current);
+        setPreviewLogId(log.id);
+        openPreview(
+            images.map((image, index) => ({ src: image.dataUrl, alt: `${log.workflowName || log.title || "历史结果"} ${index + 1}` })),
+            current,
+        );
     };
     const createCategory = async () => {
         const name = categoryName.trim();
@@ -1731,7 +1822,19 @@ function ResultsPanel({
                 <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
                     {results.map((result, index) =>
                         result.status === "success" && result.image ? (
-                            <ResultImageCard key={result.id} result={result} image={result.image} index={index} onPreview={() => openResultPreview(result)} onCopyPrompt={onCopyPrompt} onEdit={onEdit} onDownload={onDownload} onSaveAsset={onSaveAsset} syncing={syncingImageIds.includes(result.image.id)} onSync={(image) => onSyncResult(result.id, image, index)} />
+                            <ResultImageCard
+                                key={result.id}
+                                result={result}
+                                image={result.image}
+                                index={index}
+                                onPreview={() => openResultPreview(result)}
+                                onCopyPrompt={onCopyPrompt}
+                                onEdit={onEdit}
+                                onDownload={onDownload}
+                                onSaveAsset={(image, imageIndex) => onSaveAsset(image, imageIndex, result.prompt)}
+                                syncing={syncingImageIds.includes(result.image.id)}
+                                onSync={(image) => onSyncResult(result.id, image, index)}
+                            />
                         ) : result.status === "failed" ? (
                             <FailedImageCard key={result.id} result={result} error={result.error || "生成失败"} onCopyPrompt={onCopyPrompt} onRetry={() => onRetry(result)} />
                         ) : (
@@ -1762,12 +1865,13 @@ function ResultsPanel({
                             onCreateCategory={onCreateCategory}
                             onPreview={() => onPreviewLog(log)}
                             onOpenPreview={(current) => openLogPreview(log, current)}
+                            previewImageIndex={previewLogId === log.id ? previewIndex : undefined}
                             onRetry={() => onRetryLog(log)}
                             onCopyPrompt={onCopyPrompt}
                             onEdit={onEdit}
                             onDownload={onDownload}
-                            onSaveAsset={onSaveAsset}
-                            syncing={syncingImageIds.includes(log.images.find((image) => Boolean(image.dataUrl))?.id || "")}
+                            onSaveAsset={(image, imageIndex) => onSaveAsset(image, imageIndex, log.prompt)}
+                            syncingImageIds={syncingImageIds}
                             onSync={(image) => onSyncLog(log, image, index)}
                         />
                     ))}
@@ -1864,7 +1968,18 @@ function GenerationSettings({ config, model, updateConfig, openConfigDialog }: {
                     <span className="font-medium text-sm">模型</span>
                 </div>
                 <div className="border-t border-stone-200 p-3 dark:border-stone-800 space-y-2">
-                    <ModelPicker config={config} value={model} capability="image" channelId={config.imageChannelId} onChange={(value, channelId) => { updateConfig("imageModel", value); if (channelId) updateConfig("imageChannelId", channelId); }} fullWidth onMissingConfig={() => openConfigDialog(false)} />
+                    <ModelPicker
+                        config={config}
+                        value={model}
+                        capability="image"
+                        channelId={config.imageChannelId}
+                        onChange={(value, channelId) => {
+                            updateConfig("imageModel", value);
+                            if (channelId) updateConfig("imageChannelId", channelId);
+                        }}
+                        fullWidth
+                        onMissingConfig={() => openConfigDialog(false)}
+                    />
                     <div className="flex items-center justify-between gap-3 pt-1">
                         <div className="text-xs opacity-75">接口模式</div>
                         <Segmented
@@ -1913,8 +2028,14 @@ function ResultImageCard({
         <div className="overflow-hidden rounded-lg border border-stone-200 bg-background dark:border-stone-800">
             <div className="relative aspect-[4/3] bg-stone-100 dark:bg-stone-900">
                 <div className="absolute right-1.5 top-1.5 z-10 flex gap-1">
-                    {!image.storageKey?.startsWith("server:") ? <Tag className="m-0 text-[10px]" color="gold">临时URL</Tag> : null}
-                    <Tag className="m-0 text-[10px]" color="blue">新生成</Tag>
+                    {!image.storageKey?.startsWith("server:") ? (
+                        <Tag className="m-0 text-[10px]" color="gold">
+                            临时URL
+                        </Tag>
+                    ) : null}
+                    <Tag className="m-0 text-[10px]" color="blue">
+                        新生成
+                    </Tag>
                 </div>
                 <ReferenceThumbnailOverlay references={result.references} className="left-1.5 top-1.5" />
                 <Image preview={false} src={image.dataUrl} alt={`生成结果 ${index + 1}`} width="100%" height="100%" className="!h-full !w-full cursor-zoom-in object-cover" onClick={onPreview} />
@@ -2039,12 +2160,13 @@ function HistoryLogCard({
     onCreateCategory,
     onPreview,
     onOpenPreview,
+    previewImageIndex,
     onRetry,
     onCopyPrompt,
     onEdit,
     onDownload,
     onSaveAsset,
-    syncing,
+    syncingImageIds,
     onSync,
 }: {
     log: GenerationLog;
@@ -2059,22 +2181,26 @@ function HistoryLogCard({
     onCreateCategory: (name: string) => Promise<GenerationCategory | null>;
     onPreview: () => void;
     onOpenPreview: (current?: number) => void;
+    previewImageIndex?: number;
     onRetry: () => void;
     onCopyPrompt: (text: string) => void | Promise<void>;
     onEdit: (image: GeneratedImage, index: number) => void;
     onDownload: (image: GeneratedImage, index: number) => void;
     onSaveAsset: (image: GeneratedImage, index: number) => void;
-    syncing: boolean;
+    syncingImageIds: string[];
     onSync: (image: GeneratedImage) => void;
 }) {
     const displayImages = log.images.filter((image) => Boolean(image.dataUrl));
-    const firstImage = displayImages[0];
+    const [activeImageIndex, setActiveImageIndex] = useState(0);
+    const selectedImageIndex = Math.min(previewImageIndex ?? activeImageIndex, Math.max(0, displayImages.length - 1));
+    const activeImage = displayImages[selectedImageIndex];
     const [expanded, setExpanded] = useState(false);
     const [categoryOpen, setCategoryOpen] = useState(false);
     const [categoryName, setCategoryName] = useState("");
     const [detailOpen, setDetailOpen] = useState(false);
     const categoryMenuRef = useRef<HTMLDivElement>(null);
     const logCategories = categories.filter((category) => log.categoryIds.includes(category.id));
+    const partiallySuccessful = log.successCount > 0 && log.failCount > 0;
     const createCategory = async () => {
         const category = await onCreateCategory(categoryName);
         if (!category) return;
@@ -2085,6 +2211,10 @@ function HistoryLogCard({
     const closeThen = (action: () => void) => {
         setCategoryOpen(false);
         action();
+    };
+    const openImage = (imageIndex: number) => {
+        setActiveImageIndex(imageIndex);
+        onOpenPreview(imageIndex);
     };
 
     useEffect(() => {
@@ -2104,14 +2234,26 @@ function HistoryLogCard({
                     {selected ? <Button size="small" danger type="text" icon={<Trash2 className="size-3.5" />} onClick={onDelete} /> : null}
                 </div>
                 <div className="absolute right-1.5 top-1.5 z-10 flex gap-1">
-                    {firstImage && !firstImage.storageKey?.startsWith("server:") ? <Tag className="m-0 text-[10px]" color="gold">临时URL</Tag> : null}
-                    <Tag className="m-0 text-[10px]" color={log.status === "生成中" ? "processing" : log.failCount ? "red" : "blue"}>
-                        {log.status === "生成中" ? "生成中" : log.failCount ? `失败 ${log.failCount}` : "成功"}
+                    {activeImage && !activeImage.storageKey?.startsWith("server:") ? (
+                        <Tag className="m-0 text-[10px]" color="gold">
+                            临时URL
+                        </Tag>
+                    ) : null}
+                    <Tag className="m-0 text-[10px]" color={log.status === "生成中" ? "processing" : partiallySuccessful ? "orange" : log.failCount ? "red" : "blue"}>
+                        {log.status === "生成中" ? "生成中" : partiallySuccessful ? `成功 ${log.successCount} / 失败 ${log.failCount}` : log.failCount ? `失败 ${log.failCount}` : "成功"}
                     </Tag>
                     <Tag className="m-0 text-[10px]">{log.imageCount} 张</Tag>
                 </div>
-                {firstImage ? (
-                    <Image preview={false} src={firstImage.dataUrl} alt={`历史结果 ${index + 1}`} width="100%" height="100%" className="!h-full !w-full cursor-zoom-in object-cover" onClick={() => onOpenPreview(0)} />
+                {activeImage ? (
+                    <Image
+                        preview={false}
+                        src={activeImage.dataUrl}
+                        alt={`历史结果 ${index + 1}，第 ${selectedImageIndex + 1} 张`}
+                        width="100%"
+                        height="100%"
+                        className="!h-full !w-full cursor-zoom-in object-cover"
+                        onClick={() => openImage(selectedImageIndex)}
+                    />
                 ) : (
                     <div className="flex size-full flex-col items-center justify-center gap-2 p-5 text-center text-sm text-red-500">
                         <AlertCircle className="size-7" />
@@ -2121,7 +2263,14 @@ function HistoryLogCard({
                 {displayImages.length > 1 ? (
                     <div className="absolute bottom-1.5 left-1.5 right-1.5 flex gap-1 overflow-hidden">
                         {displayImages.slice(0, 4).map((image, imageIndex) => (
-                            <button key={image.id} type="button" title={`查看第 ${imageIndex + 1} 张原图`} className="size-8 shrink-0 overflow-hidden rounded border border-white/80 shadow-sm dark:border-stone-900/80" onClick={() => onOpenPreview(imageIndex)}>
+                            <button
+                                key={image.id}
+                                type="button"
+                                title={`查看第 ${imageIndex + 1} 张原图`}
+                                aria-pressed={selectedImageIndex === imageIndex}
+                                className={`size-8 shrink-0 overflow-hidden rounded border-2 shadow-sm ${selectedImageIndex === imageIndex ? "border-sky-500" : "border-white/80 dark:border-stone-900/80"}`}
+                                onClick={() => openImage(imageIndex)}
+                            >
                                 <img src={image.dataUrl} alt={`第 ${imageIndex + 1} 张缩略图`} className="size-full object-cover" />
                             </button>
                         ))}
@@ -2173,7 +2322,7 @@ function HistoryLogCard({
             </div>
             <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 border-t border-stone-200 px-2.5 py-2 dark:border-stone-800">
                 <div ref={categoryMenuRef} className="relative flex flex-wrap gap-1">
-                    <Button size="small" icon={<Maximize2 className="size-3.5" />} disabled={!displayImages.length} onClick={() => closeThen(() => onOpenPreview(0))}>
+                    <Button size="small" icon={<Maximize2 className="size-3.5" />} disabled={!displayImages.length} onClick={() => closeThen(() => openImage(selectedImageIndex))}>
                         {displayImages.length > 1 ? `查看全部 ${displayImages.length} 张` : "查看原图"}
                     </Button>
                     <Button size="small" onClick={() => closeThen(onPreview)}>
@@ -2206,12 +2355,19 @@ function HistoryLogCard({
                         </div>
                     ) : null}
                 </div>
-                {firstImage ? (
+                {activeImage ? (
                     <div className="flex shrink-0 gap-1">
-                        <Button size="small" title="同步到云端存储" icon={<CloudUpload className="size-3.5" />} loading={syncing} disabled={firstImage.storageKey?.startsWith("server:")} onClick={() => closeThen(() => onSync(firstImage))} />
-                        <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => closeThen(() => void onSaveAsset(firstImage, index))} />
-                        <Button size="small" icon={<PenLine className="size-3.5" />} onClick={() => closeThen(() => void onEdit(firstImage, index))} />
-                        <Button size="small" icon={<Download className="size-3.5" />} onClick={() => closeThen(() => onDownload(firstImage, index))} />
+                        <Button
+                            size="small"
+                            title="同步到云端存储"
+                            icon={<CloudUpload className="size-3.5" />}
+                            loading={syncingImageIds.includes(activeImage.id)}
+                            disabled={activeImage.storageKey?.startsWith("server:")}
+                            onClick={() => closeThen(() => onSync(activeImage))}
+                        />
+                        <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => closeThen(() => void onSaveAsset(activeImage, selectedImageIndex))} />
+                        <Button size="small" icon={<PenLine className="size-3.5" />} onClick={() => closeThen(() => void onEdit(activeImage, selectedImageIndex))} />
+                        <Button size="small" icon={<Download className="size-3.5" />} onClick={() => closeThen(() => onDownload(activeImage, selectedImageIndex))} />
                     </div>
                 ) : null}
             </div>
@@ -2312,7 +2468,16 @@ function imageTaskSourceId(task?: CanvasImageTask) {
 }
 
 function imageTaskIdentityKeys(task?: CanvasImageTask) {
-    return uniqueStrings([task?.id, imageTaskSourceId(task), stringRecordValue(task, "task_id"), stringRecordValue(task, "taskId"), stringRecordValue(task, "image_id"), stringRecordValue(task, "imageId"), stringRecordValue(task, "result_id"), stringRecordValue(task, "resultId")]);
+    return uniqueStrings([
+        task?.id,
+        imageTaskSourceId(task),
+        stringRecordValue(task, "task_id"),
+        stringRecordValue(task, "taskId"),
+        stringRecordValue(task, "image_id"),
+        stringRecordValue(task, "imageId"),
+        stringRecordValue(task, "result_id"),
+        stringRecordValue(task, "resultId"),
+    ]);
 }
 
 function imageLogIdentityKeys(log: GenerationLog) {
@@ -2445,7 +2610,9 @@ function mergeBackendImageTasks(logs: GenerationLog[], tasks: CanvasImageTask[],
     const byKey = new Map<string, GenerationLog>();
     nextLogs.forEach((log) => imageLogIdentityKeys(log).forEach((key) => byKey.set(key, log)));
     tasks.forEach((task) => {
-        const existing = imageTaskIdentityKeys(task).map((key) => byKey.get(key)).find(Boolean);
+        const existing = imageTaskIdentityKeys(task)
+            .map((key) => byKey.get(key))
+            .find(Boolean);
         if (existing) {
             const index = nextLogs.findIndex((log) => log.id === existing.id);
             if (index >= 0) {
@@ -2718,9 +2885,7 @@ function resolveImageChannelId(config: AiConfig, model: string, ...preferredIds:
     if (config.channelMode === "newapi") return "";
     const decoded = decodeChannelModel(model);
     const modelName = decoded?.model || model;
-    const channels = config.channelMode === "remote"
-        ? config.publicChannels.map((channel) => ({ id: channel.id || "", models: channel.models || [] }))
-        : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, models: channel.models }));
+    const channels = config.channelMode === "remote" ? config.publicChannels.map((channel) => ({ id: channel.id || "", models: channel.models || [] })) : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, models: channel.models }));
     if (decoded?.channelId && channels.some((channel) => channel.id === decoded.channelId && channel.models.includes(modelName))) return decoded.channelId;
     for (const id of preferredIds) {
         const channelId = (id || "").trim();

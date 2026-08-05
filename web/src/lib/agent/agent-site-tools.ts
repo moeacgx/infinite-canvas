@@ -5,16 +5,7 @@ import { useAssetStore } from "@/stores/use-asset-store";
 import { modelOptionLabel, modelOptionName, selectableModelsByCapability, useConfigStore, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
 
-export const SITE_TOOL_NAMES = [
-    "canvas_list_projects",
-    "workbench_image_get_config",
-    "workbench_image_generate",
-    "workbench_video_get_config",
-    "workbench_video_generate",
-    "prompts_search",
-    "assets_list",
-    "assets_add",
-] as const;
+export const SITE_TOOL_NAMES = ["canvas_list_projects", "workbench_image_get_config", "workbench_image_generate", "workbench_video_get_config", "workbench_video_generate", "prompts_search", "assets_list", "assets_add"] as const;
 
 export type SiteToolName = (typeof SITE_TOOL_NAMES)[number];
 type SiteToolInput = Record<string, unknown>;
@@ -65,7 +56,9 @@ export function normalizeSitePath(value: unknown) {
 function listCanvasProjects(input: SiteToolInput) {
     const { projects, hydrated } = useCanvasStore.getState();
     if (!hydrated) throw new Error("画布还在加载中，请稍后重试");
-    const keyword = String(input.keyword || "").trim().toLowerCase();
+    const keyword = String(input.keyword || "")
+        .trim()
+        .toLowerCase();
     const filtered = keyword ? projects.filter((project) => project.title.toLowerCase().includes(keyword)) : projects;
     const { page, pageSize, start, end } = paginate(input, filtered.length, 20);
     return {
@@ -111,11 +104,19 @@ function getVideoConfig() {
     const { config } = useConfigStore.getState();
     const model = config.videoModel || config.model;
     return {
-        current: { model, modelName: modelOptionName(model), size: config.size || "1280x720", seconds: config.videoSeconds || "6", resolution: config.vquality || "720", generateAudio: config.videoGenerateAudio !== "false", watermark: config.videoWatermark === "true" },
+        current: {
+            model,
+            modelName: modelOptionName(model),
+            size: config.videoSize || "1280x720",
+            seconds: config.videoSeconds || "6",
+            resolution: normalizeAgentVideoResolution(config.vquality),
+            generateAudio: config.videoGenerateAudio !== "false",
+            watermark: config.videoWatermark === "true",
+        },
         models: modelOptions(config, "video"),
         sizeOptions: ["1280x720", "720x1280", "1024x1024", "1792x1024", "1024x1792", "16:9", "9:16", "1:1", "adaptive", "auto"],
         secondsOptions: ["6", "10", "12", "16", "20"],
-        resolutionOptions: ["480", "720", "1080p"],
+        resolutionOptions: ["480", "720", "1080"],
     };
 }
 
@@ -123,9 +124,13 @@ function runVideoWorkbench(input: SiteToolInput, navigate: Navigate) {
     const store = useConfigStore.getState();
     const applied: Record<string, unknown> = {};
     applyModel(store.config, "video", input.model, (value) => store.updateConfig("videoModel", value), applied);
-    applyString(input.size, (value) => store.updateConfig("size", value), "size", applied);
+    applyString(input.size, (value) => store.updateConfig("videoSize", value), "size", applied);
     applyString(input.seconds, (value) => store.updateConfig("videoSeconds", value), "seconds", applied);
-    applyString(input.resolution, (value) => store.updateConfig("vquality", value), "resolution", applied);
+    if (typeof input.resolution === "string" && input.resolution.trim()) {
+        const resolution = normalizeAgentVideoResolution(input.resolution);
+        store.updateConfig("vquality", resolution);
+        applied.resolution = resolution;
+    }
     if (typeof input.generateAudio === "boolean") {
         store.updateConfig("videoGenerateAudio", String(input.generateAudio));
         applied.generateAudio = input.generateAudio;
@@ -141,19 +146,38 @@ function runVideoWorkbench(input: SiteToolInput, navigate: Navigate) {
     return { ok: true, navigated: "/video", prompt, run, applied, note: run ? "已跳转视频创作台并触发生成" : "已跳转视频创作台并填入参数" };
 }
 
+function normalizeAgentVideoResolution(value: unknown) {
+    const resolution = String(value || "")
+        .trim()
+        .toLowerCase();
+    if (resolution === "low" || resolution === "480p") return "480";
+    if (["auto", "medium", "high", "720p"].includes(resolution)) return "720";
+    if (resolution === "1080p") return "1080";
+    return ["480", "720", "1080"].includes(resolution) ? resolution : "720";
+}
+
 async function searchPrompts(input: SiteToolInput) {
     const page = Math.max(1, Math.floor(Number(input.page)) || 1);
     const pageSize = Math.max(1, Math.min(50, Math.floor(Number(input.pageSize)) || 20));
     const tags = Array.isArray(input.tags) ? input.tags.filter((tag): tag is string => typeof tag === "string") : [];
     const result = await fetchPrompts({ keyword: String(input.keyword || ""), category: String(input.category || "全部"), tag: tags, page, pageSize });
-    return { total: result.total, page, pageSize, categories: result.categories, tags: result.tags.slice(0, 60), items: result.items.map((prompt) => ({ id: prompt.id, title: prompt.title, prompt: prompt.prompt, category: prompt.category, tags: prompt.tags, coverUrl: prompt.coverUrl, githubUrl: prompt.githubUrl })) };
+    return {
+        total: result.total,
+        page,
+        pageSize,
+        categories: result.categories,
+        tags: result.tags.slice(0, 60),
+        items: result.items.map((prompt) => ({ id: prompt.id, title: prompt.title, prompt: prompt.prompt, category: prompt.category, tags: prompt.tags, coverUrl: prompt.coverUrl, githubUrl: prompt.githubUrl })),
+    };
 }
 
 function listAssets(input: SiteToolInput) {
     const { assets, hydrated } = useAssetStore.getState();
     if (!hydrated) throw new Error("素材还在加载中，请稍后重试");
     const kind = input.kind === "text" || input.kind === "image" || input.kind === "video" ? input.kind : "all";
-    const keyword = String(input.keyword || "").trim().toLowerCase();
+    const keyword = String(input.keyword || "")
+        .trim()
+        .toLowerCase();
     const filtered = assets.filter((asset) => {
         if (kind !== "all" && asset.kind !== kind) return false;
         return !keyword || [asset.title, asset.note, asset.source, ...asset.tags].filter(Boolean).join(" ").toLowerCase().includes(keyword);
@@ -163,7 +187,20 @@ function listAssets(input: SiteToolInput) {
         total: filtered.length,
         page,
         pageSize,
-        items: filtered.slice(start, end).map((asset) => ({ id: asset.id, kind: asset.kind, title: asset.title, tags: asset.tags, source: asset.source, note: asset.note, createdAt: asset.createdAt, updatedAt: asset.updatedAt, coverUrl: asset.coverUrl || undefined, content: asset.kind === "text" ? asset.data.content : undefined })),
+        items: filtered
+            .slice(start, end)
+            .map((asset) => ({
+                id: asset.id,
+                kind: asset.kind,
+                title: asset.title,
+                tags: asset.tags,
+                source: asset.source,
+                note: asset.note,
+                createdAt: asset.createdAt,
+                updatedAt: asset.updatedAt,
+                coverUrl: asset.coverUrl || undefined,
+                content: asset.kind === "text" ? asset.data.content : undefined,
+            })),
     };
 }
 
@@ -188,7 +225,11 @@ async function addAsset(input: SiteToolInput) {
         } catch {
             throw new Error("无法读取该图片地址，请改用 dataURL 或允许跨域访问的链接");
         }
-        return { ok: true, id: store.addAsset({ kind: "image", title, coverUrl: image.url, tags, source, note, data: { dataUrl: image.url, storageKey: image.storageKey, width: image.width, height: image.height, bytes: image.bytes, mimeType: image.mimeType } }), kind: "image" };
+        return {
+            ok: true,
+            id: store.addAsset({ kind: "image", title, coverUrl: image.url, tags, source, note, data: { dataUrl: image.url, storageKey: image.storageKey, width: image.width, height: image.height, bytes: image.bytes, mimeType: image.mimeType } }),
+            kind: "image",
+        };
     }
     throw new Error("assets_add 仅支持 kind=text 或 kind=image");
 }

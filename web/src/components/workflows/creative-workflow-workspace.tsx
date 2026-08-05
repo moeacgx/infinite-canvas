@@ -1,7 +1,7 @@
 "use client";
 
 import { App, Button, Checkbox, Empty, Image, Input, Modal, Select, Space, Switch, Tag, Typography } from "antd";
-import { AlertCircle, ArrowDown, ArrowUp, Bot, CheckCircle2, Copy, Download, Edit3, FilePlus2, Globe2, Layers3, LoaderCircle, LockKeyhole, Maximize2, Play, Plus, Sparkles, Trash2, WandSparkles } from "lucide-react";
+import { AlertCircle, ArrowDown, ArrowUp, Bot, CheckCircle2, Copy, Download, Edit3, FilePlus2, Globe2, Layers3, LoaderCircle, LockKeyhole, Maximize2, Play, Plus, Sparkles, Square, Trash2, WandSparkles } from "lucide-react";
 import localforage from "localforage";
 import { nanoid } from "nanoid";
 import { saveAs } from "file-saver";
@@ -182,6 +182,7 @@ const CATEGORY_STORE_KEY = "infinite-canvas:image_generation_categories";
 const workflowStore = localforage.createInstance({ name: "infinite-canvas", storeName: "creative_workflows" });
 const imageLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
 const categoryStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_categories" });
+let workflowCategoryWriteChain: Promise<void> = Promise.resolve();
 
 const variableTypeOptions: Array<{ value: WorkflowVariableType; label: string }> = [
     { value: "text", label: "短文本" },
@@ -225,6 +226,8 @@ export function CreativeWorkflowWorkspace({
     const [workflowReferences, setWorkflowReferences] = useState<ReferenceImage[]>([]);
     const workflowReferenceInputRef = useRef<HTMLInputElement>(null);
     const runnerOpenedAtRef = useRef(0);
+    const runnerSessionRef = useRef(0);
+    const seriesDraftControllerRef = useRef<AbortController | null>(null);
     const [workflowAssetPickerOpen, setWorkflowAssetPickerOpen] = useState(false);
     const [runResults, setRunResults] = useState<WorkflowRunResult[]>([]);
     const [resultPreviewOpen, setResultPreviewOpen] = useState(false);
@@ -250,6 +253,7 @@ export function CreativeWorkflowWorkspace({
     const agentReferenceInputRef = useRef<HTMLInputElement>(null);
     const [agentAssetPickerOpen, setAgentAssetPickerOpen] = useState(false);
     const workflowSyncEnabledRef = useRef(false);
+    const workflowControllersRef = useRef(new Map<string, AbortController>());
     const seriesDraftsLoadedRef = useRef(false);
 
     const filteredWorkflows = useMemo(() => {
@@ -267,7 +271,7 @@ export function CreativeWorkflowWorkspace({
     const runningTaskCount = workflowTasks.filter((task) => task.status === "running").length;
     const runnerTasks = runningWorkflow
         ? workflowTasks
-              .filter((task) => task.workflowId === runningWorkflow.id && task.startedAt >= runnerOpenedAtRef.current)
+              .filter((task) => task.workflowId === runningWorkflow.id && (task.status === "running" || task.startedAt >= runnerOpenedAtRef.current))
               .sort((a, b) => (a.seriesIndex ?? Number.MAX_SAFE_INTEGER) - (b.seriesIndex ?? Number.MAX_SAFE_INTEGER) || a.startedAt - b.startedAt)
         : [];
     const runnerImages = runnerTasks.flatMap((task) => task.images);
@@ -291,6 +295,16 @@ export function CreativeWorkflowWorkspace({
         const timer = window.setInterval(() => setNow(Date.now()), 1000);
         return () => window.clearInterval(timer);
     }, [runningTaskCount]);
+
+    useEffect(
+        () => () => {
+            seriesDraftControllerRef.current?.abort();
+            seriesDraftControllerRef.current = null;
+            workflowControllersRef.current.forEach((controller) => controller.abort());
+            workflowControllersRef.current.clear();
+        },
+        [],
+    );
 
     useEffect(() => {
         if (!runningWorkflow || runningWorkflow.mode !== "multi_image_series" || !seriesDraftsLoadedRef.current) return;
@@ -336,14 +350,20 @@ export function CreativeWorkflowWorkspace({
     };
 
     const openRunner = (workflow: CreativeWorkflow) => {
+        seriesDraftControllerRef.current?.abort();
+        seriesDraftControllerRef.current = null;
+        const sessionId = runnerSessionRef.current + 1;
+        runnerSessionRef.current = sessionId;
         seriesDraftsLoadedRef.current = false;
         runnerOpenedAtRef.current = Date.now();
+        setSeriesDraftLoading(false);
         setRunningWorkflow(workflow);
         setInputValues(createDefaultInputValues(workflow));
         setWorkflowReferences([]);
         setSeriesDrafts([]);
         if (workflow.mode === "multi_image_series") {
             void workflowStore.getItem<SeriesPromptDraft[]>(seriesDraftStorageKey(workflow.id)).then((drafts) => {
+                if (runnerSessionRef.current !== sessionId || seriesDraftsLoadedRef.current) return;
                 setSeriesDrafts((drafts || []).map(normalizeSeriesDraft));
                 seriesDraftsLoadedRef.current = true;
             });
@@ -353,6 +373,10 @@ export function CreativeWorkflowWorkspace({
     };
 
     const closeRunner = () => {
+        runnerSessionRef.current += 1;
+        seriesDraftControllerRef.current?.abort();
+        seriesDraftControllerRef.current = null;
+        setSeriesDraftLoading(false);
         setRunningWorkflow(null);
         setSeriesDrafts([]);
         setSeriesBatchAppend("");
@@ -406,7 +430,10 @@ export function CreativeWorkflowWorkspace({
     };
 
     const cleanupAgentReferences = async () => {
-        const keys = agentReferences.filter(isDisposableReferenceFile).map((item) => item.storageKey).filter((key): key is string => Boolean(key));
+        const keys = agentReferences
+            .filter(isDisposableReferenceFile)
+            .map((item) => item.storageKey)
+            .filter((key): key is string => Boolean(key));
         setAgentReferences([]);
         if (keys.length) await deleteStoredImages(keys).catch((error) => message.error(error instanceof Error ? error.message : "参考图文件删除失败"));
     };
@@ -553,10 +580,7 @@ export function CreativeWorkflowWorkspace({
             const referenceDataUrls = await Promise.all(agentReferences.map((image) => imageToDataUrl(image)));
             const validReferences = referenceDataUrls.filter(Boolean);
             const content: ChatCompletionMessage["content"] = validReferences.length
-                ? [
-                      { type: "text", text: buildWorkflowAgentDraftRequest(text, agentScope) },
-                      ...validReferences.map((url) => ({ type: "image_url" as const, image_url: { url } })),
-                  ]
+                ? [{ type: "text", text: buildWorkflowAgentDraftRequest(text, agentScope) }, ...validReferences.map((url) => ({ type: "image_url" as const, image_url: { url } }))]
                 : buildWorkflowAgentDraftRequest(text, agentScope);
             const answer = await requestImageQuestion(textConfig, [{ role: "user", content }], () => {});
             const result = parseWorkflowAgentDraftResponse(answer);
@@ -591,30 +615,43 @@ export function CreativeWorkflowWorkspace({
 
     const generateSeriesPromptDrafts = async () => {
         if (!runningWorkflow) return;
-        const promptModel = runningWorkflow.seriesConfig.promptModel || effectiveConfig.textModel || effectiveConfig.model;
-        const promptChannelId = runningWorkflow.seriesConfig.promptChannelId || effectiveConfig.textChannelId;
+        const workflowSnapshot = runningWorkflow;
+        const renderedPromptSnapshot = renderedPrompt;
+        const inputSnapshot = { ...inputValues };
+        const sessionId = runnerSessionRef.current;
+        const promptModel = workflowSnapshot.seriesConfig.promptModel || effectiveConfig.textModel || effectiveConfig.model;
+        const promptChannelId = workflowSnapshot.seriesConfig.promptChannelId || effectiveConfig.textChannelId;
         const textConfig = { ...effectiveConfig, model: promptModel, textModel: promptModel, textChannelId: promptChannelId, activeChannelId: promptChannelId, systemPrompt: effectiveConfig.systemPrompts.workflow || effectiveConfig.systemPrompt };
         if (!isAiConfigReady(textConfig, promptModel)) {
             message.warning("请先完成文本模型配置");
             openConfigDialog(true);
             return;
         }
+        seriesDraftControllerRef.current?.abort();
+        const controller = new AbortController();
+        seriesDraftControllerRef.current = controller;
+        seriesDraftsLoadedRef.current = true;
         setSeriesDraftLoading(true);
         try {
-            const count = Math.max(1, Math.min(20, Number(runningWorkflow.seriesConfig.targetCount) || Number(runningWorkflow.config.count) || 4));
-            const answer = await requestImageQuestion(textConfig, [{ role: "user", content: buildSeriesPromptDraftRequest(runningWorkflow, renderedPrompt, count, inputValues) }], () => {});
-            const drafts = parseSeriesPromptDrafts(answer, count, renderedPrompt);
+            const count = Math.max(1, Math.min(20, Number(workflowSnapshot.seriesConfig.targetCount) || Number(workflowSnapshot.config.count) || 4));
+            const answer = await requestImageQuestion(textConfig, [{ role: "user", content: buildSeriesPromptDraftRequest(workflowSnapshot, renderedPromptSnapshot, count, inputSnapshot) }], () => {}, { signal: controller.signal });
+            if (controller.signal.aborted || runnerSessionRef.current !== sessionId) return;
+            const drafts = parseSeriesPromptDrafts(answer, count, renderedPromptSnapshot);
             setSeriesDrafts(drafts);
             message.success("多图提示词已生成，请审核后生成图片");
-            if (runningWorkflow.seriesConfig.reviewRequired === false) {
+            if (workflowSnapshot.seriesConfig.reviewRequired === false) {
                 window.setTimeout(() => {
+                    if (controller.signal.aborted || runnerSessionRef.current !== sessionId) return;
                     drafts.forEach((draft, index) => void runSeriesDraft(draft, index));
                 }, 0);
             }
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "多图提示词生成失败");
+            if (!controller.signal.aborted) message.error(error instanceof Error ? error.message : "多图提示词生成失败");
         } finally {
-            setSeriesDraftLoading(false);
+            if (seriesDraftControllerRef.current === controller) {
+                seriesDraftControllerRef.current = null;
+                if (runnerSessionRef.current === sessionId) setSeriesDraftLoading(false);
+            }
         }
     };
 
@@ -649,8 +686,13 @@ export function CreativeWorkflowWorkspace({
 
     const runSeriesDraft = (draft: SeriesPromptDraft, index: number) => {
         if (!runningWorkflow || draft.status === "running" || !draft.prompt.trim()) return Promise.resolve();
+        const task = startWorkflowImageTask(runningWorkflow, draft.prompt.trim(), { ...inputValues }, [...workflowReferences], 1, draft.id, draft.title || `第 ${index + 1} 张`, index + 1);
+        if (!task) {
+            updateSeriesDraft(draft.id, { status: "failed", error: "请先完成 API 配置" });
+            return Promise.resolve();
+        }
         updateSeriesDraft(draft.id, { status: "running", error: undefined });
-        return startWorkflowImageTask(runningWorkflow, draft.prompt.trim(), { ...inputValues }, [...workflowReferences], 1, draft.id, draft.title || `第 ${index + 1} 张`, index + 1);
+        return task;
     };
 
     const runAllSeriesDrafts = async () => {
@@ -663,11 +705,37 @@ export function CreativeWorkflowWorkspace({
         const concurrency = Math.max(1, Math.min(6, Number(runningWorkflow.seriesConfig.concurrency) || 3));
         for (let index = 0; index < drafts.length; index += concurrency) {
             const batch = drafts.slice(index, index + concurrency);
-            await Promise.all(batch.map((draft) => runSeriesDraft(draft, Math.max(0, seriesDrafts.findIndex((item) => item.id === draft.id)))));
+            await Promise.all(
+                batch.map((draft) =>
+                    runSeriesDraft(
+                        draft,
+                        Math.max(
+                            0,
+                            seriesDrafts.findIndex((item) => item.id === draft.id),
+                        ),
+                    ),
+                ),
+            );
         }
     };
 
-    const startWorkflowImageTask = (workflow: CreativeWorkflow, promptSnapshot: string, inputSnapshot: Record<string, string>, referencesSnapshot: ReferenceImage[], countOverride?: number, seriesDraftId?: string, seriesTitle?: string, seriesIndex?: number) => {
+    const cancelWorkflowTask = (taskId: string) => {
+        const controller = workflowControllersRef.current.get(taskId);
+        if (!controller || controller.signal.aborted) return;
+        controller.abort();
+        message.info("正在取消工作流任务");
+    };
+
+    const startWorkflowImageTask = (
+        workflow: CreativeWorkflow,
+        promptSnapshot: string,
+        inputSnapshot: Record<string, string>,
+        referencesSnapshot: ReferenceImage[],
+        countOverride?: number,
+        seriesDraftId?: string,
+        seriesTitle?: string,
+        seriesIndex?: number,
+    ) => {
         const runtime = resolveWorkflowRuntime(workflow, effectiveConfig);
         const model = runtime.model;
         const runConfig = buildWorkflowRunConfig(effectiveConfig, workflow.config, runtime);
@@ -681,6 +749,8 @@ export function CreativeWorkflowWorkspace({
         const performanceStartedAt = performance.now();
         const count = Math.max(1, Math.min(10, countOverride || Number(runConfig.count) || 1));
         const taskId = nanoid();
+        const controller = new AbortController();
+        workflowControllersRef.current.set(taskId, controller);
         const taskConfig = { ...workflow.config, model, imageModel: model, imageChannelId: runtime.channelId, apiMode: runtime.apiMode, count: String(count) };
         onWorkflowTaskStarted?.({
             taskId,
@@ -716,7 +786,23 @@ export function CreativeWorkflowWorkspace({
             ...value,
         ]);
         message.success(seriesTitle ? `${seriesTitle} 已开始生成` : "工作流任务已开始");
-        return executeWorkflowTask({ taskId, workflow, prompt: promptSnapshot, inputSnapshot, references: referencesSnapshot, runConfig, taskConfig, model, count, startedAt, performanceStartedAt, seriesDraftId, seriesTitle, seriesIndex });
+        return executeWorkflowTask({
+            taskId,
+            workflow,
+            prompt: promptSnapshot,
+            inputSnapshot,
+            references: referencesSnapshot,
+            runConfig,
+            taskConfig,
+            model,
+            count,
+            startedAt,
+            performanceStartedAt,
+            seriesDraftId,
+            seriesTitle,
+            seriesIndex,
+            signal: controller.signal,
+        });
     };
 
     const saveWorkflowTaskLog = async (log: ImageHistoryLog) => {
@@ -814,6 +900,7 @@ export function CreativeWorkflowWorkspace({
         seriesDraftId,
         seriesTitle,
         seriesIndex,
+        signal,
     }: {
         taskId: string;
         workflow: CreativeWorkflow;
@@ -829,18 +916,32 @@ export function CreativeWorkflowWorkspace({
         seriesDraftId?: string;
         seriesTitle?: string;
         seriesIndex?: number;
+        signal: AbortSignal;
     }) => {
+        let storedImageKeys: string[] = [];
+        let historySaved = false;
         try {
-            const images = await Promise.all(Array.from({ length: count }, () => (references.length ? requestEdit({ ...runConfig, count: "1" }, prompt, references) : requestGeneration({ ...runConfig, count: "1" }, prompt))));
-            const flattened = images.flat();
-            if (!flattened.length) throw new Error("接口没有返回图片");
+            const settledImages = await Promise.allSettled(
+                Array.from({ length: count }, () => (references.length ? requestEdit({ ...runConfig, count: "1" }, prompt, references, undefined, { signal }) : requestGeneration({ ...runConfig, count: "1" }, prompt, { signal }))),
+            );
+            signal.throwIfAborted();
+            const flattened = settledImages.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
+            const partialErrors = settledImages.filter((result): result is PromiseRejectedResult => result.status === "rejected").map((result) => (result.reason instanceof Error ? result.reason.message : String(result.reason || "图片生成失败")));
+            if (!flattened.length) throw new Error(partialErrors[0] || "接口没有返回图片");
             const durationMs = performance.now() - performanceStartedAt;
             const storedImages = await storeWorkflowGeneratedImages(flattened, durationMs);
+            storedImageKeys = storedImages.map((image) => image.storageKey);
+            if (signal.aborted) {
+                await deleteStoredImages(storedImageKeys);
+                storedImageKeys = [];
+                signal.throwIfAborted();
+            }
             const category = await ensureWorkflowCategory(workflow.name);
+            signal.throwIfAborted();
             const log = buildImageHistoryLog({
                 workflow,
                 prompt,
-                config: taskConfig,
+                config: { ...taskConfig, channelMode: runConfig.channelMode, activeChannelId: runConfig.activeChannelId },
                 model,
                 images: storedImages,
                 durationMs,
@@ -849,8 +950,16 @@ export function CreativeWorkflowWorkspace({
                 categoryIds: category ? [category.id] : [],
                 seriesTitle,
                 seriesIndex,
+                errors: partialErrors,
             });
             await imageLogStore.setItem(log.id, serializeHistoryLog(log));
+            if (signal.aborted) {
+                await imageLogStore.removeItem(log.id).catch(() => undefined);
+                await deleteStoredImages(storedImageKeys).catch(() => undefined);
+                storedImageKeys = [];
+                signal.throwIfAborted();
+            }
+            historySaved = true;
             onGenerationLogSaved?.();
             const finishedAt = Date.now();
             setWorkflows((value) => {
@@ -875,8 +984,9 @@ export function CreativeWorkflowWorkspace({
                 createdAt: finishedAt,
             }));
             if (seriesDraftId) {
-                updateSeriesDraft(seriesDraftId, { status: "success", resultIds: nextResults.map((image) => image.id) });
+                updateSeriesDraft(seriesDraftId, { status: "success", resultIds: nextResults.map((image) => image.id), error: partialErrors.length ? `${nextResults.length} 张成功，${partialErrors.length} 张失败` : undefined });
             }
+            const partialError = partialErrors.length ? `${nextResults.length} 张成功，${partialErrors.length} 张失败：${partialErrors[0]}` : undefined;
             setWorkflowTasks((value) =>
                 value.map((task) =>
                     task.id === taskId
@@ -886,16 +996,20 @@ export function CreativeWorkflowWorkspace({
                               endedAt: finishedAt,
                               durationMs,
                               images: nextResults,
+                              error: partialError,
                           }
                         : task,
                 ),
             );
             setRunResults((value) => [...nextResults, ...value]);
             onWorkflowTaskSuccess?.({ taskId, images: nextResults, durationMs, endedAt: finishedAt });
-            message.success("工作流运行完成，结果已写入生图历史");
+            if (partialError) message.warning(`工作流部分完成，${partialError}`);
+            else message.success("工作流运行完成，结果已写入生图历史");
         } catch (error) {
             const finishedAt = Date.now();
-            const messageText = error instanceof Error ? error.message : "工作流运行失败";
+            const cancelled = isWorkflowAbortError(error, signal);
+            const messageText = cancelled ? "工作流任务已取消" : error instanceof Error ? error.message : "工作流运行失败";
+            if (!historySaved && storedImageKeys.length) await deleteStoredImages(storedImageKeys).catch(() => undefined);
             if (seriesDraftId) {
                 updateSeriesDraft(seriesDraftId, { status: "failed", error: messageText });
             }
@@ -913,7 +1027,10 @@ export function CreativeWorkflowWorkspace({
                 ),
             );
             onWorkflowTaskFailure?.({ taskId, error: messageText, durationMs: finishedAt - startedAt, endedAt: finishedAt });
-            message.error(messageText);
+            if (cancelled) message.info(messageText);
+            else message.error(messageText);
+        } finally {
+            workflowControllersRef.current.delete(taskId);
         }
     };
 
@@ -931,12 +1048,7 @@ export function CreativeWorkflowWorkspace({
                         <p className="mt-1 text-sm text-stone-500 dark:text-stone-400">{embedded ? "选择模板并启动任务，结果会写入生图历史。" : "把固定提示词和参数沉淀成模板，每次只填写变量即可批量复用。"}</p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                        <Select
-                            className="w-36"
-                            value={workflowCategory}
-                            options={[{ value: "all", label: "全部分类" }, ...workflowCategories.map((category) => ({ value: category, label: category }))]}
-                            onChange={setWorkflowCategory}
-                        />
+                        <Select className="w-36" value={workflowCategory} options={[{ value: "all", label: "全部分类" }, ...workflowCategories.map((category) => ({ value: category, label: category }))]} onChange={setWorkflowCategory} />
                         <Input.Search allowClear placeholder="搜索名称、分类、描述" className="w-72 max-w-full" value={query} onChange={(event) => setQuery(event.target.value)} />
                         <Button icon={<Bot className="size-4" />} onClick={() => setAgentOpen(true)}>
                             AI 创建
@@ -980,7 +1092,14 @@ export function CreativeWorkflowWorkspace({
                         </div>
                         <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 2xl:grid-cols-3">
                             {workflowTasks.map((task) => (
-                                <WorkflowTaskCard key={task.id} task={task} now={now} onCopyPrompt={() => void navigator.clipboard.writeText(task.prompt)} onDownload={(image, index) => saveAs(image.imageUrl, `workflow-task-${index + 1}.png`)} />
+                                <WorkflowTaskCard
+                                    key={task.id}
+                                    task={task}
+                                    now={now}
+                                    onCopyPrompt={() => void navigator.clipboard.writeText(task.prompt)}
+                                    onDownload={(image, index) => saveAs(image.imageUrl, `workflow-task-${index + 1}.png`)}
+                                    onCancel={() => cancelWorkflowTask(task.id)}
+                                />
                             ))}
                         </div>
                     </section>
@@ -994,7 +1113,14 @@ export function CreativeWorkflowWorkspace({
                                 最近运行结果
                                 <Tag className="m-0">{runResults.length} 张</Tag>
                             </div>
-                            <Button size="small" icon={<Maximize2 className="size-3.5" />} onClick={() => { setResultPreviewIndex(0); setResultPreviewOpen(true); }}>
+                            <Button
+                                size="small"
+                                icon={<Maximize2 className="size-3.5" />}
+                                onClick={() => {
+                                    setResultPreviewIndex(0);
+                                    setResultPreviewOpen(true);
+                                }}
+                            >
                                 查看全部 {runResults.length} 张
                             </Button>
                         </div>
@@ -1002,8 +1128,29 @@ export function CreativeWorkflowWorkspace({
                             {runResults.map((result, index) => (
                                 <div key={result.id} className="overflow-hidden rounded-lg border border-stone-200 bg-white dark:border-stone-800 dark:bg-stone-900">
                                     <div className="relative aspect-[4/3] bg-stone-100 dark:bg-stone-950">
-                                        <Image preview={false} src={result.imageUrl} alt={result.workflowName} width="100%" height="100%" className="!h-full !w-full cursor-zoom-in object-cover" onClick={() => { setResultPreviewIndex(index); setResultPreviewOpen(true); }} />
-                                        <Button aria-label="查看原图" title="查看原图" className="!absolute !bottom-2 !right-2 !z-10 !bg-white/90 dark:!bg-stone-950/90" size="small" icon={<Maximize2 className="size-3.5" />} onClick={() => { setResultPreviewIndex(index); setResultPreviewOpen(true); }} />
+                                        <Image
+                                            preview={false}
+                                            src={result.imageUrl}
+                                            alt={result.workflowName}
+                                            width="100%"
+                                            height="100%"
+                                            className="!h-full !w-full cursor-zoom-in object-cover"
+                                            onClick={() => {
+                                                setResultPreviewIndex(index);
+                                                setResultPreviewOpen(true);
+                                            }}
+                                        />
+                                        <Button
+                                            aria-label="查看原图"
+                                            title="查看原图"
+                                            className="!absolute !bottom-2 !right-2 !z-10 !bg-white/90 dark:!bg-stone-950/90"
+                                            size="small"
+                                            icon={<Maximize2 className="size-3.5" />}
+                                            onClick={() => {
+                                                setResultPreviewIndex(index);
+                                                setResultPreviewOpen(true);
+                                            }}
+                                        />
                                     </div>
                                     <div className="space-y-1 p-2 text-xs">
                                         <div className="line-clamp-1 font-medium">{result.workflowName}</div>
@@ -1022,7 +1169,10 @@ export function CreativeWorkflowWorkspace({
                                 </div>
                             ))}
                         </div>
-                        <Image.PreviewGroup items={runResults.map((result, index) => ({ src: result.imageUrl, alt: `${result.workflowName} ${index + 1}` }))} preview={{ open: resultPreviewOpen, current: resultPreviewIndex, onOpenChange: setResultPreviewOpen, onChange: setResultPreviewIndex, countRender: (current, total) => `第 ${current} / ${total} 张` }} />
+                        <Image.PreviewGroup
+                            items={runResults.map((result, index) => ({ src: result.imageUrl, alt: `${result.workflowName} ${index + 1}` }))}
+                            preview={{ open: resultPreviewOpen, current: resultPreviewIndex, onOpenChange: setResultPreviewOpen, onChange: setResultPreviewIndex, countRender: (current, total) => `第 ${current} / ${total} 张` }}
+                        />
                     </section>
                 ) : null}
             </div>
@@ -1057,14 +1207,27 @@ export function CreativeWorkflowWorkspace({
                                         onMissingConfig={() => openConfigDialog(true)}
                                     />
                                 </div>
-                                <div className="hidden min-w-0 max-w-[220px] truncate rounded-md border border-stone-300 px-2 py-1 text-xs text-stone-600 dark:border-stone-700 dark:text-stone-300 lg:block" title={`${agentModelInfo.channelName} · ${agentModelInfo.modelName}`}>
+                                <div
+                                    className="hidden min-w-0 max-w-[220px] truncate rounded-md border border-stone-300 px-2 py-1 text-xs text-stone-600 dark:border-stone-700 dark:text-stone-300 lg:block"
+                                    title={`${agentModelInfo.channelName} · ${agentModelInfo.modelName}`}
+                                >
                                     {agentModelInfo.channelName}
                                 </div>
                                 <div className="inline-flex rounded-md border border-stone-300 p-0.5 dark:border-stone-700">
-                                    <button type="button" title="个人工作流" className={`inline-flex size-8 items-center justify-center rounded ${agentScope === "private" ? "border border-stone-400 text-stone-950 dark:border-stone-500 dark:text-stone-50" : "text-stone-500"}`} onClick={() => setAgentScope("private")}>
+                                    <button
+                                        type="button"
+                                        title="个人工作流"
+                                        className={`inline-flex size-8 items-center justify-center rounded ${agentScope === "private" ? "border border-stone-400 text-stone-950 dark:border-stone-500 dark:text-stone-50" : "text-stone-500"}`}
+                                        onClick={() => setAgentScope("private")}
+                                    >
                                         <LockKeyhole className="size-4" />
                                     </button>
-                                    <button type="button" title="公开工作流" className={`inline-flex size-8 items-center justify-center rounded ${agentScope === "public" ? "border border-stone-400 text-stone-950 dark:border-stone-500 dark:text-stone-50" : "text-stone-500"}`} onClick={() => setAgentScope("public")}>
+                                    <button
+                                        type="button"
+                                        title="公开工作流"
+                                        className={`inline-flex size-8 items-center justify-center rounded ${agentScope === "public" ? "border border-stone-400 text-stone-950 dark:border-stone-500 dark:text-stone-50" : "text-stone-500"}`}
+                                        onClick={() => setAgentScope("public")}
+                                    >
                                         <Globe2 className="size-4" />
                                     </button>
                                 </div>
@@ -1085,7 +1248,12 @@ export function CreativeWorkflowWorkspace({
                                 onMissingConfig={() => openConfigDialog(true)}
                             />
                         </div>
-                        <Input.TextArea value={agentPrompt} autoSize={{ minRows: 14, maxRows: 22 }} placeholder="例如：创建一个电商海报工作流，只需要输入产品名称、核心卖点、活动信息，固定商业摄影质感和营销文案结构。" onChange={(event) => setAgentPrompt(event.target.value)} />
+                        <Input.TextArea
+                            value={agentPrompt}
+                            autoSize={{ minRows: 14, maxRows: 22 }}
+                            placeholder="例如：创建一个电商海报工作流，只需要输入产品名称、核心卖点、活动信息，固定商业摄影质感和营销文案结构。"
+                            onChange={(event) => setAgentPrompt(event.target.value)}
+                        />
                         <div className="rounded-lg border border-stone-200 p-3 dark:border-stone-800">
                             <div className="flex items-center justify-between gap-3">
                                 <div>
@@ -1245,7 +1413,10 @@ export function CreativeWorkflowWorkspace({
                                 <InfoPill label="模型" value={resolveWorkflowRuntime(runningWorkflow, effectiveConfig).model} />
                                 <InfoPill label="接口" value={resolveWorkflowRuntime(runningWorkflow, effectiveConfig).apiMode === "responses" ? "Responses" : "Images"} />
                                 <InfoPill label="尺寸" value={runningWorkflow.config.size || effectiveConfig.size} />
-                                <InfoPill label={runningWorkflow.mode === "multi_image_series" ? "草稿数量" : "数量"} value={`${runningWorkflow.mode === "multi_image_series" ? runningWorkflow.seriesConfig.targetCount || "4" : runningWorkflow.config.count || "1"} 张`} />
+                                <InfoPill
+                                    label={runningWorkflow.mode === "multi_image_series" ? "草稿数量" : "数量"}
+                                    value={`${runningWorkflow.mode === "multi_image_series" ? runningWorkflow.seriesConfig.targetCount || "4" : runningWorkflow.config.count || "1"} 张`}
+                                />
                             </div>
                             {runningWorkflow.mode === "multi_image_series" ? (
                                 <div className="rounded-lg border border-stone-200 p-3 dark:border-stone-800">
@@ -1302,15 +1473,41 @@ export function CreativeWorkflowWorkspace({
                                             <Tag className="m-0">{runnerImages.length} 张</Tag>
                                         </div>
                                         {runnerImages.length ? (
-                                            <Button size="small" icon={<Maximize2 className="size-3.5" />} onClick={() => { setRunnerPreviewIndex(0); setRunnerPreviewOpen(true); }}>
+                                            <Button
+                                                size="small"
+                                                icon={<Maximize2 className="size-3.5" />}
+                                                onClick={() => {
+                                                    setRunnerPreviewIndex(0);
+                                                    setRunnerPreviewOpen(true);
+                                                }}
+                                            >
                                                 查看全部 {runnerImages.length} 张
                                             </Button>
                                         ) : null}
                                     </div>
                                     {runnerTasks.map((task) => (
-                                        <WorkflowTaskCard key={task.id} task={task} now={now} onCopyPrompt={() => void navigator.clipboard.writeText(task.prompt)} onDownload={(image, index) => saveAs(image.imageUrl, `workflow-task-${index + 1}.png`)} onPreviewImage={(image) => { setRunnerPreviewIndex(Math.max(0, runnerImages.findIndex((item) => item.id === image.id))); setRunnerPreviewOpen(true); }} />
+                                        <WorkflowTaskCard
+                                            key={task.id}
+                                            task={task}
+                                            now={now}
+                                            onCopyPrompt={() => void navigator.clipboard.writeText(task.prompt)}
+                                            onDownload={(image, index) => saveAs(image.imageUrl, `workflow-task-${index + 1}.png`)}
+                                            onCancel={() => cancelWorkflowTask(task.id)}
+                                            onPreviewImage={(image) => {
+                                                setRunnerPreviewIndex(
+                                                    Math.max(
+                                                        0,
+                                                        runnerImages.findIndex((item) => item.id === image.id),
+                                                    ),
+                                                );
+                                                setRunnerPreviewOpen(true);
+                                            }}
+                                        />
                                     ))}
-                                    <Image.PreviewGroup items={runnerImages.map((image, index) => ({ src: image.imageUrl, alt: `${image.workflowName} ${index + 1}` }))} preview={{ open: runnerPreviewOpen, current: runnerPreviewIndex, onOpenChange: setRunnerPreviewOpen, onChange: setRunnerPreviewIndex, countRender: (current, total) => `第 ${current} / ${total} 张` }} />
+                                    <Image.PreviewGroup
+                                        items={runnerImages.map((image, index) => ({ src: image.imageUrl, alt: `${image.workflowName} ${index + 1}` }))}
+                                        preview={{ open: runnerPreviewOpen, current: runnerPreviewIndex, onOpenChange: setRunnerPreviewOpen, onChange: setRunnerPreviewIndex, countRender: (current, total) => `第 ${current} / ${total} 张` }}
+                                    />
                                 </section>
                             ) : null}
                         </div>
@@ -1329,42 +1526,56 @@ function WorkflowCard({ workflow, onRun, onEdit, onCopy, onDelete }: { workflow:
         <article className="group flex min-h-[220px] flex-col overflow-hidden rounded-lg border border-stone-200 bg-white shadow-sm transition hover:-translate-y-0.5 hover:border-stone-300 hover:shadow-xl dark:border-stone-800 dark:bg-stone-900 dark:hover:border-stone-700">
             <div className="h-1 bg-gradient-to-r from-stone-900 via-stone-500 to-stone-300 opacity-80 dark:from-stone-100 dark:via-stone-500 dark:to-stone-800" />
             <div className="flex flex-1 flex-col p-3.5">
-            <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                    <div className="line-clamp-1 text-base font-semibold">{workflow.name}</div>
-                    <div className="mt-1 flex flex-wrap gap-1">
-                        <Tag className="m-0">{workflow.category || "未分类"}</Tag>
-                        <Tag className="m-0" color={workflow.mode === "multi_image_series" ? "purple" : undefined}>
-                            {workflow.mode === "multi_image_series" ? "多图" : "单图"}
-                        </Tag>
-                        <Tag className="m-0">{workflow.variables.length} 个变量</Tag>
-                        <Tag className="m-0" color={workflow.scope === "public" ? "blue" : undefined}>
-                            {workflow.scope === "public" ? "公开" : "个人"}
-                        </Tag>
+                <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                        <div className="line-clamp-1 text-base font-semibold">{workflow.name}</div>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                            <Tag className="m-0">{workflow.category || "未分类"}</Tag>
+                            <Tag className="m-0" color={workflow.mode === "multi_image_series" ? "purple" : undefined}>
+                                {workflow.mode === "multi_image_series" ? "多图" : "单图"}
+                            </Tag>
+                            <Tag className="m-0">{workflow.variables.length} 个变量</Tag>
+                            <Tag className="m-0" color={workflow.scope === "public" ? "blue" : undefined}>
+                                {workflow.scope === "public" ? "公开" : "个人"}
+                            </Tag>
+                        </div>
+                    </div>
+                    <Button type="primary" size="small" icon={<Play className="size-3.5" />} onClick={onRun}>
+                        运行
+                    </Button>
+                </div>
+                <p className="mt-3 line-clamp-2 min-h-10 text-sm text-stone-500 dark:text-stone-400">{workflow.description || "暂无描述"}</p>
+                <div className="mt-3 rounded-md bg-stone-100/80 p-3 text-xs text-stone-600 dark:bg-stone-950/80 dark:text-stone-300">
+                    <div className="line-clamp-5 whitespace-pre-wrap">{workflow.config.promptTemplate}</div>
+                </div>
+                <div className="mt-auto flex items-center justify-between gap-2 pt-4 text-xs text-stone-500">
+                    <span>{workflow.lastRunAt ? `最近运行 ${formatDate(workflow.lastRunAt)}` : `创建于 ${formatDate(workflow.createdAt)}`}</span>
+                    <div className="flex gap-1">
+                        <Button size="small" disabled={!editable} icon={<Edit3 className="size-3.5" />} onClick={onEdit} />
+                        <Button size="small" icon={<FilePlus2 className="size-3.5" />} onClick={onCopy} />
+                        <Button size="small" disabled={!editable} danger icon={<Trash2 className="size-3.5" />} onClick={onDelete} />
                     </div>
                 </div>
-                <Button type="primary" size="small" icon={<Play className="size-3.5" />} onClick={onRun}>
-                    运行
-                </Button>
-            </div>
-            <p className="mt-3 line-clamp-2 min-h-10 text-sm text-stone-500 dark:text-stone-400">{workflow.description || "暂无描述"}</p>
-            <div className="mt-3 rounded-md bg-stone-100/80 p-3 text-xs text-stone-600 dark:bg-stone-950/80 dark:text-stone-300">
-                <div className="line-clamp-5 whitespace-pre-wrap">{workflow.config.promptTemplate}</div>
-            </div>
-            <div className="mt-auto flex items-center justify-between gap-2 pt-4 text-xs text-stone-500">
-                <span>{workflow.lastRunAt ? `最近运行 ${formatDate(workflow.lastRunAt)}` : `创建于 ${formatDate(workflow.createdAt)}`}</span>
-                <div className="flex gap-1">
-                    <Button size="small" disabled={!editable} icon={<Edit3 className="size-3.5" />} onClick={onEdit} />
-                    <Button size="small" icon={<FilePlus2 className="size-3.5" />} onClick={onCopy} />
-                    <Button size="small" disabled={!editable} danger icon={<Trash2 className="size-3.5" />} onClick={onDelete} />
-                </div>
-            </div>
             </div>
         </article>
     );
 }
 
-function WorkflowTaskCard({ task, now, onCopyPrompt, onDownload, onPreviewImage }: { task: WorkflowTask; now: number; onCopyPrompt: () => void; onDownload: (image: WorkflowRunResult, index: number) => void; onPreviewImage?: (image: WorkflowRunResult) => void }) {
+function WorkflowTaskCard({
+    task,
+    now,
+    onCopyPrompt,
+    onDownload,
+    onCancel,
+    onPreviewImage,
+}: {
+    task: WorkflowTask;
+    now: number;
+    onCopyPrompt: () => void;
+    onDownload: (image: WorkflowRunResult, index: number) => void;
+    onCancel: () => void;
+    onPreviewImage?: (image: WorkflowRunResult) => void;
+}) {
     const [previewOpen, setPreviewOpen] = useState(false);
     const [previewIndex, setPreviewIndex] = useState(0);
     const openPreviewAt = (index: number) => {
@@ -1401,6 +1612,11 @@ function WorkflowTaskCard({ task, now, onCopyPrompt, onDownload, onPreviewImage 
                     </div>
                 </div>
                 <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                    {task.status === "running" ? (
+                        <Button size="small" danger icon={<Square className="size-3.5" />} onClick={onCancel}>
+                            取消
+                        </Button>
+                    ) : null}
                     {task.images.length ? (
                         <Button size="small" icon={<Maximize2 className="size-3.5" />} onClick={() => openPreviewAt(0)}>
                             {task.images.length > 1 ? `查看 ${task.images.length} 张` : "查看原图"}
@@ -1451,7 +1667,12 @@ function WorkflowTaskCard({ task, now, onCopyPrompt, onDownload, onPreviewImage 
                 ) : task.status === "running" ? (
                     <div className="flex h-28 items-center justify-center rounded-md border border-dashed border-stone-300 text-sm text-stone-500 dark:border-stone-800">生成中 {formatDuration(elapsedMs)}</div>
                 ) : null}
-                {!onPreviewImage ? <Image.PreviewGroup items={task.images.map((image, index) => ({ src: image.imageUrl, alt: `${task.workflowName} ${index + 1}` }))} preview={{ open: previewOpen, current: previewIndex, onOpenChange: setPreviewOpen, onChange: setPreviewIndex, countRender: (current, total) => `第 ${current} / ${total} 张` }} /> : null}
+                {!onPreviewImage ? (
+                    <Image.PreviewGroup
+                        items={task.images.map((image, index) => ({ src: image.imageUrl, alt: `${task.workflowName} ${index + 1}` }))}
+                        preview={{ open: previewOpen, current: previewIndex, onOpenChange: setPreviewOpen, onChange: setPreviewIndex, countRender: (current, total) => `第 ${current} / ${total} 张` }}
+                    />
+                ) : null}
             </div>
         </article>
     );
@@ -1488,10 +1709,12 @@ function SeriesPromptDraftCard({
     }[draft.status];
     return (
         <article className="rounded-lg border border-stone-200 bg-stone-50 p-3 dark:border-stone-800 dark:bg-stone-950">
-            <div className="mb-2 flex items-center justify-between gap-2">
-                <Input value={draft.title} className="max-w-[280px]" placeholder={`第 ${index + 1} 张标题`} onChange={(event) => onChange({ title: event.target.value })} />
-                <div className="flex shrink-0 items-center gap-1">
-                    <Tag className="m-0" color={statusView.color}>{statusView.label}</Tag>
+            <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <Input value={draft.title} className="w-full sm:max-w-[280px]" placeholder={`第 ${index + 1} 张标题`} onChange={(event) => onChange({ title: event.target.value })} />
+                <div className="flex w-full flex-wrap items-center justify-end gap-1 sm:w-auto sm:shrink-0">
+                    <Tag className="m-0" color={statusView.color}>
+                        {statusView.label}
+                    </Tag>
                     <Button size="small" icon={<Copy className="size-3.5" />} onClick={onCopy} />
                     <Button size="small" disabled={isFirst} icon={<ArrowUp className="size-3.5" />} onClick={onMoveUp} />
                     <Button size="small" disabled={isLast} icon={<ArrowDown className="size-3.5" />} onClick={onMoveDown} />
@@ -1539,10 +1762,20 @@ function WorkflowEditorModal({
                         <div className="flex items-center justify-between gap-3">
                             <div className="text-sm font-medium">基础信息</div>
                             <div className="inline-flex rounded-md border border-stone-300 bg-transparent p-0.5 dark:border-stone-700">
-                                <button type="button" title="个人工作流" className={`inline-flex size-8 items-center justify-center rounded transition ${workflow.scope !== "public" ? "border border-stone-400 text-stone-950 dark:border-stone-500 dark:text-stone-50" : "text-stone-500 hover:text-stone-900 dark:text-stone-400 dark:hover:text-stone-100"}`} onClick={() => patch({ scope: "private" })}>
+                                <button
+                                    type="button"
+                                    title="个人工作流"
+                                    className={`inline-flex size-8 items-center justify-center rounded transition ${workflow.scope !== "public" ? "border border-stone-400 text-stone-950 dark:border-stone-500 dark:text-stone-50" : "text-stone-500 hover:text-stone-900 dark:text-stone-400 dark:hover:text-stone-100"}`}
+                                    onClick={() => patch({ scope: "private" })}
+                                >
                                     <LockKeyhole className="size-4" />
                                 </button>
-                                <button type="button" title="公开工作流" className={`inline-flex size-8 items-center justify-center rounded transition ${workflow.scope === "public" ? "border border-stone-400 text-stone-950 dark:border-stone-500 dark:text-stone-50" : "text-stone-500 hover:text-stone-900 dark:text-stone-400 dark:hover:text-stone-100"}`} onClick={() => patch({ scope: "public" })}>
+                                <button
+                                    type="button"
+                                    title="公开工作流"
+                                    className={`inline-flex size-8 items-center justify-center rounded transition ${workflow.scope === "public" ? "border border-stone-400 text-stone-950 dark:border-stone-500 dark:text-stone-50" : "text-stone-500 hover:text-stone-900 dark:text-stone-400 dark:hover:text-stone-100"}`}
+                                    onClick={() => patch({ scope: "public" })}
+                                >
                                     <Globe2 className="size-4" />
                                 </button>
                             </div>
@@ -1594,7 +1827,14 @@ function WorkflowEditorModal({
                 </div>
                 <aside className="space-y-3 rounded-lg border border-stone-200 p-3 dark:border-stone-800">
                     <div className="text-sm font-medium">生成配置</div>
-                    <ModelPicker config={modelConfig} fullWidth capability="image" value={workflow.config.imageModel || workflow.config.model} channelId={workflow.config.imageChannelId || modelConfig.imageChannelId} onChange={(value, channelId) => patchConfig({ imageModel: value, model: value, ...(channelId ? { imageChannelId: channelId } : {}) })} />
+                    <ModelPicker
+                        config={modelConfig}
+                        fullWidth
+                        capability="image"
+                        value={workflow.config.imageModel || workflow.config.model}
+                        channelId={workflow.config.imageChannelId || modelConfig.imageChannelId}
+                        onChange={(value, channelId) => patchConfig({ imageModel: value, model: value, ...(channelId ? { imageChannelId: channelId } : {}) })}
+                    />
                     {workflow.mode === "multi_image_series" ? (
                         <div className="space-y-3 rounded-md bg-stone-100 p-3 text-sm dark:bg-stone-950">
                             <div className="flex items-center gap-2 font-medium">
@@ -1620,7 +1860,12 @@ function WorkflowEditorModal({
                                     <Input value={workflow.seriesConfig.concurrency} onChange={(event) => patchSeriesConfig({ concurrency: event.target.value })} />
                                 </Space.Compact>
                             </div>
-                            <Input.TextArea autoSize={{ minRows: 3, maxRows: 6 }} value={workflow.seriesConfig.promptInstruction} placeholder="系列拆分说明，例如：按封面、痛点、功能、场景、对比、总结拆成 6 张图。" onChange={(event) => patchSeriesConfig({ promptInstruction: event.target.value })} />
+                            <Input.TextArea
+                                autoSize={{ minRows: 3, maxRows: 6 }}
+                                value={workflow.seriesConfig.promptInstruction}
+                                placeholder="系列拆分说明，例如：按封面、痛点、功能、场景、对比、总结拆成 6 张图。"
+                                onChange={(event) => patchSeriesConfig({ promptInstruction: event.target.value })}
+                            />
                             <ToggleRow label="先审核提示词" checked={workflow.seriesConfig.reviewRequired !== false} onChange={(checked) => patchSeriesConfig({ reviewRequired: checked })} />
                         </div>
                     ) : null}
@@ -1743,7 +1988,9 @@ function createBlankWorkflow(config: AiConfig, mode: WorkflowMode = "single_imag
         category: series ? "多图创作" : "",
         description: series ? "根据主题生成一组连贯图片提示词，审核后批量生成图片。" : "",
         mode,
-        variables: series ? [createVariable("topic", "主题", "textarea"), createVariable("style", "统一风格"), createVariable("platform", "发布平台")] : [createVariable("product_name", "产品名称"), createVariable("selling_points", "产品卖点", "textarea")],
+        variables: series
+            ? [createVariable("topic", "主题", "textarea"), createVariable("style", "统一风格"), createVariable("platform", "发布平台")]
+            : [createVariable("product_name", "产品名称"), createVariable("selling_points", "产品卖点", "textarea")],
         config: { ...createWorkflowConfig(config), ...(series ? { count: "1", promptTemplate: "围绕 {{topic}} 生成一组适合 {{platform}} 发布的连贯配图。\n统一风格：{{style}}\n要求：主题一致、画面重点各不相同、适合连续发布。" } : {}) },
         seriesConfig: createWorkflowSeriesConfig(config),
         createdAt: now,
@@ -1874,7 +2121,13 @@ function normalizeAgentDraft(draft: Partial<CreativeWorkflow>, config: AiConfig,
 
 function normalizeVariable(variable: WorkflowVariable): WorkflowVariable {
     const key = variable.key.replace(/[^\w.-]/g, "_");
-    return { ...variable, key, label: variable.label || key, defaultValue: variable.defaultValue == null ? "" : String(variable.defaultValue), options: Array.isArray(variable.options) ? variable.options : parseVariableOptions(String(variable.options || "")) };
+    return {
+        ...variable,
+        key,
+        label: variable.label || key,
+        defaultValue: variable.defaultValue == null ? "" : String(variable.defaultValue),
+        options: Array.isArray(variable.options) ? variable.options : parseVariableOptions(String(variable.options || "")),
+    };
 }
 
 function normalizeWorkflow(workflow: CreativeWorkflow): CreativeWorkflow {
@@ -1926,7 +2179,7 @@ function buildSeriesPromptDraftRequest(workflow: CreativeWorkflow, basePrompt: s
         .join("\n");
     return [
         "你是多图创作策划助手。请基于工作流信息，为同一主题生成一组互相连贯但画面重点不同的图片生成提示词。",
-        "必须只返回 JSON，不要 Markdown。JSON 结构为：{\"items\":[{\"title\":\"第1张标题\",\"prompt\":\"完整图片提示词\"}]}。",
+        '必须只返回 JSON，不要 Markdown。JSON 结构为：{"items":[{"title":"第1张标题","prompt":"完整图片提示词"}]}。',
         `目标张数：${count}`,
         `工作流名称：${workflow.name}`,
         `工作流分类：${workflow.category || "未分类"}`,
@@ -1946,9 +2199,7 @@ function parseSeriesPromptDrafts(content: string, count: number, fallbackPrompt:
         try {
             const payload = JSON.parse(jsonText) as { items?: Array<{ title?: string; prompt?: string }> } | Array<{ title?: string; prompt?: string }>;
             const items = Array.isArray(payload) ? payload : payload.items || [];
-            const drafts = items
-                .map((item, index) => ({ id: nanoid(), title: item.title?.trim() || `第 ${index + 1} 张`, prompt: item.prompt?.trim() || "", status: "draft" as const }))
-                .filter((item) => item.prompt);
+            const drafts = items.map((item, index) => ({ id: nanoid(), title: item.title?.trim() || `第 ${index + 1} 张`, prompt: item.prompt?.trim() || "", status: "draft" as const })).filter((item) => item.prompt);
             if (drafts.length) return drafts.slice(0, count);
         } catch {
             // JSON 解析失败后继续使用下方的逐行解析。
@@ -1966,7 +2217,12 @@ function parseSeriesPromptDrafts(content: string, count: number, fallbackPrompt:
 }
 
 function extractJSONText(content: string) {
-    const trimmed = content.trim().replace(/^```json/i, "").replace(/^```/, "").replace(/```$/, "").trim();
+    const trimmed = content
+        .trim()
+        .replace(/^```json/i, "")
+        .replace(/^```/, "")
+        .replace(/```$/, "")
+        .trim();
     const objectStart = trimmed.indexOf("{");
     const objectEnd = trimmed.lastIndexOf("}");
     if (objectStart >= 0 && objectEnd > objectStart) return trimmed.slice(objectStart, objectEnd + 1);
@@ -2044,6 +2300,7 @@ function buildImageHistoryLog({
     status = "成功",
     task,
     lastPolledAt,
+    errors = [],
 }: {
     id?: string;
     workflow: CreativeWorkflow;
@@ -2060,6 +2317,7 @@ function buildImageHistoryLog({
     status?: ImageHistoryLog["status"];
     task?: CanvasImageTask;
     lastPolledAt?: number;
+    errors?: string[];
 }): ImageHistoryLog {
     return {
         id: id || nanoid(),
@@ -2071,15 +2329,15 @@ function buildImageHistoryLog({
         config,
         references,
         durationMs,
-        successCount: status === "成功" ? images.length : 0,
-        failCount: status === "失败" ? 1 : 0,
+        successCount: images.length,
+        failCount: errors.length || (status === "失败" ? 1 : 0),
         imageCount: status === "生成中" ? 0 : images.length,
         size: config.size,
         quality: config.quality,
         status,
         images,
         thumbnails: images.map((image) => image.dataUrl),
-        errors: [],
+        errors,
         categoryIds,
         workflowId: workflow.id,
         workflowName: workflow.name,
@@ -2092,12 +2350,19 @@ function buildImageHistoryLog({
 async function ensureWorkflowCategory(name: string) {
     const trimmed = name.trim();
     if (!trimmed) return null;
-    const categories = (await categoryStore.getItem<GenerationCategory[]>(CATEGORY_STORE_KEY)) || [];
-    const existing = categories.find((item) => item.name === trimmed);
-    if (existing) return existing;
-    const nextCategory = { id: nanoid(), name: trimmed, createdAt: Date.now() };
-    await categoryStore.setItem(CATEGORY_STORE_KEY, [...categories, nextCategory]);
-    return nextCategory;
+    const operation = workflowCategoryWriteChain.then(async () => {
+        const categories = (await categoryStore.getItem<GenerationCategory[]>(CATEGORY_STORE_KEY)) || [];
+        const existing = categories.find((item) => item.name === trimmed);
+        if (existing) return existing;
+        const nextCategory = { id: nanoid(), name: trimmed, createdAt: Date.now() };
+        await categoryStore.setItem(CATEGORY_STORE_KEY, [...categories, nextCategory]);
+        return nextCategory;
+    });
+    workflowCategoryWriteChain = operation.then(
+        () => undefined,
+        () => undefined,
+    );
+    return operation;
 }
 
 function serializeHistoryLog(log: ImageHistoryLog): ImageHistoryLog {
@@ -2116,6 +2381,10 @@ function isDisposableReferenceFile(reference: ReferenceImage) {
 function referenceUsedByWorkflowTask(reference: ReferenceImage, tasks: WorkflowTask[]) {
     if (!reference.storageKey) return false;
     return tasks.some((task) => task.references.some((item) => item.storageKey === reference.storageKey));
+}
+
+function isWorkflowAbortError(error: unknown, signal: AbortSignal) {
+    return signal.aborted || (error instanceof DOMException && error.name === "AbortError") || (error instanceof Error && error.name === "AbortError");
 }
 
 function formatDate(value: number) {

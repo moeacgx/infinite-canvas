@@ -121,6 +121,33 @@ func TestSafeProxyDialRejectsSiteLocalIPv6DNSResult(t *testing.T) {
 	}
 }
 
+func TestSafeProxyDialRejectsSiteLocalIPv6Literal(t *testing.T) {
+	lookupCalled := false
+	dialCalled := false
+	_, err := safeProxyDialContextWith(
+		context.Background(),
+		"tcp",
+		"[fec0::1]:443",
+		func(context.Context, string) ([]net.IPAddr, error) {
+			lookupCalled = true
+			return nil, errors.New("字面地址不应执行 DNS 解析")
+		},
+		func(context.Context, string, string) (net.Conn, error) {
+			dialCalled = true
+			return nil, errors.New("不应拨号")
+		},
+	)
+	if err == nil {
+		t.Fatal("site-local IPv6 literal should be rejected")
+	}
+	if lookupCalled {
+		t.Fatal("literal site-local IPv6 address unexpectedly triggered DNS lookup")
+	}
+	if dialCalled {
+		t.Fatal("dial was called for a site-local IPv6 literal")
+	}
+}
+
 func TestSafeProxyDialPinsValidatedIPAddress(t *testing.T) {
 	var dialedAddress string
 	connection, err := safeProxyDialContextWith(
