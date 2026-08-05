@@ -7,12 +7,14 @@ const videoSource = readFileSync(new URL("../src/app/(user)/video/page.tsx", imp
 const navigationSource = readFileSync(new URL("../src/constant/navigation-tools.ts", import.meta.url), "utf8");
 const agentSiteToolsSource = readFileSync(new URL("../src/lib/agent/agent-site-tools.ts", import.meta.url), "utf8");
 
-test("生图和视频工作台默认使用底部布局并持久化用户选择", () => {
+test("生图默认使用侧边布局，视频默认使用底部布局并持久化用户选择", () => {
+    assert.match(imageSource, /useState<WorkbenchLayout>\("side"\)/);
+    assert.match(videoSource, /useState<WorkbenchLayout>\("bottom"\)/);
+
     for (const [source, key, title] of [
         [imageSource, "infinite-canvas:image-workbench-layout", "生图工作台"],
         [videoSource, "infinite-canvas:video-workbench-layout", "视频创作台"],
     ]) {
-        assert.match(source, /useState<WorkbenchLayout>\("bottom"\)/);
         assert.match(source, new RegExp(key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
         assert.match(source, /window\.localStorage\.getItem\(WORKBENCH_LAYOUT_KEY\)/);
         assert.match(source, /window\.localStorage\.setItem\(WORKBENCH_LAYOUT_KEY, layout\)/);
