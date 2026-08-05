@@ -48,7 +48,7 @@ import { deleteVideoGenerationLogs, fetchVideoGenerationLogs, saveVideoGeneratio
 import { createVideoGenerationTask as createBaseVideoGenerationTask, pollVideoGenerationTask as pollBaseVideoGenerationTask, storeGeneratedVideo, type VideoGenerationTask } from "@/services/api/video";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
-import { normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig, type VideoElementItem, type VideoElementReference } from "@/stores/use-config-store";
+import { decodeChannelModel, modelOptionName, normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig, type VideoElementItem, type VideoElementReference } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
@@ -345,6 +345,7 @@ export default function VideoPage() {
     const [syncingVideoIds, setSyncingVideoIds] = useState<string[]>([]);
     const taskControllersRef = useRef(new Map<string, AbortController>());
     const pollingLogIdsRef = useRef(new Set<string>());
+    const deletedLogIdsRef = useRef(new Set<string>());
     const logsRef = useRef<GenerationLog[]>([]);
     const effectiveConfigRef = useRef(videoConfig);
 
@@ -357,6 +358,7 @@ export default function VideoPage() {
     const isKlingWorkbench = Boolean(klingWorkbench);
     const pendingLogCount = logs.filter((log) => log.status === "生成中" && log.task && !log.video).length;
     const usesBackendVideoTasks = (value: AiConfig) => value.channelMode === "remote" || (value.channelMode === "local" && Boolean(token));
+    const filterCurrentModelAudioReferences = (existing: ReferenceAudio[], next: ReferenceAudio[]) => (isSeedanceVideoConfig({ ...videoConfig, model }) ? filterAudioReferencesByDuration(existing, next, message.warning) : next);
 
     const restorePendingLogResults = (sourceLogs: GenerationLog[]) => {
         const pendingLogs = sourceLogs.filter((log) => log.status === "生成中" && log.task && !log.video);
@@ -566,7 +568,7 @@ export default function VideoPage() {
                     return { id: nanoid(), name: file.name, type: video.mimeType, url: video.url, storageKey: video.storageKey, bytes: video.bytes, width: video.width, height: video.height, durationMs: video.durationMs };
                 }),
             );
-            const nextAudioReferences = filterAudioReferencesByDuration(
+            const nextAudioReferences = filterCurrentModelAudioReferences(
                 audioReferences,
                 await Promise.all(
                     audioFiles.map(async (file) => {
@@ -574,7 +576,6 @@ export default function VideoPage() {
                         return { id: nanoid(), name: file.name, type: audio.mimeType, url: audio.url, storageKey: audio.storageKey, durationMs: audio.durationMs };
                     }),
                 ),
-                message.warning,
             );
             setReferences((value) => [...value, ...nextReferences].slice(0, referenceImageLimit));
             setVideoReferences((value) => [...value, ...nextVideoReferences].slice(0, SEEDANCE_REFERENCE_LIMITS.videos));
@@ -717,7 +718,7 @@ export default function VideoPage() {
             }
             const usable = blobs.filter((blob) => blob.size <= SEEDANCE_REFERENCE_LIMITS.audioMaxBytes).slice(0, SEEDANCE_REFERENCE_LIMITS.audios - audioReferences.length);
             if (blobs.some((blob) => blob.size > SEEDANCE_REFERENCE_LIMITS.audioMaxBytes)) message.warning("已忽略超过 15MB 的参考音频");
-            const nextAudioReferences = filterAudioReferencesByDuration(
+            const nextAudioReferences = filterCurrentModelAudioReferences(
                 audioReferences,
                 await Promise.all(
                     usable.map(async (blob, index) => {
@@ -725,7 +726,6 @@ export default function VideoPage() {
                         return { id: nanoid(), name: `clipboard-audio-${index + 1}.mp3`, type: audio.mimeType, url: audio.url, storageKey: audio.storageKey, durationMs: audio.durationMs };
                     }),
                 ),
-                message.warning,
             );
             setAudioReferences((value) => [...value, ...nextAudioReferences].slice(0, SEEDANCE_REFERENCE_LIMITS.audios));
             message.success(`已读取 ${nextAudioReferences.length} 个参考音频`);
@@ -815,6 +815,7 @@ export default function VideoPage() {
         const klingV26 = isAPIMartKlingV26Config(configValue, modelValue);
         const klingV3 = isKlingV3Config(configValue, modelValue);
         const kling = klingV26 || klingV3;
+        const seedance = isSeedanceVideoConfig({ ...configValue, model: modelValue });
         if (!text) {
             message.error("请输入视频提示词");
             return null;
@@ -841,7 +842,7 @@ export default function VideoPage() {
                 return null;
             }
         }
-        if (!kling) {
+        if (seedance) {
             const videoReferenceError = seedanceVideoReferenceError(videoReferenceItems);
             if (videoReferenceError) {
                 message.error(`${videoReferenceError}。${seedanceVideoReferenceHint}`);
@@ -901,7 +902,7 @@ export default function VideoPage() {
         try {
             const settled = await Promise.allSettled(pendingLogs.map((log) => runVideoTask(log, snapshot)));
             const nextLogs = settled.map((item) => (item.status === "fulfilled" ? item.value : null)).filter((item): item is NonNullable<typeof item> => Boolean(item));
-            const storedLogs = await readStoredLogs();
+            const storedLogs = (await readStoredLogs()).filter((log) => !deletedLogIdsRef.current.has(log.id));
             setLogs(storedLogs);
             const createdCount = nextLogs.filter((item) => item.status === "生成中").length;
             const failedCount = nextLogs.filter((item) => item.status === "失败").length;
@@ -927,6 +928,16 @@ export default function VideoPage() {
         },
     ) => {
         const controller = new AbortController();
+        let createdTaskId = "";
+        let createdTask: VideoResponse | null = null;
+        const cleanupCreatedTask = async () => {
+            controller.abort();
+            taskControllersRef.current.delete(pendingLog.id);
+            if (!createdTaskId) return;
+            taskControllersRef.current.delete(createdTaskId);
+            workbenchTaskSignals.delete(createdTaskId);
+            if (createdTask) await deleteVideoGenerationTask(snapshot.config, createdTask).catch(() => undefined);
+        };
         taskControllersRef.current.set(pendingLog.id, controller);
         try {
             const created = await createVideoGenerationTask(
@@ -938,14 +949,25 @@ export default function VideoPage() {
                 },
                 { clientTaskId: pendingLog.task?.id, source: "video-workbench", signal: controller.signal },
             );
-            taskControllersRef.current.delete(pendingLog.id);
+            createdTaskId = created.task.id;
+            createdTask = created.task;
             taskControllersRef.current.set(created.task.id, controller);
+            if (deletedLogIdsRef.current.has(pendingLog.id)) {
+                await cleanupCreatedTask();
+                return null;
+            }
             const nextLog = { ...pendingLog, task: created.task, lastPolledAt: Date.now() };
             await saveGenerationLog(nextLog);
+            if (deletedLogIdsRef.current.has(pendingLog.id)) {
+                await cleanupCreatedTask();
+                return null;
+            }
+            taskControllersRef.current.delete(pendingLog.id);
             setResults((value) => updateResultByLogId(value, pendingLog.id, { progress: created.task.progress, task: created.task, taskLogId: nextLog.id, lastPolledAt: nextLog.lastPolledAt }));
             return nextLog;
         } catch (error) {
-            taskControllersRef.current.delete(pendingLog.id);
+            await cleanupCreatedTask();
+            if (deletedLogIdsRef.current.has(pendingLog.id)) return null;
             const durationMs = Date.now() - pendingLog.createdAt;
             const nextLog = { ...pendingLog, status: "失败" as const, durationMs, lastPolledAt: Date.now(), error: errorMessage(error), errorDetail: errorDetail(error) };
             await saveGenerationLog(nextLog);
@@ -1044,13 +1066,12 @@ export default function VideoPage() {
         if (!synced) return;
         const nextLog = { ...log, video: synced };
         await logStore.setItem(log.id, serializeLog(nextLog));
-        const nextLogs = logs.map((item) => (item.id === log.id ? nextLog : item));
-        setLogs(nextLogs);
+        setLogs((value) => value.map((item) => (item.id === log.id ? nextLog : item)));
         await persistVideoLog(nextLog);
         if (previewLog?.id === log.id) setPreviewLog(nextLog);
     };
 
-    const saveResultToAssets = (video: GeneratedVideo) => {
+    const saveResultToAssets = (video: GeneratedVideo, sourcePrompt: string) => {
         addAsset({
             kind: "video",
             title: "生成视频",
@@ -1058,7 +1079,7 @@ export default function VideoPage() {
             tags: [],
             source: "视频创作台",
             data: { url: video.url, storageKey: video.storageKey, width: video.width, height: video.height, bytes: video.bytes, mimeType: video.mimeType },
-            metadata: { source: "video-page", prompt },
+            metadata: { source: "video-page", prompt: sourcePrompt },
         });
         message.success("已加入我的素材");
     };
@@ -1105,7 +1126,7 @@ export default function VideoPage() {
                 message.warning("请选择音频素材");
                 return;
             }
-            const next = filterAudioReferencesByDuration(audioReferences, [{ id: nanoid(), name: payload.title, type: payload.mimeType || "audio/mpeg", url: payload.url, storageKey: payload.storageKey, durationMs: payload.durationMs }], message.warning);
+            const next = filterCurrentModelAudioReferences(audioReferences, [{ id: nanoid(), name: payload.title, type: payload.mimeType || "audio/mpeg", url: payload.url, storageKey: payload.storageKey, durationMs: payload.durationMs }]);
             setAudioReferences((value) => [...value, ...next].slice(0, SEEDANCE_REFERENCE_LIMITS.audios));
         };
 
@@ -1172,6 +1193,18 @@ export default function VideoPage() {
             [...videoReferences, ...audioReferences],
             results,
         );
+        deletedLogs.forEach((log) => {
+            deletedLogIdsRef.current.add(log.id);
+            const taskId = videoLogTaskId(log);
+            [log.id, taskId]
+                .filter((key): key is string => Boolean(key))
+                .forEach((key) => {
+                    taskControllersRef.current.get(key)?.abort();
+                    taskControllersRef.current.delete(key);
+                });
+            if (taskId) workbenchTaskSignals.delete(taskId);
+            pollingLogIdsRef.current.delete(log.id);
+        });
         setLogs(nextLogs);
         logsRef.current = nextLogs;
         setResults((value) => value.filter((item) => !selectedLogIds.includes(item.id) && !selectedLogIds.includes(item.taskLogId || "") && !videoResultIdentityKeys(item).some((key) => deleteKeys.has(key))));
@@ -1198,7 +1231,7 @@ export default function VideoPage() {
     };
 
     const refreshLogs = async () => {
-        const nextLogs = await readStoredLogs();
+        const nextLogs = (await readStoredLogs()).filter((log) => !deletedLogIdsRef.current.has(log.id));
         setLogs(nextLogs);
         return nextLogs;
     };
@@ -1211,7 +1244,7 @@ export default function VideoPage() {
             const recoverableTasks = tasks.filter(isRecoverableBackendVideoTask);
             if (!recoverableTasks.length) return baseLogs || logsRef.current;
             const currentLogs = baseLogs || (await readStoredLogs());
-            const mergedLogs = mergeBackendVideoTasks(currentLogs, recoverableTasks, config);
+            const mergedLogs = mergeBackendVideoTasks(currentLogs, recoverableTasks, config).filter((log) => !deletedLogIdsRef.current.has(log.id));
             const taskKeys = new Set(recoverableTasks.flatMap(videoTaskIdentityKeys));
             const recoveredLogs = mergedLogs.filter((log) => videoLogIdentityKeys(log).some((key) => taskKeys.has(key)));
             await persistStoredVideoLogs(recoveredLogs);
@@ -1232,7 +1265,7 @@ export default function VideoPage() {
         try {
             const localLogs = await readStoredLogs();
             const remoteLogs = await fetchVideoGenerationLogs<GenerationLog>(currentToken);
-            const mergedLogs = await mergeVideoLogs(remoteLogs, localLogs);
+            const mergedLogs = (await mergeVideoLogs(remoteLogs, localLogs)).filter((log) => !deletedLogIdsRef.current.has(log.id));
             await replaceStoredVideoHistory(mergedLogs);
             setLogs(mergedLogs);
             return mergedLogs;
@@ -1243,30 +1276,41 @@ export default function VideoPage() {
     };
 
     const persistVideoLog = async (log: GenerationLog) => {
-        if (!token || !shouldSyncVideoLog(log)) return;
+        if (deletedLogIdsRef.current.has(log.id) || !token || !shouldSyncVideoLog(log)) return;
         await saveVideoGenerationLogs(token, [serializeLog(log)]).catch(() => undefined);
     };
 
     const saveGenerationLog = async (log: GenerationLog) => {
+        if (deletedLogIdsRef.current.has(log.id)) return;
         await logStore.setItem(log.id, serializeLog(log));
+        if (deletedLogIdsRef.current.has(log.id)) {
+            await logStore.removeItem(log.id);
+            return;
+        }
         setLogs((value) => sortVideoLogs([log, ...value.filter((item) => item.id !== log.id)]));
     };
 
     const finalizeGenerationLog = async (log: GenerationLog) => {
+        if (deletedLogIdsRef.current.has(log.id)) return;
         await saveGenerationLog(log);
-        const nextLogs = await readStoredLogs();
+        if (deletedLogIdsRef.current.has(log.id)) return;
+        const nextLogs = (await readStoredLogs()).filter((item) => !deletedLogIdsRef.current.has(item.id));
         setLogs(nextLogs);
         await persistVideoLog(log);
     };
 
     const pollPendingLogOnce = async (log: GenerationLog, resumeConfig: AiConfig) => {
+        if (deletedLogIdsRef.current.has(log.id)) return;
         pollingLogIdsRef.current.add(log.id);
         const startedAt = log.createdAt || Date.now();
+        let terminal = false;
         try {
             const task = await pollVideoGenerationTaskStatus(resumeConfig, log.task!);
+            if (deletedLogIdsRef.current.has(log.id)) return;
             const durationMs = Date.now() - startedAt;
             const baseLog = { ...log, task, durationMs, lastPolledAt: Date.now() };
             if (isFailedVideoTask(task)) {
+                terminal = true;
                 const nextLog = { ...baseLog, status: "失败" as const, error: task.error?.message || "视频生成失败", errorDetail: errorDetail(new VideoRequestError(task.error?.message || "视频生成失败", task)) };
                 await finalizeGenerationLog(nextLog);
                 setResults((value) => updateResultByLogId(value, log.id, { status: "failed", task, error: nextLog.error, errorDetail: nextLog.errorDetail, durationMs: nextLog.durationMs, lastPolledAt: nextLog.lastPolledAt }));
@@ -1274,12 +1318,14 @@ export default function VideoPage() {
             }
             if (isCompletedVideoTask(task)) {
                 if (!task.video_url && !task.url) {
+                    terminal = true;
                     const nextLog = { ...baseLog, status: "失败" as const, error: "视频生成完成但没有返回视频地址", errorDetail: errorDetail(new VideoRequestError("视频生成完成但没有返回视频地址", task)) };
                     await finalizeGenerationLog(nextLog);
                     setResults((value) => updateResultByLogId(value, log.id, { status: "failed", task, error: nextLog.error, errorDetail: nextLog.errorDetail, durationMs: nextLog.durationMs, lastPolledAt: nextLog.lastPolledAt }));
                     return;
                 }
                 const video = videoFromTaskResponse(task, durationMs);
+                terminal = true;
                 const nextLog = { ...baseLog, status: "成功" as const, video, error: undefined, errorDetail: undefined };
                 await finalizeGenerationLog(nextLog);
                 setResults((value) => value.filter((item) => item.taskLogId !== log.id && item.id !== log.id));
@@ -1288,16 +1334,23 @@ export default function VideoPage() {
             await saveGenerationLog(baseLog);
             setResults((value) => updateResultByLogId(value, log.id, { task, progress: task.progress, durationMs, lastPolledAt: baseLog.lastPolledAt }));
         } catch (error) {
+            if (deletedLogIdsRef.current.has(log.id)) return;
             const nextLog = { ...log, durationMs: Date.now() - startedAt, lastPolledAt: Date.now(), error: errorMessage(error), errorDetail: errorDetail(error) };
             if (isTransientVideoPollError(error)) {
                 await saveGenerationLog({ ...nextLog, status: "生成中" });
                 setResults((value) => updateResultByLogId(value, log.id, { error: nextLog.error, errorDetail: nextLog.errorDetail, durationMs: nextLog.durationMs, lastPolledAt: nextLog.lastPolledAt }));
                 return;
             }
+            terminal = true;
             await finalizeGenerationLog({ ...nextLog, status: "失败" });
             setResults((value) => updateResultByLogId(value, log.id, { status: "failed", error: nextLog.error, errorDetail: nextLog.errorDetail, durationMs: nextLog.durationMs, lastPolledAt: nextLog.lastPolledAt }));
         } finally {
             pollingLogIdsRef.current.delete(log.id);
+            if (terminal || deletedLogIdsRef.current.has(log.id)) {
+                const taskId = videoLogTaskId(log);
+                [log.id, taskId].filter((key): key is string => Boolean(key)).forEach((key) => taskControllersRef.current.delete(key));
+                if (taskId) workbenchTaskSignals.delete(taskId);
+            }
         }
     };
 
@@ -1699,7 +1752,7 @@ function WorkbenchPanel({
     if (layout === "bottom") {
         return (
             <div className="pointer-events-none fixed inset-x-0 bottom-5 z-40 flex justify-center px-5 sm:bottom-7 sm:px-10 lg:px-16">
-                <div className="pointer-events-auto w-full max-w-5xl rounded-[24px] bg-white/65 p-4 shadow-[0_32px_100px_rgba(15,23,42,.22),0_10px_34px_rgba(15,23,42,.10)] ring-1 ring-white/50 backdrop-blur-2xl dark:bg-stone-950/60 dark:ring-white/10 dark:shadow-[0_34px_110px_rgba(0,0,0,.58)]">
+                <div className="thin-scrollbar pointer-events-auto max-h-[calc(100dvh-2.5rem)] w-full max-w-5xl overflow-y-auto rounded-[24px] bg-white/65 p-4 shadow-[0_32px_100px_rgba(15,23,42,.22),0_10px_34px_rgba(15,23,42,.10)] ring-1 ring-white/50 backdrop-blur-2xl dark:bg-stone-950/60 dark:ring-white/10 dark:shadow-[0_34px_110px_rgba(0,0,0,.58)]">
                     <div className="flex flex-col gap-3">
                         <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
                             <Input.TextArea
@@ -2271,7 +2324,7 @@ function ResultsPanel({
     onDownload: (video: GeneratedVideo) => void;
     onSyncResult: (resultId: string, video: GeneratedVideo, index: number) => void;
     onSyncLog: (log: GenerationLog, video: GeneratedVideo, index: number) => void;
-    onSaveAsset: (video: GeneratedVideo) => void;
+    onSaveAsset: (video: GeneratedVideo, prompt: string) => void;
     syncingVideoIds: string[];
 }) {
     const visibleResults = results.filter((result) => result.status !== "failed" || pendingCount > 0);
@@ -2316,7 +2369,7 @@ function ResultsPanel({
                                 onCopyPrompt={onCopyPrompt}
                                 onDownload={onDownload}
                                 onSync={(video) => onSyncResult(result.id, video, index)}
-                                onSaveAsset={onSaveAsset}
+                                onSaveAsset={(video) => onSaveAsset(video, result.prompt)}
                             />
                         ) : result.status === "failed" ? (
                             <FailedVideoCard key={result.id} result={result} error={result.error || "生成失败"} onCopyPrompt={onCopyPrompt} onPreview={() => onPreviewResult(result)} onRetry={() => onRetryResult(result)} />
@@ -2339,7 +2392,7 @@ function ResultsPanel({
                             onCopyPrompt={onCopyPrompt}
                             onDownload={onDownload}
                             onSync={(video) => onSyncLog(log, video, index)}
-                            onSaveAsset={onSaveAsset}
+                            onSaveAsset={(video) => onSaveAsset(video, log.prompt)}
                         />
                     ))}
                 </div>
@@ -2596,9 +2649,10 @@ function VideoMetaBar({
 }
 
 function VideoSourceTag({ video }: { video: GeneratedVideo }) {
+    const cloud = isCloudVideo(video);
     return (
-        <Tag className="m-0 text-[10px]" color={video.storageKey ? "default" : "gold"}>
-            {video.storageKey ? "本地缓存" : "AI 临时URL"}
+        <Tag className="m-0 text-[10px]" color={cloud ? "blue" : video.storageKey ? "default" : "gold"}>
+            {cloud ? "云端存储" : video.storageKey ? "本地缓存" : "AI 临时URL"}
         </Tag>
     );
 }
@@ -3155,7 +3209,7 @@ function isRecoverableBackendVideoTask(task: VideoResponse) {
 }
 
 function isCloudVideo(video: GeneratedVideo) {
-    return Boolean(video.storageKey);
+    return video.storageKey.startsWith("server:");
 }
 
 function errorMessage(error: unknown) {
@@ -3236,7 +3290,8 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
     );
     const firstFrame = log.firstFrame ? { ...log.firstFrame, dataUrl: await safeResolveImageUrl(log.firstFrame.storageKey, log.firstFrame.dataUrl) } : null;
     const lastFrame = log.lastFrame ? { ...log.lastFrame, dataUrl: await safeResolveImageUrl(log.lastFrame.storageKey, log.lastFrame.dataUrl) } : null;
-    const config = normalizeLogConfig(log);
+    const normalizedConfig = normalizeLogConfig(log);
+    const config = { ...normalizedConfig, videoElementList: await resolveStoredKlingElementList(normalizedConfig.videoElementList) };
     return {
         id: log.id || nanoid(),
         createdAt: log.createdAt || Date.now(),
@@ -3459,11 +3514,14 @@ function videoTaskChannelId(task?: VideoResponse | null) {
 
 function resolveVideoChannelId(config: AiConfig, model: string, ...preferredIds: Array<string | undefined>) {
     const channels = config.channelMode === "remote" ? config.publicChannels.map((channel) => ({ id: channel.id || "", models: channel.models || [] })) : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, models: channel.models }));
-    for (const id of preferredIds) {
+    const modelName = modelOptionName(model);
+    const encodedChannelId = decodeChannelModel(model)?.channelId;
+    const supportsModel = (channel: (typeof channels)[number]) => channel.models.some((item) => modelOptionName(item) === modelName);
+    for (const id of [encodedChannelId, ...preferredIds]) {
         const channelId = (id || "").trim();
-        if (channelId && channels.some((channel) => channel.id === channelId && channel.models.includes(model))) return channelId;
+        if (channelId && channels.some((channel) => channel.id === channelId && supportsModel(channel))) return channelId;
     }
-    return channels.find((channel) => channel.models.includes(model))?.id || "";
+    return channels.find(supportsModel)?.id || "";
 }
 
 function isAPIMartKlingV26Config(config: AiConfig, model: string) {
@@ -3512,7 +3570,9 @@ function isKIEKlingModelConfig(config: AiConfig, model: string, key: string) {
 function videoChannelText(config: AiConfig, model: string) {
     const channelId = resolveVideoChannelId(config, model, config.videoChannelId, config.activeChannelId);
     const channels = config.channelMode === "remote" ? config.publicChannels : normalizeLocalChannels(config);
-    const channel = channels.find((item) => (item.id || "") === channelId && (item.models || []).includes(model)) || channels.find((item) => (item.models || []).includes(model)) || channels.find((item) => (item.id || "") === channelId);
+    const modelName = modelOptionName(model);
+    const supportsModel = (item: (typeof channels)[number]) => (item.models || []).some((value) => modelOptionName(value) === modelName);
+    const channel = channels.find((item) => (item.id || "") === channelId && supportsModel(item)) || channels.find(supportsModel) || channels.find((item) => (item.id || "") === channelId);
     const record = channel as { id?: string; name?: string; baseUrl?: string; remark?: string } | undefined;
     return [record?.id, record?.name, record?.baseUrl, record?.remark].filter(Boolean).join(" ").toLowerCase();
 }
@@ -3589,6 +3649,23 @@ function serializeKlingElementList(value: VideoElementItem[] | undefined): Video
         ...item,
         references: item.references.map((reference) => (reference.storageKey ? { ...reference, dataUrl: "", url: reference.kind === "image" ? "" : reference.url || "" } : reference)),
     }));
+}
+
+async function resolveStoredKlingElementList(value: VideoElementItem[] | undefined): Promise<VideoElementItem[]> {
+    return Promise.all(
+        normalizeKlingElementList(value).map(async (item) => ({
+            ...item,
+            references: await Promise.all(
+                item.references.map(async (reference) => {
+                    if (!reference.storageKey) return reference;
+                    if (reference.kind === "image") {
+                        return { ...reference, dataUrl: await safeResolveImageUrl(reference.storageKey, reference.dataUrl || reference.url || "") };
+                    }
+                    return { ...reference, url: await safeResolveMediaUrl(reference.storageKey, reference.url || "") };
+                }),
+            ),
+        })),
+    );
 }
 
 function elementReferenceKind(value: string): VideoElementReference["kind"] {

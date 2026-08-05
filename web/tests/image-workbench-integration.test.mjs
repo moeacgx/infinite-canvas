@@ -96,9 +96,15 @@ test("生图页保留模型渠道切换、工作流入口与可取消的即时�
     assert.match(imagePageSource, /requestGeneration\(snapshot\.requestConfig,[\s\S]*\{ signal \}\)/);
     assert.match(imagePageSource, /previewGenerationLog[\s\S]*updateConfig\("background", log\.config\.background \|\| ""\)/);
     assert.match(workflowSource, /buildWorkflowRunConfig\(effectiveConfig, workflow\.config, runtime\)/);
+    assert.match(imagePageSource, /const storedLogs = \(await readStoredLogs\(\)\)\.filter\(\(item\) => !deletedLogIdsRef\.current\.has\(item\.id\)\)/);
+    assert.match(imagePageSource, /const nextLogs = \(await readStoredLogs\(\)\)\.filter\(\(log\) => !deletedLogIdsRef\.current\.has\(log\.id\)\)/);
 });
 
 test("生图结果操作栏在窄屏分行并允许操作按钮换行", () => {
     assert.match(imagePageSource, /mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between/);
     assert.match(imagePageSource, /flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto sm:shrink-0 sm:justify-end/);
+    assert.match(imagePageSource, /workflow-floating-button fixed z-50 hidden[\s\S]{0,600}sm:inline-flex/);
+    assert.ok([...imagePageSource.matchAll(/aria-label="创作工作流"/g)].length >= 2);
+    assert.match(imagePageSource, /<span className="hidden sm:inline">侧边<\/span>/);
+    assert.match(imagePageSource, /<span className="hidden sm:inline">底部<\/span>/);
 });
