@@ -23,5 +23,5 @@ test("创作 Agent 保留多渠道和图片接口模式配置", () => {
 
 test("创作 Agent 输入法提交和运行状态不会重复发送", () => {
     assert.match(composerSource, /event\.nativeEvent\.isComposing/);
-    assert.match(composerSource, /if \(isRunning \|\| submitDisabled \|\| !prompt\.trim\(\)\) return/);
+    assert.match(composerSource, /if \(isRunning \|\| submitDisabled \|\| \(!prompt\.trim\(\) && !references\.length\)\) return/);
 });

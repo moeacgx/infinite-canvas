@@ -2,7 +2,7 @@
 
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { History, Bot, PanelRightClose, Plus, RotateCcw, Sparkles, Trash2, Video, X } from "lucide-react";
-import { Button, Modal, Tooltip } from "antd";
+import { App, Button, Modal, Tooltip } from "antd";
 import { motion } from "motion/react";
 import { nanoid } from "nanoid";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -11,15 +11,29 @@ import remarkGfm from "remark-gfm";
 import { ImageGenerationPending } from "@/components/image-generation-pending";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { cn } from "@/lib/utils";
-import { imageToDataUrl } from "@/services/image-storage";
+import { deleteStoredMedia, uploadMediaFile } from "@/services/file-storage";
+import { deleteStoredImages, imageToDataUrl, uploadImage } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { resolveCapabilityModel, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { createCanvasAgentState, runCanvasAgent } from "../agent/canvas-agent-runtime";
+import { canvasAgentActionAttachmentIds, canvasAgentActionNeedsAttachmentMaterialization, canvasAgentSessionAssets, createPendingAgentAsset, mergeCanvasAssistantReferences } from "../agent/canvas-agent-attachments";
 import type { CanvasAgentContext } from "../agent/canvas-agent-context";
 import type { CanvasAgentAction, CanvasAgentToolResult } from "../agent/canvas-agent-tools";
-import { CanvasNodeType, type CanvasAgentConfig, type CanvasAgentProtocolMessage, type CanvasAgentState, type CanvasAssistantMessage, type CanvasAssistantReference, type CanvasAssistantSession, type CanvasNodeData } from "../types";
+import {
+    CanvasNodeType,
+    type CanvasAgentConfig,
+    type CanvasAgentProtocolMessage,
+    type CanvasAgentState,
+    type CanvasAssistantMessage,
+    type CanvasAssistantReference,
+    type CanvasAssistantSession,
+    type CanvasNodeData,
+    type InsertAssetPayload,
+    type PendingAgentAsset,
+} from "../types";
 import { isCanvasImageNodeType } from "../utils/canvas-node-type";
+import { AssetPickerModal } from "./asset-picker-modal";
 import { AssistantReferenceChip, CanvasAssistantComposer } from "./canvas-assistant-composer";
 const PANEL_MOTION_MS = 500;
 const PANEL_MOTION_SECONDS = PANEL_MOTION_MS / 1000;
@@ -35,11 +49,9 @@ type CanvasAssistantPanelProps = {
     onSelectNodeIds: (ids: Set<string>) => void;
     onSessionsChange: (sessions: CanvasAssistantSession[], activeSessionId: string | null) => void;
     onAgentConfigChange: (patch: Partial<CanvasAgentConfig>) => void;
-    onPasteImage: (file: File) => void;
-    onOpenUpload: () => void;
-    onOpenAssets: () => void;
     getAgentContext: (state: CanvasAgentState) => CanvasAgentContext;
     onExecuteAction: (action: CanvasAgentAction, messageReferenceNodeIds: string[], signal?: AbortSignal) => Promise<CanvasAgentToolResult>;
+    onMaterializeReferences: (assets: PendingAgentAsset[], signal?: AbortSignal) => Promise<void>;
     onCollapseStart: () => void;
     onCollapse: () => void;
     initialRequest?: { prompt: string; references: CanvasAssistantReference[] } | null;
@@ -62,16 +74,15 @@ export function CanvasAssistantPanel({
     onSelectNodeIds,
     onSessionsChange,
     onAgentConfigChange,
-    onPasteImage,
-    onOpenUpload,
-    onOpenAssets,
     getAgentContext,
     onExecuteAction,
+    onMaterializeReferences,
     onCollapseStart,
     onCollapse,
     initialRequest,
     onInitialRequestConsumed,
 }: CanvasAssistantPanelProps) {
+    const { message: toast } = App.useApp();
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const effectiveConfig = useEffectiveConfig();
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
@@ -82,6 +93,8 @@ export function CanvasAssistantPanel({
     const consumedInitialRequestRef = useRef<typeof initialRequest>(null);
     const pendingDeleteRef = useRef<PendingDeleteConfirmation | null>(null);
     const messageListRef = useRef<HTMLDivElement>(null);
+    const attachmentCleanupTimerRef = useRef<number | null>(null);
+    const mountedRef = useRef(true);
     const [view, setView] = useState<"chat" | "history">("chat");
     const [prompt, setPrompt] = useState("");
     const [isRunning, setIsRunning] = useState(false);
@@ -91,6 +104,10 @@ export function CanvasAssistantPanel({
     const [resizing, setResizing] = useState(false);
     const [removedReferenceIds, setRemovedReferenceIds] = useState<Set<string>>(new Set());
     const [pendingDelete, setPendingDelete] = useState<PendingDeleteConfirmation | null>(null);
+    const [assetPickerOpen, setAssetPickerOpen] = useState(false);
+    const [uploadingAssetCount, setUploadingAssetCount] = useState(0);
+    const uploadingAssetCountRef = useRef(0);
+    const uploadInputRef = useRef<HTMLInputElement>(null);
     const [initialSession] = useState(createSession);
     const safeSessions = sessions.length ? sessions : [initialSession];
     const resolvedActiveSessionId = activeSessionId && safeSessions.some((session) => session.id === activeSessionId) ? activeSessionId : safeSessions[0]?.id || null;
@@ -102,14 +119,16 @@ export function CanvasAssistantPanel({
         activeSessionIdRef.current = resolvedActiveSessionId;
     }, [resolvedActiveSessionId, sessions]);
 
-    useEffect(
-        () => () => {
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+            mountedRef.current = false;
             abortRef.current?.abort();
+            if (attachmentCleanupTimerRef.current) clearTimeout(attachmentCleanupTimerRef.current);
             pendingDeleteRef.current?.resolve(false);
             pendingDeleteRef.current = null;
-        },
-        [],
-    );
+        };
+    }, []);
 
     const activeSession = safeSessions.find((session) => session.id === resolvedActiveSessionId) || safeSessions[0] || null;
     const historySessions = safeSessions.filter((session) => session.messages.length > 0);
@@ -127,6 +146,9 @@ export function CanvasAssistantPanel({
     }, [messages, view]);
     const allSelectedReferences = useMemo(() => buildAssistantReferences(nodes, selectedNodeIds), [nodes, selectedNodeIds]);
     const selectedReferences = useMemo(() => allSelectedReferences.filter((item) => !removedReferenceIds.has(item.id)), [allSelectedReferences, removedReferenceIds]);
+    const draftAssets = activeSession?.draftAssets || [];
+    const draftReferences = useMemo(() => draftAssets.map((asset) => asset.reference), [draftAssets]);
+    const composerReferences = useMemo(() => mergeCanvasAssistantReferences(selectedReferences, draftReferences), [draftReferences, selectedReferences]);
     const iconButtonStyle = { color: theme.node.muted };
     const settleDeleteConfirmation = (confirmed: boolean) => {
         const pending = pendingDeleteRef.current;
@@ -138,7 +160,7 @@ export function CanvasAssistantPanel({
 
     useEffect(() => {
         setRemovedReferenceIds(new Set());
-    }, [selectedNodeKey]);
+    }, [resolvedActiveSessionId, selectedNodeKey]);
 
     const commitSessions = (nextSessions: CanvasAssistantSession[], nextActiveSessionId = activeSessionIdRef.current) => {
         sessionsRef.current = nextSessions;
@@ -148,6 +170,70 @@ export function CanvasAssistantPanel({
 
     const updateSession = (sessionId: string, updater: (session: CanvasAssistantSession) => CanvasAssistantSession) => {
         commitSessions(sessionsRef.current.map((session) => (session.id === sessionId ? updater(session) : session)));
+    };
+
+    const updateDraftAssets = (sessionId: string, updater: (assets: PendingAgentAsset[]) => PendingAgentAsset[]) => {
+        updateSession(sessionId, (session) => ({ ...session, draftAssets: updater(session.draftAssets || []), updatedAt: new Date().toISOString() }));
+    };
+
+    const addDraftAsset = (payload: InsertAssetPayload, targetSessionId?: string) => {
+        const sessionId = targetSessionId || activeSessionIdRef.current || resolvedActiveSessionId;
+        if (!sessionId || !sessionsRef.current.some((session) => session.id === sessionId)) return false;
+        updateDraftAssets(sessionId, (assets) => [...assets, createPendingAgentAsset(payload)]);
+        return true;
+    };
+
+    const removeDraftAsset = (assetId: string) => {
+        const sessionId = activeSessionIdRef.current || resolvedActiveSessionId;
+        if (!sessionId) return;
+        updateDraftAssets(sessionId, (assets) => assets.filter((asset) => asset.nodeId !== assetId));
+        if (attachmentCleanupTimerRef.current) clearTimeout(attachmentCleanupTimerRef.current);
+        attachmentCleanupTimerRef.current = window.setTimeout(() => {
+            attachmentCleanupTimerRef.current = null;
+            cleanupImages({ sessions: sessionsRef.current });
+        }, 500);
+    };
+
+    const handleAssistantFile = async (file: File) => {
+        const targetSessionId = activeSessionIdRef.current || resolvedActiveSessionId;
+        if (!targetSessionId) return;
+        const isImage = file.type.startsWith("image/");
+        const isVideo = file.type.startsWith("video/");
+        const isAudio = file.type.startsWith("audio/") || /\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(file.name);
+        if (!isImage && !isVideo && !isAudio) {
+            toast.warning("请选择图片、视频或音频文件");
+            return;
+        }
+        uploadingAssetCountRef.current += 1;
+        setUploadingAssetCount(uploadingAssetCountRef.current);
+        try {
+            let payload: InsertAssetPayload;
+            if (isImage) {
+                const image = await uploadImage(file);
+                payload = { kind: "image", dataUrl: image.url, storageKey: image.storageKey, width: image.width, height: image.height, bytes: image.bytes, mimeType: image.mimeType, title: file.name };
+            } else {
+                const media = await uploadMediaFile(file, isVideo ? "video" : "audio");
+                payload = isVideo
+                    ? { kind: "video", url: media.url, storageKey: media.storageKey, width: media.width, height: media.height, bytes: media.bytes, mimeType: media.mimeType, title: file.name }
+                    : { kind: "audio", url: media.url, storageKey: media.storageKey, durationMs: media.durationMs, bytes: media.bytes, mimeType: media.mimeType, title: file.name };
+            }
+            if (!mountedRef.current || !addDraftAsset(payload, targetSessionId)) {
+                if (payload.storageKey) {
+                    if (payload.kind === "image") await deleteStoredImages([payload.storageKey]).catch(() => undefined);
+                    else if (payload.kind === "video" || payload.kind === "audio") await deleteStoredMedia([payload.storageKey]).catch(() => undefined);
+                }
+                if (mountedRef.current) toast.info("原会话已删除，素材未添加");
+                return;
+            }
+            toast.success("素材已添加到 Agent 输入框");
+        } catch (error) {
+            if (mountedRef.current) toast.error(error instanceof Error ? error.message : "素材上传失败");
+        } finally {
+            if (mountedRef.current) {
+                uploadingAssetCountRef.current = Math.max(0, uploadingAssetCountRef.current - 1);
+                setUploadingAssetCount(uploadingAssetCountRef.current);
+            }
+        }
     };
 
     const appendMessage = (sessionId: string, message: CanvasAssistantMessage) => {
@@ -197,20 +283,27 @@ export function CanvasAssistantPanel({
     };
 
     const sendMessage = async (text: string, savedReferences?: CanvasAssistantReference[], baseProtocolMessages?: CanvasAgentProtocolMessage[], onAccepted?: () => void) => {
-        if (!text.trim() || runningRef.current) return;
+        if (runningRef.current) return;
+        const references = savedReferences || composerReferences;
+        if (!text.trim() && !references.length) return;
         runningRef.current = true;
         const session = activeSession || createSession();
         if (!activeSession) {
             commitSessions([session], session.id);
         }
 
-        const references = savedReferences || selectedReferences;
+        const sessionSnapshot = sessionsRef.current.find((item) => item.id === session.id) || session;
+        const knownAttachmentAssets = canvasAgentSessionAssets(sessionSnapshot, references);
+        const attachmentAssets = new Map(knownAttachmentAssets.map((asset) => [asset.nodeId, asset]));
         const messageReferenceNodeIds = references.map((reference) => reference.id);
         const userMessage: CanvasAssistantMessage = { id: nanoid(), role: "user", text, references, status: "success" };
         const assistantId = nanoid();
         appendMessage(session.id, userMessage);
         appendMessage(session.id, { id: assistantId, role: "assistant", text: "", status: "thinking", activity: "正在理解画布和创作目标" });
-        setPrompt("");
+        if (!savedReferences) {
+            setPrompt("");
+            updateDraftAssets(session.id, () => []);
+        }
         onAccepted?.();
 
         const textModel = resolveCapabilityModel(effectiveConfig, "text", effectiveConfig.textModel || effectiveConfig.model);
@@ -252,6 +345,8 @@ export function CanvasAssistantPanel({
                 references: modelReferences,
                 getContext: getAgentContext,
                 executeAction: async (action) => {
+                    const attachmentIds = canvasAgentActionNeedsAttachmentMaterialization(action) ? canvasAgentActionAttachmentIds(action, knownAttachmentAssets) : [];
+                    if (attachmentIds.length) await onMaterializeReferences(attachmentIds.map((id) => attachmentAssets.get(id)!).filter(Boolean), controller.signal);
                     if (action.name !== "delete_node") return onExecuteAction(action, messageReferenceNodeIds, controller.signal);
                     const nodeId = typeof action.arguments.nodeId === "string" ? action.arguments.nodeId : "";
                     const node = nodes.find((item) => item.id === nodeId);
@@ -296,7 +391,7 @@ export function CanvasAssistantPanel({
     };
 
     useEffect(() => {
-        if (!initialRequest || consumedInitialRequestRef.current === initialRequest || !initialRequest.prompt.trim()) return;
+        if (!initialRequest || consumedInitialRequestRef.current === initialRequest || (!initialRequest.prompt.trim() && !initialRequest.references.length)) return;
         if (runningRef.current) return;
         void sendMessage(initialRequest.prompt, initialRequest.references, undefined, () => {
             consumedInitialRequestRef.current = initialRequest;
@@ -306,7 +401,7 @@ export function CanvasAssistantPanel({
 
     const submit = async () => {
         const text = prompt.trim();
-        if (!text || isRunning) return;
+        if ((!text && !composerReferences.length) || isRunning) return;
         await sendMessage(text);
     };
 
@@ -460,7 +555,8 @@ export function CanvasAssistantPanel({
                         <CanvasAssistantComposer
                             prompt={prompt}
                             isRunning={isRunning}
-                            references={selectedReferences}
+                            submitDisabled={uploadingAssetCount > 0}
+                            references={composerReferences}
                             agentConfig={agentConfig}
                             onAgentConfigChange={onAgentConfigChange}
                             onPromptChange={setPrompt}
@@ -469,13 +565,17 @@ export function CanvasAssistantPanel({
                                 settleDeleteConfirmation(false);
                                 abortRef.current?.abort();
                             }}
-                            onOpenUpload={onOpenUpload}
-                            onOpenAssets={onOpenAssets}
+                            onOpenUpload={() => uploadInputRef.current?.click()}
+                            onOpenAssets={() => setAssetPickerOpen(true)}
                             onRemoveReference={(id) => {
+                                if (draftAssets.some((asset) => asset.nodeId === id)) {
+                                    removeDraftAsset(id);
+                                    return;
+                                }
                                 setRemovedReferenceIds((previous) => new Set(previous).add(id));
                                 if (selectedNodeIds.has(id)) onSelectNodeIds(new Set(Array.from(selectedNodeIds).filter((nodeId) => nodeId !== id)));
                             }}
-                            onPasteImage={onPasteImage}
+                            onPasteImage={(file) => void handleAssistantFile(file)}
                         />
                     </>
                 ) : null}
@@ -504,6 +604,27 @@ export function CanvasAssistantPanel({
                 >
                     <p className="text-sm opacity-60">将删除 {deleteChatIds.length} 条对话记录，此操作不可撤销</p>
                 </Modal>
+                <AssetPickerModal
+                    open={assetPickerOpen}
+                    defaultTab="my-assets"
+                    onInsert={(payload) => {
+                        addDraftAsset(payload);
+                        setAssetPickerOpen(false);
+                    }}
+                    onClose={() => setAssetPickerOpen(false)}
+                />
+                <input
+                    ref={uploadInputRef}
+                    type="file"
+                    accept="image/*,video/*,audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac"
+                    className="hidden"
+                    disabled={uploadingAssetCount > 0}
+                    onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        event.target.value = "";
+                        if (file) void handleAssistantFile(file);
+                    }}
+                />
             </motion.aside>
         </motion.div>
     );
@@ -640,22 +761,31 @@ function nodeToReference(node: CanvasNodeData): CanvasAssistantReference | null 
             id: node.id,
             type: node.type,
             title: node.title,
+            origin: "canvas",
             dataUrl: node.metadata.content,
             storageKey: node.metadata.storageKey,
             mimeType: node.metadata.mimeType,
+            width: node.metadata.naturalWidth || node.width,
+            height: node.metadata.naturalHeight || node.height,
+            bytes: node.metadata.bytes,
         };
     }
     if (node.type === CanvasNodeType.Text && node.metadata?.content) {
-        return { id: node.id, type: node.type, title: node.title, text: node.metadata.content };
+        return { id: node.id, type: node.type, title: node.title, origin: "canvas", text: node.metadata.content };
     }
     if ((node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) && node.metadata?.content) {
         return {
             id: node.id,
             type: node.type,
             title: node.title,
+            origin: "canvas",
             url: node.metadata.content,
             storageKey: node.metadata.storageKey,
             mimeType: node.metadata.mimeType,
+            width: node.metadata.naturalWidth || node.width,
+            height: node.metadata.naturalHeight || node.height,
+            bytes: node.metadata.bytes,
+            durationMs: node.metadata.durationMs,
         };
     }
     return null;
@@ -681,7 +811,7 @@ function findProtocolTurnStart(messages: CanvasAgentProtocolMessage[], userText:
                       .filter((item) => item.type === "text")
                       .map((item) => item.text)
                       .join("\n");
-        if (content === userText || content.startsWith(userText + "\n\n本次明确引用的真实节点：")) return index;
+        if (content === userText || content.startsWith(userText + "\n\n本次明确引用的真实节点：") || content.startsWith(userText + "\n\n本次明确附加的素材：")) return index;
     }
     return messages.length;
 }
@@ -692,6 +822,7 @@ function createSession(): CanvasAssistantSession {
         id: nanoid(),
         title: "新对话",
         messages: [],
+        draftAssets: [],
         agentState: createCanvasAgentState(),
         protocolMessages: [],
         createdAt: now,

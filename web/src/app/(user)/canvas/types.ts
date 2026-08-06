@@ -137,11 +137,16 @@ export type CanvasAssistantReference = {
     id: string;
     type: CanvasNodeTypeId;
     title: string;
+    origin?: "canvas" | "attachment";
     dataUrl?: string;
     url?: string;
     storageKey?: string;
     mimeType?: string;
     text?: string;
+    width?: number;
+    height?: number;
+    bytes?: number;
+    durationMs?: number;
 };
 
 export type InsertAssetPayload =
@@ -165,6 +170,10 @@ export type CanvasAssistantImage = {
     id: string;
     dataUrl: string;
     storageKey?: string;
+    width?: number;
+    height?: number;
+    bytes?: number;
+    mimeType?: string;
     prompt: string;
     source?: "asset" | "library";
 };
@@ -225,6 +234,7 @@ export type CanvasAssistantSession = {
     id: string;
     title: string;
     messages: CanvasAssistantMessage[];
+    draftAssets?: PendingAgentAsset[];
     agentState: CanvasAgentState;
     protocolMessages: CanvasAgentProtocolMessage[];
     createdAt: string;

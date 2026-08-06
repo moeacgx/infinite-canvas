@@ -148,7 +148,7 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
     let hasExecutedActions = false;
     const attemptedWriteActionSignatures = new Set<string>();
     const executionBudget = createCanvasAgentExecutionBudget();
-    let protocolMessages: CanvasAgentProtocolMessage[] = trimProtocolMessages([...input.protocolMessages, { role: "user" as const, content: buildUserContent(input.userText, input.references) }]);
+    let protocolMessages: CanvasAgentProtocolMessage[] = trimProtocolMessages([...input.protocolMessages, { role: "user" as const, content: buildCanvasAgentUserContent(input.userText, input.references) }]);
 
     for (let step = 0; step < MAX_AGENT_STEPS; step++) {
         throwIfAborted(input.signal);
@@ -308,8 +308,21 @@ async function executeActions(
     return { items, state };
 }
 
-function buildUserContent(text: string, references: CanvasAssistantReference[]): CanvasAgentContent {
-    const referenceText = references.length ? "\n\n本次明确引用的真实节点：" + references.map((item) => item.id + "（" + item.title + "）").join("、") : "";
+export function buildCanvasAgentUserContent(text: string, references: CanvasAssistantReference[]): CanvasAgentContent {
+    const canvasReferences = references.filter((item) => item.origin !== "attachment");
+    const attachments = references.filter((item) => item.origin === "attachment");
+    const canvasReferenceText = canvasReferences.length ? "\n\n本次明确引用的真实节点：" + canvasReferences.map((item) => item.id + "（" + item.title + "）").join("、") : "";
+    const attachmentText = attachments.length
+        ? "\n\n本次明确附加的素材：" +
+          attachments
+              .map((item) => {
+                  const content = item.type === "text" && item.text ? "：" + item.text.slice(0, 4000) : "";
+                  return item.id + "（" + item.title + "）" + content;
+              })
+              .join("、") +
+          "。需要在画布工具中使用时，可直接把附件标识传入对应节点 ID 字段；执行器会在首次使用时将素材落为真实节点。"
+        : "";
+    const referenceText = canvasReferenceText + attachmentText;
     const images = references.flatMap((item) => {
         const url = item.dataUrl;
         return url && (/^data:image\//.test(url) || /^https?:\/\//.test(url)) ? [{ type: "image_url" as const, image_url: { url } }] : [];
