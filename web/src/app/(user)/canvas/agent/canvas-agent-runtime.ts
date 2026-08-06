@@ -3,7 +3,17 @@ import type { AiConfig } from "@/stores/use-config-store";
 import type { CanvasAgentContent, CanvasAgentProtocolMessage, CanvasAgentState, CanvasAgentToolCall, CanvasAssistantMessageStatus, CanvasAssistantReference } from "../types";
 import type { CanvasAgentContext } from "./canvas-agent-context";
 import { buildCanvasAgentSkillPrompt } from "./canvas-agent-skills";
-import { CANVAS_AGENT_TOOLS, canvasAgentActionLabel, isCanvasAgentMediaAction, normalizeCanvasAgentAction, parseCanvasAgentJson, userLikelyRequestedCanvasAction, type CanvasAgentAction, type CanvasAgentToolResult } from "./canvas-agent-tools";
+import {
+    CANVAS_AGENT_TOOLS,
+    canvasAgentActionLabel,
+    canvasAgentActionSignature,
+    isCanvasAgentMediaAction,
+    normalizeCanvasAgentAction,
+    parseCanvasAgentJson,
+    userLikelyRequestedCanvasAction,
+    type CanvasAgentAction,
+    type CanvasAgentToolResult,
+} from "./canvas-agent-tools";
 
 const MAX_AGENT_STEPS = 12;
 const MAX_AGENT_ACTIONS_PER_STEP = 12;
@@ -134,7 +144,9 @@ export function createCanvasAgentState(): CanvasAgentState {
 export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCanvasAgentResult> {
     let state = input.initialState;
     let allowTools = true;
+    let jsonFallbackRetried = false;
     let hasExecutedActions = false;
+    const attemptedWriteActionSignatures = new Set<string>();
     const executionBudget = createCanvasAgentExecutionBudget();
     let protocolMessages: CanvasAgentProtocolMessage[] = trimProtocolMessages([...input.protocolMessages, { role: "user" as const, content: buildUserContent(input.userText, input.references) }]);
 
@@ -142,6 +154,7 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
         throwIfAborted(input.signal);
         input.onEvent?.({ status: "thinking", label: step ? "正在根据画布结果继续" : "正在理解画布和创作目标" });
         const context = input.getContext(state);
+        const turnRequestedNativeTools = allowTools;
         const turn = await requestCanvasAgentTurn({
             config: input.config,
             systemPrompt: buildCanvasAgentSkillPrompt(state.phase, input.userText, context),
@@ -169,7 +182,15 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
 
         if (!actions.length && !rejectedNativeCalls.length) {
             const reply = (parsedJson.parsed ? parsedJson.reply : turn.content).trim();
-            if (!hasExecutedActions && userLikelyRequestedCanvasAction(input.userText) && !looksLikeClarifyingQuestion(reply)) {
+            // 部分中转渠道会接受 tools 参数却静默丢弃 tool_calls。首次没有任何动作时切到
+            // 已在系统提示词中约定的严格 JSON 协议，避免把本应执行的画布请求误报为不支持。
+            if (turnRequestedNativeTools && !turn.usedJsonFallback && !parsedJson.parsed && !jsonFallbackRetried && !hasExecutedActions && userLikelyRequestedCanvasAction(input.userText) && !looksLikeClarifyingQuestion(reply)) {
+                jsonFallbackRetried = true;
+                allowTools = false;
+                input.onEvent?.({ status: "thinking", label: "正在切换兼容 JSON 模式" });
+                continue;
+            }
+            if (!parsedJson.parsed && !hasExecutedActions && userLikelyRequestedCanvasAction(input.userText) && !looksLikeClarifyingQuestion(reply)) {
                 const unsupported = "当前文本模型没有返回可执行的画布工具指令。可以继续讨论文本内容，但无法可靠地自动创建节点或执行生成；请在全局配置中更换支持 Tool Calling 或稳定 JSON 输出的文本模型。";
                 protocolMessages = trimProtocolMessages([...protocolMessages, { role: "assistant" as const, content: unsupported }]);
                 return { reply: unsupported, state, protocolMessages: persistCanvasAgentProtocolMessages(protocolMessages) };
@@ -195,7 +216,7 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
               }
             : { role: "assistant", content: turn.content };
 
-        const results = actions.length ? await executeActions(actions, state, executionBudget, input.executeAction, input.signal, input.onEvent) : { items: [], state };
+        const results = actions.length ? await executeActions(actions, state, executionBudget, attemptedWriteActionSignatures, input.executeAction, input.signal, input.onEvent) : { items: [], state };
         throwIfAborted(input.signal);
         hasExecutedActions = hasExecutedActions || actions.length > 0;
         state = results.state;
@@ -234,15 +255,33 @@ async function executeActions(
     actions: CanvasAgentAction[],
     initialState: CanvasAgentState,
     budget: CanvasAgentExecutionBudget,
+    attemptedWriteActionSignatures: Set<string>,
     executeAction: (action: CanvasAgentAction) => Promise<CanvasAgentToolResult>,
     signal?: AbortSignal,
     onEvent?: (event: CanvasAgentRuntimeEvent) => void,
 ) {
     let state = initialState;
-    const executeOne = async (action: CanvasAgentAction) => {
+    // 同一模型响应可合法包含多个同签名动作；只拦截此前步骤已经尝试过的写操作。
+    const scheduledActions = actions.map((action) => {
+        if (!WRITE_ACTION_NAMES.has(action.name)) return { action };
+        const signature = canvasAgentActionSignature(action);
+        return { action, writeActionSignature: signature, repeatedFromPriorStep: attemptedWriteActionSignatures.has(signature) };
+    });
+    const executeOne = async ({ action, writeActionSignature, repeatedFromPriorStep }: (typeof scheduledActions)[number]) => {
         throwIfAborted(signal);
+        if (repeatedFromPriorStep) {
+            return {
+                action,
+                result: {
+                    ok: false,
+                    code: "duplicate_action",
+                    message: "本轮已执行过相同的画布写操作，不会重复提交",
+                } satisfies CanvasAgentToolResult,
+            };
+        }
         const budgetError = reserveCanvasAgentAction(budget, action);
         if (budgetError) return { action, result: budgetError };
+        if (writeActionSignature) attemptedWriteActionSignatures.add(writeActionSignature);
         onEvent?.({ status: "running", label: canvasAgentActionLabel(action) });
         try {
             const result = await executeAction(action);
@@ -264,8 +303,8 @@ async function executeActions(
     };
 
     const items = actions.every(isCanvasAgentMediaAction)
-        ? await Promise.all(actions.map(executeOne))
-        : await actions.reduce<Promise<Array<{ action: CanvasAgentAction; result: CanvasAgentToolResult }>>>(async (pending, action) => [...(await pending), await executeOne(action)], Promise.resolve([]));
+        ? await Promise.all(scheduledActions.map(executeOne))
+        : await scheduledActions.reduce<Promise<Array<{ action: CanvasAgentAction; result: CanvasAgentToolResult }>>>(async (pending, scheduledAction) => [...(await pending), await executeOne(scheduledAction)], Promise.resolve([]));
     return { items, state };
 }
 
@@ -280,7 +319,10 @@ function buildUserContent(text: string, references: CanvasAssistantReference[]):
 }
 
 function looksLikeClarifyingQuestion(text: string) {
-    return /[?？]|请(?:告诉|选择|确认|提供)|需要.{0,12}(?:吗|呢)|希望.{0,12}(?:吗|呢)/.test(text);
+    const withoutNegatedRequirements = text.replace(/(?:无需|不用|不必|不需要)(?:再)?(?:补充|提供|确认|选择|说明|指定|输入)/g, "").replace(/(?:并不|没有|不)(?:再)?缺少/g, "");
+    return /[?？]|请(?:告诉|选择|确认|提供|补充|说明|指定|输入)|(?:还|仍)?缺少|(?:需要|需)(?:补充|提供|确认|选择)|无法(?:确定|判断|继续)|不(?:明确|清楚)|(?:补充|提供|确认).{0,16}(?:后|再)|需要.{0,12}(?:吗|呢)|希望.{0,12}(?:吗|呢)/.test(
+        withoutNegatedRequirements,
+    );
 }
 
 function persistCanvasAgentProtocolMessages(messages: CanvasAgentProtocolMessage[]) {

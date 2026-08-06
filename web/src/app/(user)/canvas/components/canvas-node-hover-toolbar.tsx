@@ -4,12 +4,13 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { App, Modal, Segmented, Tooltip } from "antd";
 import { Download, Ellipsis, FolderPlus, Image as ImageIcon, Info, MessageSquare, Minus, Music2, Pencil, Plus, RefreshCw, Settings2, Trash2, Upload, Video } from "lucide-react";
 
+import { imageQualityLabel } from "@/components/image-settings-panel";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes, getDataUrlByteSize } from "@/lib/image-utils";
 import { useCopyText } from "@/hooks/use-copy-text";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasNodeType, type CanvasNodeData, type ViewportTransform } from "../types";
-import { isCanvasImageNodeType, isPanoramaNodeType } from "../utils/canvas-panorama";
+import { isCanvasImageNodeType, isPanoramaNodeType, normalizePanoramaQuality } from "../utils/canvas-panorama";
 import { ImageToolSettingsModal, type ImageToolbarSettingsTool } from "./canvas-image-toolbar-settings-modal";
 import { IMAGE_QUICK_TOOLS_STORAGE_KEY, PANORAMA_QUICK_TOOLS_STORAGE_KEY, buildImageToolbarTools, defaultImageQuickToolIds, defaultPanoramaQuickToolIds, readImageQuickToolsConfig, type ImageQuickToolId } from "./canvas-image-toolbar-tools";
 
@@ -236,6 +237,10 @@ export function CanvasNodeHoverToolbar({
 export function CanvasNodeInfoModal({ node, open, onClose }: { node: CanvasNodeData | null; open: boolean; onClose: () => void }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const [view, setView] = useState<"info" | "json">("info");
+    const isPanorama = isPanoramaNodeType(node?.type);
+    const panoramaNaturalWidth = isPanorama && typeof node?.metadata?.naturalWidth === "number" && Number.isFinite(node.metadata.naturalWidth) && node.metadata.naturalWidth > 0 ? Math.round(node.metadata.naturalWidth) : null;
+    const panoramaNaturalHeight = isPanorama && typeof node?.metadata?.naturalHeight === "number" && Number.isFinite(node.metadata.naturalHeight) && node.metadata.naturalHeight > 0 ? Math.round(node.metadata.naturalHeight) : null;
+    const panoramaActualSize = panoramaNaturalWidth !== null && panoramaNaturalHeight !== null ? `${panoramaNaturalWidth} × ${panoramaNaturalHeight}` : null;
     const imageBytes = isCanvasImageNodeType(node?.type) && node?.metadata?.content ? getDataUrlByteSize(node.metadata.content) : 0;
     const batchCount = isCanvasImageNodeType(node?.type) ? node?.metadata?.batchChildIds?.length || 0 : 0;
     const json = useMemo(() => {
@@ -300,7 +305,16 @@ export function CanvasNodeInfoModal({ node, open, onClose }: { node: CanvasNodeD
                                                     : "生成配置"
                                 }
                             />
-                            <InfoRow label="尺寸" value={`${Math.round(node.width)} x ${Math.round(node.height)}`} />
+                            {isPanorama ? (
+                                <>
+                                    <InfoRow label="画布预览" value={`${Math.round(node.width)} × ${Math.round(node.height)}`} />
+                                    <InfoRow label="输出比例" value="2:1" />
+                                    <InfoRow label="图像质量" value={imageQualityLabel(normalizePanoramaQuality(node.metadata?.quality))} />
+                                    {panoramaActualSize ? <InfoRow label="实际输出" value={panoramaActualSize} /> : null}
+                                </>
+                            ) : (
+                                <InfoRow label="尺寸" value={`${Math.round(node.width)} x ${Math.round(node.height)}`} />
+                            )}
                             <InfoRow label="位置" value={`${Math.round(node.position.x)}, ${Math.round(node.position.y)}`} />
                             <InfoRow label="状态" value={node.metadata?.status || "idle"} />
                             {batchCount > 1 ? <InfoRow label="图片组" value={`${batchCount} 张`} /> : null}

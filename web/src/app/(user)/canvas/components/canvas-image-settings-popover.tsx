@@ -19,12 +19,15 @@ type CanvasImageSettingsPopoverProps = {
     getPopupContainer?: (triggerNode: HTMLElement) => HTMLElement;
     placement?: "topLeft" | "top" | "topRight" | "bottomLeft" | "bottom" | "bottomRight";
     autoAdjustOverflow?: boolean;
+    buttonLabel?: string;
+    fixedSizeLabel?: string;
+    fixedSizeHint?: string;
     showCount?: boolean;
     showSize?: boolean;
     buttonIcon?: ReactNode;
 };
 
-export function CanvasImageSettingsPopover({ config, onConfigChange, onOpenChange, buttonClassName, placement = "topLeft", showCount = true, showSize = true, buttonIcon }: CanvasImageSettingsPopoverProps) {
+export function CanvasImageSettingsPopover({ config, onConfigChange, onOpenChange, buttonClassName, placement = "topLeft", showCount = true, showSize = true, buttonLabel, fixedSizeLabel, fixedSizeHint, buttonIcon }: CanvasImageSettingsPopoverProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const buttonRef = useRef<HTMLSpanElement>(null);
     const panelRef = useRef<HTMLDivElement>(null);
@@ -61,7 +64,7 @@ export function CanvasImageSettingsPopover({ config, onConfigChange, onOpenChang
         };
     }, [onOpenChange, open]);
 
-    const panel = open && buttonRect ? <ImageSettingsPortal buttonRect={buttonRect} panelRef={panelRef} placement={placement} theme={theme} config={config} onConfigChange={onConfigChange} showCount={showCount} showSize={showSize} /> : null;
+    const panel = open && buttonRect ? <ImageSettingsPortal buttonRect={buttonRect} panelRef={panelRef} placement={placement} theme={theme} config={config} onConfigChange={onConfigChange} showCount={showCount} showSize={showSize} fixedSizeLabel={fixedSizeLabel} fixedSizeHint={fixedSizeHint} /> : null;
 
     return (
         <>
@@ -72,11 +75,14 @@ export function CanvasImageSettingsPopover({ config, onConfigChange, onOpenChang
                     className={buttonClassName || "!h-8 !max-w-[180px] !justify-start !rounded-full !px-2.5"}
                     style={{ background: theme.node.fill, color: theme.node.text }}
                     icon={buttonIcon || <Settings2 className="size-3.5" />}
+                    aria-label={buttonLabel || "图像设置"}
+                    title={buttonLabel || "图像设置"}
                     onClick={() => updateOpen(!open)}
                 >
                     <span className="truncate">
+                        {buttonLabel ? <>{buttonLabel} · </> : null}
                         {imageQualityLabel(quality)}
-                        {showSize ? <> · {imageSizeLabel(activeSize)}</> : null}
+                        {fixedSizeLabel ? <> · {fixedSizeLabel}</> : showSize ? <> · {imageSizeLabel(activeSize)}</> : null}
                         {showCount ? <> · {count} 张</> : null}
                     </span>
                 </Button>
@@ -95,6 +101,8 @@ function ImageSettingsPortal({
     onConfigChange,
     showCount,
     showSize,
+    fixedSizeLabel,
+    fixedSizeHint,
 }: {
     buttonRect: DOMRect;
     panelRef: RefObject<HTMLDivElement | null>;
@@ -104,10 +112,12 @@ function ImageSettingsPortal({
     onConfigChange: (key: keyof AiConfig, value: string) => void;
     showCount: boolean;
     showSize: boolean;
+    fixedSizeLabel?: string;
+    fixedSizeHint?: string;
 }) {
-    const width = 356;
-    const gap = 8;
     const margin = 12;
+    const width = Math.min(356, Math.max(280, window.innerWidth - margin * 2));
+    const gap = 8;
     const alignRight = placement?.endsWith("Right");
     const alignCenter = placement === "top" || placement === "bottom";
     const left = alignCenter ? buttonRect.left + buttonRect.width / 2 - width / 2 : alignRight ? buttonRect.right - width : buttonRect.left;
@@ -128,7 +138,17 @@ function ImageSettingsPortal({
 
     return createPortal(
         <div ref={panelRef} className="canvas-image-settings-popover" style={style} onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
-            <ImageSettingsPanel config={config} onConfigChange={(key, value) => onConfigChange(key, value)} theme={theme} className="space-y-4" showCount={showCount} showSize={showSize} />
+            {fixedSizeLabel ? <div className="mb-4 text-lg font-semibold">图像设置</div> : null}
+            {fixedSizeLabel ? (
+                <div className="mb-4 border-b pb-4" style={{ borderColor: theme.node.stroke }}>
+                    <div className="flex items-center justify-between gap-3 text-sm font-medium">
+                        <span>输出比例</span>
+                        <span>{fixedSizeLabel}</span>
+                    </div>
+                    {fixedSizeHint ? <div className="mt-1 text-xs leading-5 opacity-70">{fixedSizeHint}</div> : null}
+                </div>
+            ) : null}
+            <ImageSettingsPanel config={config} onConfigChange={(key, value) => onConfigChange(key, value)} theme={theme} className="space-y-4" showTitle={!fixedSizeLabel} showCount={showCount} showSize={showSize} />
         </div>,
         document.body,
     );

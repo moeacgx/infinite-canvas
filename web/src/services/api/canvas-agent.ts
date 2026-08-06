@@ -4,7 +4,7 @@ import { streamGeminiChat, type GeminiChatMessage, type GeminiFunctionTool } fro
 import { runModelPlugin } from "@/services/api/model-plugin";
 import { resolveModelRequestConfig, resolveModelScript, type AiConfig } from "@/stores/use-config-store";
 import type { CanvasAgentProtocolMessage, CanvasAgentToolCall } from "@/app/(user)/canvas/types";
-import type { CanvasAgentToolDefinition } from "@/app/(user)/canvas/agent/canvas-agent-tools";
+import { createCanvasAgentFallbackActionIdFactory, type CanvasAgentToolDefinition } from "@/app/(user)/canvas/agent/canvas-agent-tools";
 
 export type CanvasAgentModelTurn = {
     content: string;
@@ -114,14 +114,18 @@ async function requestCompletion(config: AiConfig, script: string, systemPrompt:
         try {
             // requestMessages 已包含合并后的系统提示词，清空配置值避免 Gemini 再注入一次。
             const result = await streamGeminiChat({ ...config, systemPrompt: "" }, requestMessages as GeminiChatMessage[], tools as GeminiFunctionTool[], undefined, { signal });
+            const fallbackActionId = createCanvasAgentFallbackActionIdFactory();
             return {
                 content: result.content,
-                toolCalls: result.toolCalls.map((toolCall, index) => ({
-                    id: toolCall.id || `tool-call-${index}`,
-                    name: toolCall.name,
-                    arguments: parseToolArguments(toolCall.arguments),
-                    ...(toolCall.thoughtSignature ? { thoughtSignature: toolCall.thoughtSignature } : {}),
-                })),
+                toolCalls: result.toolCalls.map((toolCall) => {
+                    const args = parseToolArguments(toolCall.arguments);
+                    return {
+                        id: toolCall.id || fallbackActionId(toolCall.name, args),
+                        name: toolCall.name,
+                        arguments: args,
+                        ...(toolCall.thoughtSignature ? { thoughtSignature: toolCall.thoughtSignature } : {}),
+                    };
+                }),
             };
         } catch (error) {
             if (isRequestCanceled(error, signal)) throw new DOMException("请求已取消", "AbortError");
@@ -158,18 +162,14 @@ async function requestCompletion(config: AiConfig, script: string, systemPrompt:
     if (!message) throw new CanvasAgentRequestError(readError(payload, response.status) || "文本模型没有返回内容", response.status);
 
     refreshRemoteUser(config);
+    const fallbackActionId = createCanvasAgentFallbackActionIdFactory();
     return {
         content: typeof message.content === "string" ? message.content : "",
-        toolCalls: (message.tool_calls || []).flatMap((toolCall, index) => {
+        toolCalls: (message.tool_calls || []).flatMap((toolCall) => {
             const name = toolCall.function?.name?.trim();
             if (!name) return [];
-            return [
-                {
-                    id: toolCall.id || "tool-call-" + index,
-                    name,
-                    arguments: parseToolArguments(toolCall.function?.arguments),
-                },
-            ];
+            const args = parseToolArguments(toolCall.function?.arguments);
+            return [{ id: toolCall.id || fallbackActionId(name, args), name, arguments: args }];
         }),
     };
 }
@@ -179,14 +179,16 @@ function normalizePluginResult(value: unknown) {
     if (!value || typeof value !== "object") return { content: "", toolCalls: [] };
     const payload = value as { content?: unknown; toolCalls?: unknown; tool_calls?: unknown };
     const calls = Array.isArray(payload.toolCalls) ? payload.toolCalls : Array.isArray(payload.tool_calls) ? payload.tool_calls : [];
+    const fallbackActionId = createCanvasAgentFallbackActionIdFactory();
     return {
         content: typeof payload.content === "string" ? payload.content : "",
-        toolCalls: calls.flatMap((item, index) => {
+        toolCalls: calls.flatMap((item) => {
             if (!item || typeof item !== "object") return [];
             const call = item as { id?: unknown; name?: unknown; arguments?: unknown; function?: { name?: unknown; arguments?: unknown } };
             const name = String(call.name || call.function?.name || "").trim();
             if (!name) return [];
-            return [{ id: String(call.id || `tool-call-${index}`), name, arguments: parseToolArguments(call.arguments ?? call.function?.arguments) }];
+            const args = parseToolArguments(call.arguments ?? call.function?.arguments);
+            return [{ id: String(call.id || fallbackActionId(name, args)), name, arguments: args }];
         }),
     };
 }

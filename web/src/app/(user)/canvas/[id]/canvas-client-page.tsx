@@ -24,7 +24,7 @@ import { useCanvasAgentStore } from "@/stores/use-agent-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { cropDataUrl, splitDataUrl, upscaleDataUrl } from "../utils/canvas-image-data";
 import { fitNodeSize, nodeSizeFromRatio } from "../utils/canvas-node-size";
-import { PANORAMA_IMAGE_SIZE, PANORAMA_NODE_SIZE, buildPanoramaPrompt, isCanvasImageNodeType, isPanoramaNodeType } from "../utils/canvas-panorama";
+import { PANORAMA_DEFAULT_QUALITY, PANORAMA_IMAGE_SIZE, PANORAMA_NODE_SIZE, buildPanoramaPrompt, isCanvasImageNodeType, isPanoramaNodeType, normalizePanoramaQuality, resolvePanoramaPreviewSize } from "../utils/canvas-panorama";
 import { applyCameraPrompt } from "../utils/canvas-camera";
 import { App, Button, Dropdown, Modal } from "antd";
 import { NODE_DEFAULT_SIZE, getNodeSpec } from "../constants";
@@ -59,7 +59,7 @@ import { GROUP_PADDING, findContainingGroupId, findGroupDropTarget, getNodeBound
 import { applyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "../utils/canvas-agent-ops";
 import { deleteCanvasNodes as deleteCanvasNodesFromState } from "../utils/canvas-node-deletion";
 import { createLinkedAbortController } from "../utils/canvas-generation-abort";
-import { buildCanvasAgentContext } from "../agent/canvas-agent-context";
+import { buildCanvasAgentContext, canvasAgentMediaTaskId } from "../agent/canvas-agent-context";
 import type { CanvasAgentAction, CanvasAgentToolResult } from "../agent/canvas-agent-tools";
 import { buildNodeContext } from "@/lib/canvas/plugin-node-context";
 import { getNodeDefinition, isBuiltinNodeType, isKnownNodeType, listNodeDefinitions, useNodeRegistryVersion } from "@/lib/canvas/node-registry";
@@ -1803,7 +1803,7 @@ function InfiniteCanvasPage() {
             position: { x: position.x - size.width / 2, y: position.y - size.height / 2 },
             width: size.width,
             height: size.height,
-            metadata: isPanorama ? { ...imageMetadata(image), size: PANORAMA_IMAGE_SIZE, panoramaProjection: "equirectangular" } : imageMetadata(image),
+            metadata: isPanorama ? { ...imageMetadata(image), size: PANORAMA_IMAGE_SIZE, quality: PANORAMA_DEFAULT_QUALITY, panoramaProjection: "equirectangular" } : imageMetadata(image),
         };
         setNodes((prev) => [...prev, newNode]);
         setSelectedNodeIds(new Set([id]));
@@ -2377,7 +2377,7 @@ function InfiniteCanvasPage() {
             const baseGenerationConfig = buildGenerationConfig(effectiveConfig, node, "image");
             const selectedModel = payload.model || baseGenerationConfig.model;
             const selectedChannelId = payload.channelId || decodeChannelModel(selectedModel)?.channelId || baseGenerationConfig.imageChannelId || baseGenerationConfig.activeChannelId;
-            const generationConfig = {
+            const rawGenerationConfig = {
                 ...baseGenerationConfig,
                 model: selectedModel,
                 imageModel: selectedModel,
@@ -2386,6 +2386,7 @@ function InfiniteCanvasPage() {
                 count: "1",
                 size: node.metadata?.size || "auto",
             };
+            const generationConfig = isPanoramaNodeType(node.type) ? normalizePanoramaGenerationConfig(rawGenerationConfig) : rawGenerationConfig;
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
                 openConfigDialog(true);
                 return;
@@ -2611,7 +2612,7 @@ function InfiniteCanvasPage() {
                                 generationType: undefined,
                                 model: panorama ? node.metadata?.model : undefined,
                                 size: panorama ? PANORAMA_IMAGE_SIZE : undefined,
-                                quality: panorama ? node.metadata?.quality : undefined,
+                                quality: panorama ? node.metadata?.quality || PANORAMA_DEFAULT_QUALITY : undefined,
                                 count: panorama ? node.metadata?.count : undefined,
                                 references: undefined,
                                 primaryImageId: undefined,
@@ -2798,10 +2799,11 @@ function InfiniteCanvasPage() {
                         : [];
                     const referenceImages = [...sourceReference, ...generationContext.referenceImages];
                     const panoramaPrompt = buildPanoramaPrompt(effectivePrompt, referenceImages.length > 0);
-                    const panoramaGenerationConfig = { ...generationConfig, size: PANORAMA_IMAGE_SIZE };
+                    const panoramaGenerationConfig = normalizePanoramaGenerationConfig(generationConfig);
                     const count = getGenerationCount(panoramaGenerationConfig.count);
                     const isEmptyPanoramaNode = !sourceNode?.metadata?.content;
                     const panoramaNodeConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Panorama];
+                    const panoramaPreviewSize = resolvePanoramaPreviewSize(sourceNode?.width, sourceNode?.height);
                     const parentPosition = sourceNode?.position || { x: 0, y: 0 };
                     const gap = 96;
                     const rowGap = 36;
@@ -2818,8 +2820,8 @@ function InfiniteCanvasPage() {
                             x: isEmptyPanoramaNode ? parentPosition.x : parentPosition.x + panoramaNodeConfig.width + gap,
                             y: parentPosition.y + panoramaNodeConfig.height / 2 - panoramaNodeConfig.height / 2,
                         },
-                        width: isEmptyPanoramaNode ? sourceNode?.width || panoramaNodeConfig.width : panoramaNodeConfig.width,
-                        height: isEmptyPanoramaNode ? sourceNode?.height || panoramaNodeConfig.height : panoramaNodeConfig.height,
+                        width: isEmptyPanoramaNode ? panoramaPreviewSize.width : panoramaNodeConfig.width,
+                        height: isEmptyPanoramaNode ? panoramaPreviewSize.height : panoramaNodeConfig.height,
                         metadata: {
                             ...buildImageGenerationMetadata(referenceImages.length ? "edit" : "generation", panoramaGenerationConfig, count, referenceImages),
                             prompt: panoramaSourcePrompt,
@@ -3485,7 +3487,7 @@ function InfiniteCanvasPage() {
                     const nodeId = stringValue("nodeId");
                     const node = getNode(nodeId);
                     if (!node) return missingNodeResult(nodeId);
-                    if (node.type !== CanvasNodeType.Image && node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) return { ok: false, code: "not_media_node", message: "节点 " + nodeId + " 不是媒体节点" };
+                    if (!isCanvasImageNodeType(node.type) && node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) return { ok: false, code: "not_media_node", message: "节点 " + nodeId + " 不是媒体节点" };
                     return { ok: true, ...canvasAgentTaskSummary(node) };
                 }
 
@@ -3681,6 +3683,7 @@ function InfiniteCanvasPage() {
                 hasSavedImageMetadata && savedImageMetadata
                     ? { ...buildSavedImageGenerationConfig(effectiveConfig, savedImageMetadata), size: isPanorama ? PANORAMA_IMAGE_SIZE : savedImageMetadata.size || effectiveConfig.size }
                     : { ...buildGenerationConfig(effectiveConfig, sourceNode, node.type === CanvasNodeType.Text ? "text" : node.type === CanvasNodeType.Video ? "video" : node.type === CanvasNodeType.Audio ? "audio" : "image"), count: "1" };
+            if (isPanorama) generationConfig = normalizePanoramaGenerationConfig({ ...generationConfig, quality: savedImageMetadata?.quality || sourceNode.metadata?.quality || PANORAMA_DEFAULT_QUALITY });
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
                 openConfigDialog(true);
                 return;
@@ -3828,7 +3831,7 @@ function InfiniteCanvasPage() {
                     : await requestGeneration(generationConfig, requestPrompt, { signal: controller.signal }).then((items) => items[0]);
                 const uploadedImage = await uploadImage(image.dataUrl);
                 const imageConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
-                const imageSize = isPanorama ? PANORAMA_NODE_SIZE : fitNodeSize(uploadedImage.width, uploadedImage.height, imageConfig.width, imageConfig.height);
+                const imageSize = isPanorama ? resolvePanoramaPreviewSize(node.width, node.height) : fitNodeSize(uploadedImage.width, uploadedImage.height, imageConfig.width, imageConfig.height);
                 const generationMetadata = savedImageMetadata?.generationType
                     ? {
                           generationType: savedImageMetadata.generationType,
@@ -5113,6 +5116,14 @@ function getGenerationCount(count: string) {
     return Math.max(1, Math.min(15, Math.floor(Math.abs(Number(count)) || 1)));
 }
 
+function normalizePanoramaGenerationConfig(config: AiConfig): AiConfig {
+    return {
+        ...config,
+        size: PANORAMA_IMAGE_SIZE,
+        quality: normalizePanoramaQuality(config.quality),
+    };
+}
+
 function applyNodeConfigPatch(node: CanvasNodeData, patch: Partial<CanvasNodeData["metadata"]>) {
     const safePatch = patch || {};
     const isPanorama = isPanoramaNodeType(node.type);
@@ -5176,7 +5187,7 @@ function canvasAgentNodeSummary(node: CanvasNodeData) {
         size: node.metadata?.size,
         seconds: node.metadata?.seconds,
         generateAudio: node.metadata?.generateAudio,
-        taskId: node.metadata?.videoTaskId,
+        taskId: canvasAgentMediaTaskId(node) || undefined,
         progress: node.metadata?.progress,
         error: node.metadata?.errorDetails,
         groupId: node.metadata?.groupId,
@@ -5188,7 +5199,7 @@ function canvasAgentTaskSummary(node: CanvasNodeData) {
     return {
         type: node.type,
         status: node.metadata?.status || NODE_STATUS_IDLE,
-        taskId: node.metadata?.videoTaskId,
+        taskId: canvasAgentMediaTaskId(node) || undefined,
         progress: node.metadata?.progress,
         error: node.metadata?.errorDetails,
         mediaUrl: content && !content.startsWith("data:") ? content : undefined,
@@ -5203,7 +5214,7 @@ function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefine
         ...config,
         model,
         ...capabilityModelPatch(mode, model),
-        quality: node?.metadata?.quality || config.quality || defaultConfig.quality,
+        quality: node?.metadata?.quality || (isPanoramaNodeType(node?.type) ? PANORAMA_DEFAULT_QUALITY : config.quality || defaultConfig.quality),
         size: isPanoramaNodeType(node?.type) ? PANORAMA_IMAGE_SIZE : node?.metadata?.size || (mode === "video" ? config.videoSize || defaultConfig.videoSize : config.size || defaultConfig.size),
         background: node?.metadata?.background ?? config.background ?? defaultConfig.background,
         videoSeconds: node?.metadata?.seconds || config.videoSeconds || defaultConfig.videoSeconds,

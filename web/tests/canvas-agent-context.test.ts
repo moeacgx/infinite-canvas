@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildCanvasAgentContext, serializeCanvasAgentContext } from "../src/app/(user)/canvas/agent/canvas-agent-context.ts";
+import { buildCanvasAgentContext, canvasAgentMediaTaskId, serializeCanvasAgentContext } from "../src/app/(user)/canvas/agent/canvas-agent-context.ts";
 import { createCanvasAgentState } from "../src/app/(user)/canvas/agent/canvas-agent-runtime.ts";
 import { CanvasNodeType, type CanvasNodeData } from "../src/app/(user)/canvas/types.ts";
 import { defaultConfig } from "../src/stores/use-config-store.ts";
@@ -17,6 +17,17 @@ function textNode(id: string, content: string): CanvasNodeData {
         metadata: { content, prompt: content, status: "success" },
     };
 }
+
+function mediaNode(type: CanvasNodeData["type"], metadata: CanvasNodeData["metadata"]): CanvasNodeData {
+    return { id: String(type), type, title: String(type), position: { x: 0, y: 0 }, width: 320, height: 180, metadata };
+}
+
+test("Agent 按图片、全景、视频和音频类型读取对应任务 ID", () => {
+    assert.equal(canvasAgentMediaTaskId(mediaNode(CanvasNodeType.Image, { imageTaskId: "image-task" })), "image-task");
+    assert.equal(canvasAgentMediaTaskId(mediaNode(CanvasNodeType.Panorama, { imageTaskId: "panorama-task" })), "panorama-task");
+    assert.equal(canvasAgentMediaTaskId(mediaNode(CanvasNodeType.Video, { videoTaskId: "video-task" })), "video-task");
+    assert.equal(canvasAgentMediaTaskId(mediaNode(CanvasNodeType.Audio, { audioTaskId: "audio-task" })), "audio-task");
+});
 
 test("Agent 上下文限制总文本规模且优先保留选中节点", () => {
     const nodes = Array.from({ length: 120 }, (_, index) => textNode(`node-${index}`, String(index).padStart(3, "0") + "x".repeat(3997)));
