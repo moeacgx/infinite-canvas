@@ -198,15 +198,17 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
 
         if (!actions.length && !rejectedNativeCalls.length) {
             const reply = (parsedJson.parsed ? parsedJson.reply : turn.content).trim();
+            const likelyCanvasAction = parsedJson.actionLike || userLikelyRequestedCanvasAction(input.userText);
+            const isClarifyingReply = !parsedJson.actionLike && looksLikeClarifyingQuestion(reply);
             // 部分中转渠道会接受 tools 参数却静默丢弃 tool_calls。首次没有任何动作时切到
             // 已在系统提示词中约定的严格 JSON 协议，避免把本应执行的画布请求误报为不支持。
-            if (turnRequestedNativeTools && !turn.usedJsonFallback && !parsedJson.parsed && !jsonFallbackRetried && !hasExecutedActions && userLikelyRequestedCanvasAction(input.userText) && !looksLikeClarifyingQuestion(reply)) {
+            if (turnRequestedNativeTools && !turn.usedJsonFallback && !parsedJson.parsed && !jsonFallbackRetried && !hasExecutedActions && likelyCanvasAction && !isClarifyingReply) {
                 jsonFallbackRetried = true;
                 allowTools = false;
                 input.onEvent?.({ status: "thinking", label: "正在切换兼容 JSON 模式" });
                 continue;
             }
-            if (!parsedJson.parsed && !hasExecutedActions && userLikelyRequestedCanvasAction(input.userText) && !looksLikeClarifyingQuestion(reply)) {
+            if (!parsedJson.parsed && !hasExecutedActions && likelyCanvasAction && !isClarifyingReply) {
                 const unsupported = "当前文本模型没有返回可执行的画布工具指令。可以继续讨论文本内容，但无法可靠地自动创建节点或执行生成；请在全局配置中更换支持 Tool Calling 或稳定 JSON 输出的文本模型。";
                 protocolMessages = trimProtocolMessages([...protocolMessages, { role: "assistant" as const, content: unsupported }]);
                 return { reply: unsupported, state, protocolMessages: persistCanvasAgentProtocolMessages(protocolMessages) };
