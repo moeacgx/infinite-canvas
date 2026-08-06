@@ -276,4 +276,6 @@ test("创作 Agent 素材入口只更新草稿附件而不复用页面立即插�
     assert.match(panelSource, /onPasteImage=\{\(file\) => void handleAssistantFile\(file\)\}/);
     assert.match(panelSource, /onInsert=\{\(payload\) => \{\s*addDraftAsset\(payload\);/);
     assert.match(pageSource, /<CanvasAssistantPanel\s+key=\{projectId\}/);
+    const actionSource = panelSource.slice(panelSource.indexOf("executeAction: async (action)"), panelSource.indexOf("signal: controller.signal", panelSource.indexOf("executeAction: async (action)")));
+    assert.ok(actionSource.indexOf("const confirmed") < actionSource.indexOf("await onMaterializeReferences"));
 });
