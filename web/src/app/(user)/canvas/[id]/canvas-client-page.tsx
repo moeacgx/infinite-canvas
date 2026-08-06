@@ -2377,7 +2377,7 @@ function InfiniteCanvasPage() {
             const baseGenerationConfig = buildGenerationConfig(effectiveConfig, node, "image");
             const selectedModel = payload.model || baseGenerationConfig.model;
             const selectedChannelId = payload.channelId || decodeChannelModel(selectedModel)?.channelId || baseGenerationConfig.imageChannelId || baseGenerationConfig.activeChannelId;
-            const generationConfig = {
+            const rawGenerationConfig = {
                 ...baseGenerationConfig,
                 model: selectedModel,
                 imageModel: selectedModel,
@@ -2386,6 +2386,7 @@ function InfiniteCanvasPage() {
                 count: "1",
                 size: node.metadata?.size || "auto",
             };
+            const generationConfig = isPanoramaNodeType(node.type) ? normalizePanoramaGenerationConfig(rawGenerationConfig) : rawGenerationConfig;
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
                 openConfigDialog(true);
                 return;
@@ -3830,7 +3831,7 @@ function InfiniteCanvasPage() {
                     : await requestGeneration(generationConfig, requestPrompt, { signal: controller.signal }).then((items) => items[0]);
                 const uploadedImage = await uploadImage(image.dataUrl);
                 const imageConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
-                const imageSize = isPanorama ? PANORAMA_NODE_SIZE : fitNodeSize(uploadedImage.width, uploadedImage.height, imageConfig.width, imageConfig.height);
+                const imageSize = isPanorama ? resolvePanoramaPreviewSize(node.width, node.height) : fitNodeSize(uploadedImage.width, uploadedImage.height, imageConfig.width, imageConfig.height);
                 const generationMetadata = savedImageMetadata?.generationType
                     ? {
                           generationType: savedImageMetadata.generationType,

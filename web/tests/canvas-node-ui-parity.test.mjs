@@ -86,6 +86,14 @@ test("全景首次生成和重试共用 2:1 配置归一化并将自动质量提
     assert.match(retryBlock, /quality:\s*savedImageMetadata\?\.quality\s*\|\|\s*sourceNode\.metadata\?\.quality\s*\|\|\s*PANORAMA_DEFAULT_QUALITY/);
     assert.match(retryBlock, /requestEdit\(generationConfig,/);
     assert.match(retryBlock, /requestGeneration\(generationConfig,/);
+    assert.match(source, /const imageSize = isPanorama\s*\?\s*resolvePanoramaPreviewSize\(node\.width, node\.height\)\s*:\s*fitNodeSize/);
+
+    const maskEditStart = source.indexOf("const maskEditImageNode");
+    const maskEditBlock = source.slice(maskEditStart, source.indexOf("const upscaleImageNode", maskEditStart));
+    assert.ok(maskEditStart >= 0 && maskEditBlock, "全景局部编辑应在请求前归一化最终配置");
+    assert.match(maskEditBlock, /const rawGenerationConfig\s*=\s*\{/);
+    assert.match(maskEditBlock, /isPanoramaNodeType\(node\.type\)\s*\?\s*normalizePanoramaGenerationConfig\(rawGenerationConfig\)\s*:\s*rawGenerationConfig/);
+    assert.match(maskEditBlock, /requestEdit\(generationConfig,/);
     assert.match(source, /if \(!isCanvasImageNodeType\(node\.type\) && node\.type !== CanvasNodeType\.Video && node\.type !== CanvasNodeType\.Audio\)/);
     const taskSummary = source.match(/function canvasAgentTaskSummary\([\s\S]*?\n\}/)?.[0];
     assert.ok(taskSummary, "Agent 应提供独立的媒体任务摘要");
