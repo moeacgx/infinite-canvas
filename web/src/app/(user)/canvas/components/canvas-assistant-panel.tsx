@@ -127,7 +127,6 @@ export function CanvasAssistantPanel({
         return () => {
             mountedRef.current = false;
             abortRef.current?.abort();
-            if (attachmentCleanupTimerRef.current) clearTimeout(attachmentCleanupTimerRef.current);
             pendingDeleteRef.current?.resolve(false);
             pendingDeleteRef.current = null;
         };
@@ -202,6 +201,18 @@ export function CanvasAssistantPanel({
         attachmentCleanupTimerRef.current = window.setTimeout(run, 500);
     };
 
+    const changeUploadingAssetCount = (delta: 1 | -1) => {
+        if (delta > 0 && attachmentCleanupTimerRef.current) {
+            clearTimeout(attachmentCleanupTimerRef.current);
+            attachmentCleanupTimerRef.current = null;
+        }
+        uploadingAssetCountRef.current = Math.max(0, uploadingAssetCountRef.current + delta);
+        if (delta < 0 && uploadingAssetCountRef.current === 0 && attachmentCleanupRequestedRef.current) scheduleAttachmentCleanup();
+        if (mountedRef.current) {
+            setUploadingAssetCount(uploadingAssetCountRef.current);
+        }
+    };
+
     const removeDraftAsset = (assetId: string) => {
         const sessionId = activeSessionIdRef.current || resolvedActiveSessionId;
         if (!sessionId) return;
@@ -212,10 +223,6 @@ export function CanvasAssistantPanel({
     const handleAssistantFile = async (file: File) => {
         const targetSessionId = activeSessionIdRef.current || resolvedActiveSessionId;
         if (!targetSessionId) return;
-        if (attachmentCleanupTimerRef.current) {
-            clearTimeout(attachmentCleanupTimerRef.current);
-            attachmentCleanupTimerRef.current = null;
-        }
         const isImage = file.type.startsWith("image/");
         const isVideo = file.type.startsWith("video/");
         const isAudio = file.type.startsWith("audio/") || /\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(file.name);
@@ -223,8 +230,7 @@ export function CanvasAssistantPanel({
             toast.warning("请选择图片、视频或音频文件");
             return;
         }
-        uploadingAssetCountRef.current += 1;
-        setUploadingAssetCount(uploadingAssetCountRef.current);
+        changeUploadingAssetCount(1);
         try {
             let payload: InsertAssetPayload;
             if (isImage) {
@@ -248,11 +254,7 @@ export function CanvasAssistantPanel({
         } catch (error) {
             if (mountedRef.current) toast.error(error instanceof Error ? error.message : "素材上传失败");
         } finally {
-            if (mountedRef.current) {
-                uploadingAssetCountRef.current = Math.max(0, uploadingAssetCountRef.current - 1);
-                setUploadingAssetCount(uploadingAssetCountRef.current);
-                if (uploadingAssetCountRef.current === 0 && attachmentCleanupRequestedRef.current) scheduleAttachmentCleanup();
-            }
+            changeUploadingAssetCount(-1);
         }
     };
 
@@ -630,6 +632,7 @@ export function CanvasAssistantPanel({
                 <AssetPickerModal
                     open={assetPickerOpen}
                     defaultTab="my-assets"
+                    onUploadBusyChange={changeUploadingAssetCount}
                     onInsert={(payload) => {
                         addDraftAsset(payload);
                         setAssetPickerOpen(false);

@@ -19,9 +19,10 @@ type Props = {
     defaultTab?: AssetPickerTab;
     onInsert: (payload: InsertAssetPayload) => void;
     onClose: () => void;
+    onUploadBusyChange?: (delta: 1 | -1) => void;
 };
 
-export function AssetPickerModal({ open, defaultTab = "my-assets", onInsert, onClose }: Props) {
+export function AssetPickerModal({ open, defaultTab = "my-assets", onInsert, onClose, onUploadBusyChange }: Props) {
     const [activeTab, setActiveTab] = useState<AssetPickerTab>(defaultTab);
 
     useEffect(() => {
@@ -35,7 +36,7 @@ export function AssetPickerModal({ open, defaultTab = "my-assets", onInsert, onC
                 onChange={(key) => setActiveTab(key as AssetPickerTab)}
                 items={[
                     { key: "my-assets", label: "我的素材", children: <MyAssetsTab onInsert={onInsert} /> },
-                    { key: "library", label: "素材库", children: <LibraryTab onInsert={onInsert} /> },
+                    { key: "library", label: "素材库", children: <LibraryTab onInsert={onInsert} onUploadBusyChange={onUploadBusyChange} /> },
                 ]}
             />
         </Modal>
@@ -52,7 +53,7 @@ const kindOptions = [
     { label: "音频", value: "audio" },
 ];
 
-function LibraryTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => void }) {
+function LibraryTab({ onInsert, onUploadBusyChange }: { onInsert: (payload: InsertAssetPayload) => void; onUploadBusyChange?: (delta: 1 | -1) => void }) {
     const { message } = App.useApp();
     const [keyword, setKeyword] = useState("");
     const [kindFilter, setKindFilter] = useState("");
@@ -69,6 +70,7 @@ function LibraryTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => v
     const total = query.data?.total || 0;
 
     const handleInsert = async (asset: AssetLibraryItem) => {
+        let imageUploadStarted = false;
         try {
             setInserting(asset.id);
             const assetType = String(asset.type);
@@ -79,12 +81,15 @@ function LibraryTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => v
             } else if (assetType === "audio") {
                 onInsert({ kind: "audio", url: asset.url, title: asset.title, source: "library" });
             } else {
+                imageUploadStarted = true;
+                onUploadBusyChange?.(1);
                 const stored = await uploadImage(asset.url);
                 onInsert({ kind: "image", dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType, title: asset.title, source: "library" });
             }
         } catch (error) {
             message.error(error instanceof Error ? error.message : "插入失败");
         } finally {
+            if (imageUploadStarted) onUploadBusyChange?.(-1);
             setInserting(null);
         }
     };

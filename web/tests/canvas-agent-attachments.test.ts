@@ -262,6 +262,7 @@ test("模型用户内容为有效图片引用生成 image_url 并忽略无效媒
 
 test("创作 Agent 素材入口只更新草稿附件而不复用页面立即插入节点回调", () => {
     const panelSource = readFileSync(new URL("../src/app/(user)/canvas/components/canvas-assistant-panel.tsx", import.meta.url), "utf8");
+    const pickerSource = readFileSync(new URL("../src/app/(user)/canvas/components/asset-picker-modal.tsx", import.meta.url), "utf8");
     const pageSource = readFileSync(new URL("../src/app/(user)/canvas/[id]/canvas-client-page.tsx", import.meta.url), "utf8");
     const propsSource = panelSource.slice(panelSource.indexOf("type CanvasAssistantPanelProps"), panelSource.indexOf("type PendingDeleteConfirmation"));
     const panelCallStart = pageSource.indexOf("<CanvasAssistantPanel");
@@ -279,6 +280,22 @@ test("创作 Agent 素材入口只更新草稿附件而不复用页面立即插�
     assert.match(panelSource, /if \(uploadingAssetCountRef\.current > 0\)/);
     assert.match(panelSource, /getCurrentNode\(nodeId\) \|\| nodes\.find/);
     assert.match(pageSource, /getCurrentNode=\{\(nodeId\) => nodesRef\.current\.find/);
+    const countHelperStart = panelSource.indexOf("const changeUploadingAssetCount");
+    const countHelperEnd = panelSource.indexOf("\n\n    const removeDraftAsset", countHelperStart);
+    assert.ok(countHelperStart >= 0 && countHelperEnd > countHelperStart);
+    const countHelperSource = panelSource.slice(countHelperStart, countHelperEnd);
+    assert.ok(countHelperSource.indexOf("delta > 0") < countHelperSource.indexOf("uploadingAssetCountRef.current = Math.max"));
+    assert.ok(countHelperSource.indexOf("uploadingAssetCountRef.current = Math.max") < countHelperSource.indexOf("if (mountedRef.current)"));
+    assert.match(panelSource, /changeUploadingAssetCount\(1\)/);
+    assert.match(panelSource, /finally \{\s*changeUploadingAssetCount\(-1\);/);
+    assert.match(panelSource, /onUploadBusyChange=\{changeUploadingAssetCount\}/);
+    assert.match(pickerSource, /onUploadBusyChange\?: \(delta: 1 \| -1\) => void/);
+    assert.match(pickerSource, /<LibraryTab onInsert=\{onInsert\} onUploadBusyChange=\{onUploadBusyChange\} \/>/);
+    const pickerUploadStart = pickerSource.indexOf("onUploadBusyChange?.(1)");
+    const pickerUploadCall = pickerSource.indexOf("uploadImage(asset.url)");
+    const pickerUploadRelease = pickerSource.indexOf("onUploadBusyChange?.(-1)");
+    assert.ok(pickerUploadStart >= 0 && pickerUploadStart < pickerUploadCall);
+    assert.ok(pickerUploadCall < pickerUploadRelease);
     const actionSource = panelSource.slice(panelSource.indexOf("executeAction: async (action)"), panelSource.indexOf("signal: controller.signal", panelSource.indexOf("executeAction: async (action)")));
     assert.ok(actionSource.indexOf("const confirmed") < actionSource.indexOf("await onMaterializeReferences"));
 });
