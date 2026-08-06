@@ -345,17 +345,20 @@ export function CanvasAssistantPanel({
                 references: modelReferences,
                 getContext: getAgentContext,
                 executeAction: async (action) => {
+                    if (action.name === "delete_node") {
+                        const nodeId = typeof action.arguments.nodeId === "string" ? action.arguments.nodeId : "";
+                        const node = nodes.find((item) => item.id === nodeId);
+                        const attachment = attachmentAssets.get(nodeId);
+                        const confirmed = await new Promise<boolean>((resolve) => {
+                            const pending = { title: node?.title || attachment?.reference.title || "未命名节点", resolve };
+                            pendingDeleteRef.current = pending;
+                            setPendingDelete(pending);
+                        });
+                        if (!confirmed) return { ok: false, code: "delete_cancelled", message: "用户取消删除，原节点已保留" };
+                    }
                     const attachmentIds = canvasAgentActionNeedsAttachmentMaterialization(action) ? canvasAgentActionAttachmentIds(action, knownAttachmentAssets) : [];
                     if (attachmentIds.length) await onMaterializeReferences(attachmentIds.map((id) => attachmentAssets.get(id)!).filter(Boolean), controller.signal);
-                    if (action.name !== "delete_node") return onExecuteAction(action, messageReferenceNodeIds, controller.signal);
-                    const nodeId = typeof action.arguments.nodeId === "string" ? action.arguments.nodeId : "";
-                    const node = nodes.find((item) => item.id === nodeId);
-                    const confirmed = await new Promise<boolean>((resolve) => {
-                        const pending = { title: node?.title || "未命名节点", resolve };
-                        pendingDeleteRef.current = pending;
-                        setPendingDelete(pending);
-                    });
-                    return confirmed ? onExecuteAction(action, messageReferenceNodeIds, controller.signal) : { ok: false, code: "delete_cancelled", message: "用户取消删除，原节点已保留" };
+                    return onExecuteAction(action, messageReferenceNodeIds, controller.signal);
                 },
                 signal: controller.signal,
                 onEvent: (event) => updateMessage(session.id, assistantId, { status: event.status, activity: event.label }),
