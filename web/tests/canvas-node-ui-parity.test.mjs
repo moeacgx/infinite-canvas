@@ -86,6 +86,7 @@ test("全景首次生成和重试共用 2:1 配置归一化并将自动质量提
     assert.match(retryBlock, /quality:\s*savedImageMetadata\?\.quality\s*\|\|\s*sourceNode\.metadata\?\.quality\s*\|\|\s*PANORAMA_DEFAULT_QUALITY/);
     assert.match(retryBlock, /requestEdit\(generationConfig,/);
     assert.match(retryBlock, /requestGeneration\(generationConfig,/);
+    assert.match(source, /if \(!isCanvasImageNodeType\(node\.type\) && node\.type !== CanvasNodeType\.Video && node\.type !== CanvasNodeType\.Audio\)/);
 });
 
 test("节点生成态显示耗时、进度和视频专用进度条", async () => {

@@ -3486,7 +3486,7 @@ function InfiniteCanvasPage() {
                     const nodeId = stringValue("nodeId");
                     const node = getNode(nodeId);
                     if (!node) return missingNodeResult(nodeId);
-                    if (node.type !== CanvasNodeType.Image && node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) return { ok: false, code: "not_media_node", message: "节点 " + nodeId + " 不是媒体节点" };
+                    if (!isCanvasImageNodeType(node.type) && node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) return { ok: false, code: "not_media_node", message: "节点 " + nodeId + " 不是媒体节点" };
                     return { ok: true, ...canvasAgentTaskSummary(node) };
                 }
 
