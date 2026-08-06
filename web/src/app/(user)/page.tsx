@@ -3,7 +3,6 @@
 import { ArrowRight } from "lucide-react";
 import { type ChangeEvent, useEffect, useRef, useState } from "react";
 import { App, Button, Image, Tag } from "antd";
-import { nanoid } from "nanoid";
 import { useRouter } from "next/navigation";
 
 import { fetchPrompts, type Prompt } from "@/services/api/prompts";
@@ -13,9 +12,10 @@ import { uploadImage } from "@/services/image-storage";
 import { useEffectiveConfig } from "@/stores/use-config-store";
 import { AssetPickerModal } from "./canvas/components/asset-picker-modal";
 import { CanvasAssistantComposer } from "./canvas/components/canvas-assistant-composer";
+import { createPendingAgentAsset } from "./canvas/agent/canvas-agent-attachments";
 import { useCanvasStore } from "./canvas/stores/use-canvas-store";
 import { HomeBannerCarousel, type HomeBanner } from "./home-banner-carousel";
-import { CanvasNodeType, DEFAULT_CANVAS_AGENT_VIDEO_SIZE, type CanvasAgentConfig, type CanvasAssistantReference, type InsertAssetPayload, type PendingAgentAsset } from "./canvas/types";
+import { DEFAULT_CANVAS_AGENT_VIDEO_SIZE, type CanvasAgentConfig, type InsertAssetPayload, type PendingAgentAsset } from "./canvas/types";
 
 const BANNER_ROOT = "https://gcore.jsdelivr.net/gh/tigerowo/infinite-canvas@v0.5.0/web/public/banners";
 const HOME_BANNERS: HomeBanner[] = [
@@ -23,20 +23,6 @@ const HOME_BANNERS: HomeBanner[] = [
     { imageUrl: `${BANNER_ROOT}/panorama.webp`, alt: "全景图生成与查看功能演示" },
     { imageUrl: `${BANNER_ROOT}/3ddirector.webp`, alt: "3D 导演台与下界轴功能演示" },
 ];
-
-function toPendingAgentAsset(payload: InsertAssetPayload): PendingAgentAsset {
-    const nodeId = nanoid();
-    let reference: CanvasAssistantReference;
-    if (payload.kind === "text") {
-        reference = { id: nodeId, type: CanvasNodeType.Text, title: payload.title, text: payload.content };
-    } else {
-        const common = { id: nodeId, title: payload.title, storageKey: payload.storageKey, mimeType: payload.mimeType };
-        if (payload.kind === "image") reference = { ...common, type: CanvasNodeType.Image, dataUrl: payload.dataUrl };
-        else if (payload.kind === "video") reference = { ...common, type: CanvasNodeType.Video, url: payload.url };
-        else reference = { ...common, type: CanvasNodeType.Audio, url: payload.url };
-    }
-    return { nodeId, payload, reference };
-}
 
 export default function IndexPage() {
     const { message } = App.useApp();
@@ -75,7 +61,7 @@ export default function IndexPage() {
     }, [message]);
 
     const addPendingAsset = (payload: InsertAssetPayload) => {
-        setPendingAssets((current) => [...current, toPendingAgentAsset(payload)]);
+        setPendingAssets((current) => [...current, createPendingAgentAsset(payload)]);
     };
 
     const uploadFile = async (file: File) => {
@@ -108,7 +94,7 @@ export default function IndexPage() {
 
     const submit = () => {
         const text = prompt.trim();
-        if (!text || submitting) return;
+        if ((!text && !pendingAssets.length) || submitting) return;
         if (uploadingCountRef.current) {
             message.info("素材仍在上传，请稍后发送");
             return;

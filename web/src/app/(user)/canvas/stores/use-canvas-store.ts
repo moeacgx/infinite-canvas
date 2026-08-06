@@ -191,6 +191,7 @@ function normalizeProject(project: Partial<CanvasProject> & Pick<CanvasProject, 
 export function normalizeCanvasSessions(sessions: CanvasAssistantSession[], preserveProtocolMessages = true) {
     return sessions.map((session) => ({
         ...session,
+        draftAssets: normalizeDraftAssets(session.draftAssets),
         messages: (session.messages || []).map((message) =>
             message.role === "assistant" && (message.status === "thinking" || message.status === "running")
                 ? {
@@ -204,6 +205,11 @@ export function normalizeCanvasSessions(sessions: CanvasAssistantSession[], pres
         agentState: normalizeCanvasAgentState(session.agentState),
         protocolMessages: preserveProtocolMessages ? sanitizeCanvasAgentProtocolMessages(session.protocolMessages) : [],
     }));
+}
+
+function normalizeDraftAssets(value: CanvasAssistantSession["draftAssets"]) {
+    if (!Array.isArray(value)) return [];
+    return value.filter((asset) => asset && typeof asset.nodeId === "string" && asset.nodeId.length > 0 && asset.reference?.id === asset.nodeId && asset.reference.origin === "attachment" && typeof asset.payload?.kind === "string");
 }
 
 function normalizeCanvasAgentState(value: CanvasAgentState | undefined): CanvasAgentState {

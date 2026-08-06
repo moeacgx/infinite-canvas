@@ -48,6 +48,7 @@ test("首页 Agent 输入框同时提供素材、图片参数、视频参数和�
     assert.match(composerSource, /aria-label=\{isRunning \? "停止" : "发送"\}/);
     assert.match(composerSource, /<ArrowUp className="size-4"/);
     assert.match(composerSource, /event\.nativeEvent\.isComposing/);
+    assert.match(homeSource, /if \(\(!text && !pendingAssets\.length\) \|\| submitting\) return/);
 });
 
 test("首页请求由真实画布 Agent 单次消费且不覆盖现有扩展能力", () => {
@@ -64,19 +65,38 @@ test("首页请求由真实画布 Agent 单次消费且不覆盖现有扩展能�
     assert.match(canvasClientSource, /<CanvasPluginManagerModal/);
 });
 
-test("首页素材会先全部解析且按稳定节点 ID 幂等插入", () => {
+test("首页素材会先全部解析为 Agent 附件，并在工具引用时按稳定节点 ID 幂等落成", () => {
     assert.match(homeSource, /uploadingCountRef\.current/);
     assert.match(homeSource, /submitDisabled=\{submitting \|\| uploadingCount > 0\}/);
     assert.match(homeSource, /素材仍在上传，请稍后发送/);
     assert.match(canvasClientSource, /const resolvedAssets = await Promise\.all\(/);
-    assert.match(canvasClientSource, /for \(const \[index, \{ asset, payload \}\] of resolvedAssets\.entries\(\)\)/);
-    assert.match(canvasClientSource, /if \(nodeId && nodesRef\.current\.some\(\(node\) => node\.id === nodeId\)\) return/);
+    assert.match(canvasClientSource, /const references = resolvedAssets\.map\(\(\{ asset, payload \}\)/);
+    assert.match(canvasClientSource, /const reference = \{ \.\.\.asset\.reference, origin: "attachment" as const \}/);
+    assert.match(canvasClientSource, /setInitialAgentRequest\(\{ prompt: request\.prompt, references \}\)/);
+    assert.match(canvasClientSource, /<CanvasAssistantPanel\s+key=\{projectId\}/);
+    assert.match(canvasClientSource, /materializePendingAgentAssetsOnce\(/);
+    assert.match(canvasClientSource, /if \(nodesRef\.current\.some\(\(node\) => node\.id === asset\.nodeId\)\) return/);
+    assert.match(canvasClientSource, /const nextNodes = \[\.\.\.nodesRef\.current, node\];[\s\S]*nodesRef\.current = nextNodes;[\s\S]*setNodes\(\(previous\) =>/);
+    assert.match(canvasClientSource, /select: false, openDialog: false/);
     assert.match(canvasClientSource, /updateProject\(projectId, \{ pendingAgentRequest: undefined \}\)/);
+    assert.match(canvasClientSource, /setInitialAgentRequest\(null\)/);
+    assert.match(canvasClientSource, /const epoch = projectEpochRef\.current/);
+    assert.match(canvasClientSource, /const \[restoredNodes, restoredSessions\] = await Promise\.all/);
+    assert.match(canvasClientSource, /if \(cancelled \|\| epoch !== projectEpochRef\.current\) return/);
+    assert.match(canvasClientSource, /const projectReady = projectLoaded && loadedProjectIdRef\.current === projectId/);
+    assert.match(canvasClientSource, /if \(!projectReady \|\| historyPausedRef\.current\) return;[\s\S]*updateProject\(projectId/);
+    assert.match(canvasClientSource, /if \(!isCurrent\(\)\) return;[\s\S]*setInitialAgentRequest\(\{ prompt: request\.prompt, references \}\)/);
 });
 
 test("创作 Agent 保持单飞重试并让未知视觉模型先尝试接收图片", () => {
     assert.match(assistantPanelSource, /const runningRef = useRef\(false\)/);
-    assert.match(assistantPanelSource, /if \(!text\.trim\(\) \|\| runningRef\.current\) return/);
+    assert.match(assistantPanelSource, /if \(runningRef\.current\) return/);
+    assert.match(assistantPanelSource, /if \(!text\.trim\(\) && !references\.length\) return/);
+    assert.match(assistantPanelSource, /\(!initialRequest\.prompt\.trim\(\) && !initialRequest\.references\.length\)/);
+    assert.match(assistantPanelSource, /const targetSessionId = activeSessionIdRef\.current \|\| resolvedActiveSessionId/);
+    assert.match(assistantPanelSource, /addDraftAsset\(payload, targetSessionId\)/);
+    assert.match(assistantPanelSource, /submitDisabled=\{uploadingAssetCount > 0\}/);
+    assert.match(assistantPanelSource, /const uploadingAssetCountRef = useRef\(0\)/);
     assert.match(assistantPanelSource, /if \(abortRef\.current === controller\) \{[\s\S]*runningRef\.current = false;[\s\S]*setIsRunning\(false\)/);
     assert.match(assistantPanelSource, /<AssistantMessages messages=\{messages\} isRunning=\{isRunning\}/);
     assert.match(assistantPanelSource, /disabled=\{isRunning\}[\s\S]*onClick=\{\(\) => onRetry\(message\)\}/);

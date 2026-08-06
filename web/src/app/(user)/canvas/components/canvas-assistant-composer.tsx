@@ -141,7 +141,7 @@ export function CanvasAssistantComposer({
                     onKeyDown={(event) => {
                         if (event.nativeEvent.isComposing || event.key !== "Enter" || event.ctrlKey || event.metaKey || event.shiftKey) return;
                         event.preventDefault();
-                        if (isRunning || submitDisabled || !prompt.trim()) return;
+                        if (isRunning || submitDisabled || (!prompt.trim() && !references.length)) return;
                         void onSubmit();
                     }}
                     className="thin-scrollbar h-20 w-full resize-none border-0 bg-transparent px-1 py-1 text-sm leading-5 outline-none placeholder:opacity-40"
@@ -178,7 +178,7 @@ export function CanvasAssistantComposer({
                         type="primary"
                         shape="circle"
                         className="!size-10 !min-w-10 !shrink-0"
-                        disabled={!isRunning && (submitDisabled || !prompt.trim())}
+                        disabled={!isRunning && (submitDisabled || (!prompt.trim() && !references.length))}
                         onClick={() => (isRunning ? onStop?.() : void onSubmit())}
                         aria-label={isRunning ? "停止" : "发送"}
                         icon={isRunning ? <Square className="size-4 fill-current" /> : <ArrowUp className="size-4" />}

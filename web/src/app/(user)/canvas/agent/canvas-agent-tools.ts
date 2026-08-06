@@ -87,10 +87,10 @@ function defineTool(name: CanvasAgentActionName, description: string, properties
 export const CANVAS_AGENT_TOOLS: CanvasAgentToolDefinition[] = [
     defineTool("get_canvas_summary", "读取当前画布摘要、节点、连线、模型配置和任务状态。"),
     defineTool("get_selected_nodes", "读取用户当前选中的真实画布节点。"),
-    defineTool("get_node", "按真实节点 ID 读取节点。", { nodeId: STRING }, ["nodeId"]),
-    defineTool("get_upstream_nodes", "读取指定节点的所有直接上游节点。", { nodeId: STRING }, ["nodeId"]),
-    defineTool("get_downstream_nodes", "读取指定节点的所有直接下游节点。", { nodeId: STRING }, ["nodeId"]),
-    defineTool("get_connected_nodes", "读取指定节点直接连接的上下游节点。", { nodeId: STRING }, ["nodeId"]),
+    defineTool("get_node", "按真实节点 ID 读取节点；会话附件尚未物化时不要调用本工具。", { nodeId: STRING }, ["nodeId"]),
+    defineTool("get_upstream_nodes", "读取指定真实节点的所有直接上游节点；会话附件尚未物化时不要调用本工具。", { nodeId: STRING }, ["nodeId"]),
+    defineTool("get_downstream_nodes", "读取指定真实节点的所有直接下游节点；会话附件尚未物化时不要调用本工具。", { nodeId: STRING }, ["nodeId"]),
+    defineTool("get_connected_nodes", "读取指定真实节点直接连接的上下游节点；会话附件尚未物化时不要调用本工具。", { nodeId: STRING }, ["nodeId"]),
     defineTool("get_generation_config", "读取创作规格中的图片/视频模型与渠道、图片接口模式、尺寸、质量、数量、背景、视频时长和声音配置。"),
     defineTool("get_generation_task", "读取指定媒体节点的真实生成任务状态。", { nodeId: STRING }, ["nodeId"]),
     defineTool(
@@ -111,13 +111,13 @@ export const CANVAS_AGENT_TOOLS: CanvasAgentToolDefinition[] = [
     defineTool("update_text_node", "更新现有文本节点的标题或正文。", { nodeId: STRING, title: STRING, content: STRING }, ["nodeId"]),
     defineTool("update_node", "只更新现有节点标题；不允许任意字段覆盖。", { nodeId: STRING, title: STRING }, ["nodeId", "title"]),
     defineTool("delete_node", "使用画布现有删除链路删除节点及关联连线。", { nodeId: STRING }, ["nodeId"]),
-    defineTool("create_connection", "在两个真实节点之间创建来源连线。", { fromNodeId: STRING, toNodeId: STRING }, ["fromNodeId", "toNodeId"]),
+    defineTool("create_connection", "在两个真实节点或会话附件之间创建来源连线；附件 ID 会在首次使用时自动落为节点。", { fromNodeId: STRING, toNodeId: STRING }, ["fromNodeId", "toNodeId"]),
     defineTool("delete_connection", "删除指定真实连线。", { connectionId: STRING }, ["connectionId"]),
     defineTool("create_group", "把两个或更多节点放进本项目 group 节点。", { title: STRING, nodeIds: STRING_ARRAY }, ["nodeIds"]),
     defineTool("arrange_nodes", "整理指定节点；不传 nodeIds 时整理当前画布顶层节点。", { nodeIds: STRING_ARRAY }),
     defineTool(
         "generate_image",
-        "调用现有图片任务链路。sourceNodeIds 只放真实直接来源，独立生成必须传空数组；其中图片按数组顺序编号为图片1、图片2。",
+        "调用现有图片任务链路。sourceNodeIds 放真实直接来源或本轮明确附加的会话附件 ID；附件首次使用时自动落为节点。独立生成必须传空数组；其中图片按数组顺序编号为图片1、图片2。",
         {
             prompt: STRING,
             title: STRING,
@@ -131,7 +131,7 @@ export const CANVAS_AGENT_TOOLS: CanvasAgentToolDefinition[] = [
     ),
     defineTool(
         "edit_image",
-        "调用现有图片编辑链路，必须提供至少一个真实图片来源节点；图片按 sourceNodeIds 顺序编号。",
+        "调用现有图片编辑链路，必须提供至少一个真实图片来源或会话附件 ID；附件首次使用时自动落为节点，图片按 sourceNodeIds 顺序编号。",
         {
             prompt: STRING,
             title: STRING,
@@ -145,7 +145,7 @@ export const CANVAS_AGENT_TOOLS: CanvasAgentToolDefinition[] = [
     ),
     defineTool(
         "generate_video",
-        "调用现有视频任务链路。sourceNodeIds 只放真实直接来源，独立生成必须传空数组；其中图片、视频、音频分别按各自顺序编号。",
+        "调用现有视频任务链路。sourceNodeIds 放真实直接来源或本轮明确附加的会话附件 ID；附件首次使用时自动落为节点。独立生成必须传空数组；其中图片、视频、音频分别按各自顺序编号。",
         {
             prompt: STRING,
             title: STRING,
@@ -159,7 +159,7 @@ export const CANVAS_AGENT_TOOLS: CanvasAgentToolDefinition[] = [
     ),
     defineTool(
         "generate_audio",
-        "调用现有音频任务链路。prompt 是实际朗读文本，instructions 是音色/演绎说明；sourceNodeIds 只放真实直接来源，独立生成必须传空数组。",
+        "调用现有音频任务链路。prompt 是实际朗读文本，instructions 是音色/演绎说明；sourceNodeIds 放真实直接来源或本轮明确附加的会话附件 ID，附件首次使用时自动落为节点；独立生成必须传空数组。",
         { prompt: STRING, title: STRING, sourceNodeIds: STRING_ARRAY, voice: STRING, instructions: STRING },
         ["prompt", "sourceNodeIds"],
     ),
