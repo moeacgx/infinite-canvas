@@ -66,7 +66,56 @@ export type ParsedCanvasAgentJson = {
 const STRING = { type: "string" };
 const STRING_ARRAY = { type: "array", items: { type: "string" }, maxItems: 50 };
 const PHASES: CanvasAgentPhase[] = ["intake", "concept", "script", "breakdown", "references", "storyboard", "video", "audio", "review", "complete"];
-const ACTION_NAME_SET = new Set<string>(CANVAS_AGENT_ACTION_NAMES);
+const ACTION_NAME_ALIASES = new Map<string, CanvasAgentActionName>([
+    ["get_canvas_summary", "get_canvas_summary"],
+    ["getCanvasSummary", "get_canvas_summary"],
+    ["get_selected_nodes", "get_selected_nodes"],
+    ["getSelectedNodes", "get_selected_nodes"],
+    ["get_node", "get_node"],
+    ["getNode", "get_node"],
+    ["get_upstream_nodes", "get_upstream_nodes"],
+    ["getUpstreamNodes", "get_upstream_nodes"],
+    ["get_downstream_nodes", "get_downstream_nodes"],
+    ["getDownstreamNodes", "get_downstream_nodes"],
+    ["get_connected_nodes", "get_connected_nodes"],
+    ["getConnectedNodes", "get_connected_nodes"],
+    ["get_generation_config", "get_generation_config"],
+    ["getGenerationConfig", "get_generation_config"],
+    ["get_generation_task", "get_generation_task"],
+    ["getGenerationTask", "get_generation_task"],
+    ["set_agent_state", "set_agent_state"],
+    ["setAgentState", "set_agent_state"],
+    ["create_primary_script_node", "create_primary_script_node"],
+    ["createPrimaryScriptNode", "create_primary_script_node"],
+    ["create_text_node", "create_text_node"],
+    ["createTextNode", "create_text_node"],
+    ["update_text_node", "update_text_node"],
+    ["updateTextNode", "update_text_node"],
+    ["update_node", "update_node"],
+    ["updateNode", "update_node"],
+    ["delete_node", "delete_node"],
+    ["deleteNode", "delete_node"],
+    ["create_connection", "create_connection"],
+    ["createConnection", "create_connection"],
+    ["delete_connection", "delete_connection"],
+    ["deleteConnection", "delete_connection"],
+    ["create_group", "create_group"],
+    ["createGroup", "create_group"],
+    ["arrange_nodes", "arrange_nodes"],
+    ["arrangeNodes", "arrange_nodes"],
+    ["generate_image", "generate_image"],
+    ["generateImage", "generate_image"],
+    ["edit_image", "edit_image"],
+    ["editImage", "edit_image"],
+    ["generate_video", "generate_video"],
+    ["generateVideo", "generate_video"],
+    ["generate_audio", "generate_audio"],
+    ["generateAudio", "generate_audio"],
+    ["get_media_task_status", "get_media_task_status"],
+    ["getMediaTaskStatus", "get_media_task_status"],
+]);
+const TOOL_NAME_NAMESPACES = ["functions", "function", "tools", "tool", "canvas"] as const;
+const TOOL_NAME_NAMESPACE_SEPARATORS = [".", ":", "/", "\\", "#"] as const;
 
 function defineTool(name: CanvasAgentActionName, description: string, properties: Record<string, unknown> = {}, required?: string[]): CanvasAgentToolDefinition {
     return {
@@ -167,9 +216,9 @@ export const CANVAS_AGENT_TOOLS: CanvasAgentToolDefinition[] = [
 ];
 
 export function normalizeCanvasAgentAction(name: unknown, args: unknown, id = nanoid()): CanvasAgentAction {
-    if (typeof name !== "string" || !ACTION_NAME_SET.has(name)) throw new Error("模型返回了不允许的工具");
+    const actionName = normalizeCanvasAgentActionName(name);
+    if (!actionName) throw new Error(invalidCanvasAgentToolMessage(name));
     const input = isRecord(args) ? args : {};
-    const actionName = name as CanvasAgentActionName;
     let normalized: Record<string, unknown> = {};
 
     switch (actionName) {
@@ -289,6 +338,34 @@ export function normalizeCanvasAgentAction(name: unknown, args: unknown, id = na
     }
 
     return { id, name: actionName, arguments: normalized };
+}
+
+function normalizeCanvasAgentActionName(name: unknown): CanvasAgentActionName | null {
+    if (typeof name !== "string") return null;
+    const directAction = ACTION_NAME_ALIASES.get(name);
+    if (directAction) return directAction;
+
+    for (const namespace of TOOL_NAME_NAMESPACES) {
+        for (const separator of TOOL_NAME_NAMESPACE_SEPARATORS) {
+            const prefix = `${namespace}${separator}`;
+            if (!name.startsWith(prefix)) continue;
+            return ACTION_NAME_ALIASES.get(name.slice(prefix.length)) || null;
+        }
+    }
+    return null;
+}
+
+export function sanitizeCanvasAgentToolNameForDisplay(name: unknown) {
+    if (typeof name !== "string") return "";
+    return name
+        .replace(/[\u0000-\u001f\u007f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]+/g, " ")
+        .trim()
+        .slice(0, 120);
+}
+
+function invalidCanvasAgentToolMessage(name: unknown) {
+    const displayName = sanitizeCanvasAgentToolNameForDisplay(name);
+    return displayName ? `模型返回了不允许的工具：${JSON.stringify(displayName)}。请使用系统提供的精确工具名；图片合成使用 edit_image，读取配置使用 get_generation_config。` : "模型返回了不允许的工具";
 }
 
 export function parseCanvasAgentJson(content: string): ParsedCanvasAgentJson {

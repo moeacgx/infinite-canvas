@@ -10,6 +10,7 @@ import {
     isCanvasAgentMediaAction,
     normalizeCanvasAgentAction,
     parseCanvasAgentJson,
+    sanitizeCanvasAgentToolNameForDisplay,
     userLikelyRequestedCanvasAction,
     type CanvasAgentAction,
     type CanvasAgentToolResult,
@@ -145,6 +146,7 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
     let state = input.initialState;
     let allowTools = true;
     let jsonFallbackRetried = false;
+    let invalidToolFallbackRetried = false;
     let hasExecutedActions = false;
     const attemptedWriteActionSignatures = new Set<string>();
     const executionBudget = createCanvasAgentExecutionBudget();
@@ -179,6 +181,20 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
         const hasNativeToolCalls = routedNativeCalls.length > 0;
         const actions = (hasNativeToolCalls ? nativeActions : parsedJson.actions).filter((action) => action.name !== "arrange_nodes" || arrangeRequested);
         const rejectedNativeCalls = routedNativeCalls.filter((entry) => entry.rejection);
+        const unsupportedNativeCalls = rejectedNativeCalls.filter((entry) => entry.rejection?.code === "invalid_tool_call" && entry.rejection.message?.startsWith("模型返回了不允许的工具"));
+        const hasOnlyUnsupportedNativeToolCalls = actions.length === 0 && rejectedNativeCalls.length > 0 && unsupportedNativeCalls.length === rejectedNativeCalls.length;
+        const shouldRetryInvalidToolsAsJson = turnRequestedNativeTools && !turn.usedJsonFallback && !invalidToolFallbackRetried && !hasExecutedActions && hasOnlyUnsupportedNativeToolCalls;
+
+        if (turn.usedJsonFallback && unsupportedNativeCalls.length > 0) {
+            const unsupportedToolNames = Array.from(new Set(unsupportedNativeCalls.map((entry) => sanitizeCanvasAgentToolNameForDisplay(entry.toolCall.name))))
+                .filter(Boolean)
+                .slice(0, 3)
+                .map((name) => JSON.stringify(name))
+                .join("、");
+            const incompatible = `当前文本模型在兼容 JSON 模式下仍返回了不受支持的原生工具（${unsupportedToolNames || "未知工具"}），无法可靠执行画布操作；请更换支持画布工具调用或严格 JSON 输出的文本模型。`;
+            protocolMessages = trimProtocolMessages([...protocolMessages, { role: "assistant" as const, content: incompatible }]);
+            return { reply: incompatible, state, protocolMessages: persistCanvasAgentProtocolMessages(protocolMessages) };
+        }
 
         if (!actions.length && !rejectedNativeCalls.length) {
             const reply = (parsedJson.parsed ? parsedJson.reply : turn.content).trim();
@@ -208,7 +224,7 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
                   toolCalls: routedNativeCalls.map(({ toolCall, action }) => {
                       return {
                           id: toolCall.id,
-                          name: action?.name || toolCall.name,
+                          name: action?.name || sanitizeCanvasAgentToolNameForDisplay(toolCall.name) || "unknown_tool",
                           arguments: action?.arguments || toolCall.arguments,
                           ...(toolCall.thoughtSignature ? { thoughtSignature: toolCall.thoughtSignature } : {}),
                       };
@@ -229,7 +245,7 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
                 ...routedNativeCalls.map(({ toolCall, action, rejection }) => ({
                     role: "tool" as const,
                     toolCallId: toolCall.id,
-                    name: action?.name || toolCall.name,
+                    name: action?.name || sanitizeCanvasAgentToolNameForDisplay(toolCall.name) || "unknown_tool",
                     content: JSON.stringify(compactToolResult(rejection || (action ? resultById.get(action.id) : undefined) || { ok: false, code: "tool_result_missing", message: "工具没有返回结果" })),
                 })),
             ]);
@@ -244,6 +260,11 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
             ]);
         }
         input.onCheckpoint?.({ state, protocolMessages: persistCanvasAgentProtocolMessages(protocolMessages) });
+        if (shouldRetryInvalidToolsAsJson) {
+            invalidToolFallbackRetried = true;
+            allowTools = false;
+            input.onEvent?.({ status: "thinking", label: "正在切换兼容 JSON 模式" });
+        }
     }
 
     const reply = "本轮已达到安全操作步数上限，当前已完成的节点和任务都已保存。你可以让我继续下一步。";

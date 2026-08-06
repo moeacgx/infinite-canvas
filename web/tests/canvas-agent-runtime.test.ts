@@ -48,6 +48,7 @@ test("畸形原生工具调用会返回结构化错误而不是终止 Agent", ()
     assert.match(String(missingPrompt.rejection?.message), /prompt/);
     assert.equal(unknownTool.action, undefined);
     assert.equal(unknownTool.rejection?.code, "invalid_tool_call");
+    assert.match(String(unknownTool.rejection?.message), /provider_private_tool/);
 });
 
 test("JSON 兼容动作缺少 ID 时生成可重放且同批不冲突的稳定 ID", () => {
@@ -85,16 +86,23 @@ type ScriptedModelMessage = {
     }>;
 };
 
-async function runScriptedAgent(input: { userText: string; responses: ScriptedModelMessage[]; executeAction: (action: CanvasAgentAction) => Promise<CanvasAgentToolResult> }) {
+type ScriptedModelResponse = ScriptedModelMessage | { status: number; error: string };
+
+async function runScriptedAgent(input: { userText: string; responses: ScriptedModelResponse[]; executeAction: (action: CanvasAgentAction) => Promise<CanvasAgentToolResult> }) {
     const requestBodies: Array<{ tools?: unknown; tool_choice?: unknown; messages?: Array<{ role?: string; content?: unknown }> }> = [];
     const server = createServer((request, response) => {
         const chunks: Buffer[] = [];
         request.on("data", (chunk: Buffer) => chunks.push(chunk));
         request.on("end", () => {
             requestBodies.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-            const message = input.responses[Math.min(requestBodies.length - 1, input.responses.length - 1)];
+            const scriptedResponse = input.responses[Math.min(requestBodies.length - 1, input.responses.length - 1)];
             response.setHeader("content-type", "application/json");
-            response.end(JSON.stringify({ choices: [{ message }] }));
+            if ("status" in scriptedResponse) {
+                response.statusCode = scriptedResponse.status;
+                response.end(JSON.stringify({ error: { message: scriptedResponse.error } }));
+                return;
+            }
+            response.end(JSON.stringify({ choices: [{ message: scriptedResponse }] }));
         });
     });
     server.listen(0, "127.0.0.1");
@@ -492,4 +500,153 @@ test("JSON 降级多轮重放同一媒体动作时只提交一次", async () => 
     );
     assert.match(String(requestBodies[3]?.messages?.at(-1)?.content), /duplicate_action/);
     assert.equal(result.reply, "图片任务已经提交。");
+});
+
+test("原生工具名不兼容时自动切到 JSON 协议重试", async () => {
+    const executed: CanvasAgentAction[] = [];
+    const { requestBodies, result } = await runScriptedAgent({
+        userText: "把小猫合成进庄园图片",
+        responses: [
+            {
+                content: null,
+                tool_calls: [{ id: "invalid-compose", type: "function", function: { name: "compose_image", arguments: JSON.stringify({ prompt: "把小猫放进庄园", sourceNodeIds: ["estate", "cat"] }) } }],
+            },
+            { content: JSON.stringify({ actions: [{ id: "edit-image", tool: "edit_image", arguments: { prompt: "把小猫放进庄园", sourceNodeIds: ["estate", "cat"] } }], reply: "正在合成" }) },
+            { content: JSON.stringify({ actions: [], reply: "图片合成任务已经提交。" }) },
+        ],
+        executeAction: async (nextAction) => {
+            executed.push(nextAction);
+            return { ok: true, nodeId: "image-node", taskId: "image-task", status: "loading" };
+        },
+    });
+
+    assert.equal(requestBodies[0]?.tool_choice, "auto");
+    assert.equal(requestBodies[1]?.tools, undefined);
+    assert.match(String(requestBodies[1]?.messages?.at(-1)?.content), /compose_image/);
+    assert.deepEqual(
+        executed.map((nextAction) => nextAction.name),
+        ["edit_image"],
+    );
+    assert.equal(result.reply, "图片合成任务已经提交。");
+});
+
+test("JSON 降级后仍返回未知原生工具时立即终止兼容重试", async () => {
+    let executions = 0;
+    const incompatibleToolCall = {
+        content: null,
+        tool_calls: [
+            {
+                id: "invalid-compose",
+                type: "function" as const,
+                function: {
+                    name: "compose_image",
+                    arguments: JSON.stringify({ prompt: "把小猫放进庄园", sourceNodeIds: ["estate", "cat"] }),
+                },
+            },
+        ],
+    };
+    const { requestBodies, result } = await runScriptedAgent({
+        userText: "把小猫合成进庄园图片",
+        responses: [incompatibleToolCall, incompatibleToolCall],
+        executeAction: async () => {
+            executions += 1;
+            return { ok: true };
+        },
+    });
+
+    assert.equal(requestBodies.length, 2);
+    assert.ok(requestBodies[0]?.tools);
+    assert.equal(requestBodies[1]?.tools, undefined);
+    assert.equal(executions, 0);
+    assert.match(result.reply, /兼容 JSON 模式/);
+    assert.match(result.reply, /compose_image/);
+    assert.doesNotMatch(result.reply, /安全操作步数上限/);
+});
+
+test("普通文本触发 JSON 降级后返回未知原生工具时立即终止", async () => {
+    let executions = 0;
+    const { requestBodies, result } = await runScriptedAgent({
+        userText: "请生成一张小猫图片",
+        responses: [
+            { content: "好的，我来生成。" },
+            {
+                content: null,
+                tool_calls: [{ id: "invalid-compose", type: "function", function: { name: "compose_image", arguments: "{}" } }],
+            },
+        ],
+        executeAction: async () => {
+            executions += 1;
+            return { ok: true };
+        },
+    });
+
+    assert.equal(requestBodies.length, 2);
+    assert.ok(requestBodies[0]?.tools);
+    assert.equal(requestBodies[1]?.tools, undefined);
+    assert.equal(executions, 0);
+    assert.match(result.reply, /兼容 JSON 模式/);
+    assert.match(result.reply, /compose_image/);
+    assert.doesNotMatch(result.reply, /安全操作步数上限/);
+});
+
+test("请求层因 400 自动降级后返回未知原生工具时立即终止", async () => {
+    let executions = 0;
+    const { requestBodies, result } = await runScriptedAgent({
+        userText: "把小猫合成进庄园图片",
+        responses: [
+            { status: 400, error: "tools are not supported" },
+            {
+                content: null,
+                tool_calls: [{ id: "invalid-compose", type: "function", function: { name: "compose_image", arguments: "{}" } }],
+            },
+        ],
+        executeAction: async () => {
+            executions += 1;
+            return { ok: true };
+        },
+    });
+
+    assert.equal(requestBodies.length, 2);
+    assert.ok(requestBodies[0]?.tools);
+    assert.equal(requestBodies[1]?.tools, undefined);
+    assert.equal(executions, 0);
+    assert.match(result.reply, /兼容 JSON 模式/);
+    assert.match(result.reply, /compose_image/);
+    assert.doesNotMatch(result.reply, /安全操作步数上限/);
+});
+
+test("JSON 降级混合未知工具与合法媒体工具时整轮终止", async () => {
+    let executions = 0;
+    const unsafeName = `\u202ecompose_image\u0000${"x".repeat(200)}`;
+    const { requestBodies, result } = await runScriptedAgent({
+        userText: "把小猫合成进庄园图片",
+        responses: [
+            {
+                content: null,
+                tool_calls: [{ id: "invalid-compose-first", type: "function", function: { name: "compose_image", arguments: "{}" } }],
+            },
+            {
+                content: null,
+                tool_calls: [
+                    { id: "invalid-compose-second", type: "function", function: { name: unsafeName, arguments: "{}" } },
+                    {
+                        id: "valid-edit-image",
+                        type: "function",
+                        function: { name: "edit_image", arguments: JSON.stringify({ prompt: "把小猫放进庄园", sourceNodeIds: ["estate", "cat"] }) },
+                    },
+                ],
+            },
+        ],
+        executeAction: async () => {
+            executions += 1;
+            return { ok: true, nodeId: "unexpected-image", taskId: "unexpected-task" };
+        },
+    });
+
+    assert.equal(requestBodies.length, 2);
+    assert.equal(executions, 0);
+    assert.match(result.reply, /兼容 JSON 模式/);
+    assert.match(result.reply, /compose_image/);
+    assert.ok(result.reply.length < 600);
+    assert.doesNotMatch(result.reply, /[\u0000-\u001f\u007f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/);
 });
