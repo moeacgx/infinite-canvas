@@ -5,7 +5,7 @@ import test from "node:test";
 
 import { createCanvasAgentExecutionBudget, createCanvasAgentState, normalizeCanvasAgentToolCalls, reserveCanvasAgentAction, runCanvasAgent } from "../src/app/(user)/canvas/agent/canvas-agent-runtime.ts";
 import type { CanvasAgentContext } from "../src/app/(user)/canvas/agent/canvas-agent-context.ts";
-import { parseCanvasAgentJson, type CanvasAgentAction, type CanvasAgentToolResult } from "../src/app/(user)/canvas/agent/canvas-agent-tools.ts";
+import { parseCanvasAgentJson, userLikelyRequestedCanvasAction, type CanvasAgentAction, type CanvasAgentToolResult } from "../src/app/(user)/canvas/agent/canvas-agent-tools.ts";
 import type { CanvasAgentState } from "../src/app/(user)/canvas/types.ts";
 import { createModelChannel, defaultConfig, encodeChannelModel, withLocalChannels, type AiConfig } from "../src/stores/use-config-store.ts";
 
@@ -75,6 +75,56 @@ test("JSON 兼容动作缺少 ID 时生成可重放且同批不冲突的稳定 I
     assert.equal(first[1]?.id, replay[1]?.id);
     assert.notEqual(first[0]?.id, first[1]?.id);
     assert.equal(first[0]?.id, shifted.find((action) => action.name === "generate_image")?.id);
+});
+
+test("兼容 Claude 返回的单动作图片合成 JSON", () => {
+    const content = `\`\`\`json
+${JSON.stringify(
+    {
+        action: "generate_image",
+        mode: "composite",
+        title: "庄园里的小猫",
+        inputNodeIds: ["estate-node", "cat-node"],
+        prompt: "以庄园全景为底图，把小猫放进庄园",
+    },
+    null,
+    2,
+)}
+\`\`\`
+
+正在把小猫合成进庄园。`;
+    const parsed = parseCanvasAgentJson(content);
+
+    assert.equal(parsed.parsed, true);
+    assert.equal(parsed.actionLike, true);
+    assert.equal(parsed.actions.length, 1);
+    assert.equal(parsed.actions[0]?.name, "generate_image");
+    assert.deepEqual(parsed.actions[0]?.arguments, {
+        title: "庄园里的小猫",
+        prompt: "以庄园全景为底图，把小猫放进庄园",
+        sourceNodeIds: ["estate-node", "cat-node"],
+    });
+    assert.equal(userLikelyRequestedCanvasAction("把小猫放到庄园里面"), true);
+});
+
+test("单动作 JSON 仍拒绝未知工具和畸形 actions 字段", () => {
+    const unknown = parseCanvasAgentJson(JSON.stringify({ action: "compose_image", prompt: "合成", inputNodeIds: ["estate", "cat"] }));
+    const nonMedia = parseCanvasAgentJson(JSON.stringify({ action: "delete_node", nodeId: "estate" }));
+    assert.equal(unknown.actionLike, true);
+    assert.deepEqual(unknown.actions, []);
+    assert.equal(nonMedia.actionLike, true);
+    assert.deepEqual(nonMedia.actions, []);
+    assert.deepEqual(
+        parseCanvasAgentJson(
+            JSON.stringify({
+                actions: "generate_image",
+                action: "generate_image",
+                prompt: "不得从畸形 actions 降级执行",
+                inputNodeIds: ["estate", "cat"],
+            }),
+        ).actions,
+        [],
+    );
 });
 
 type ScriptedModelMessage = {
@@ -169,6 +219,84 @@ function emptyAgentContext(config: AiConfig, state: CanvasAgentState): CanvasAge
         tasks: [],
     };
 }
+
+test("Claude 单动作图片合成 JSON 只执行一次且不回显命令", async () => {
+    const executed: CanvasAgentAction[] = [];
+    const command = `\`\`\`json
+${JSON.stringify({ action: "generate_image", mode: "composite", title: "庄园里的小猫", inputNodeIds: ["estate-node", "cat-node"], prompt: "以庄园全景为底图，把小猫放进庄园" }, null, 2)}
+\`\`\`
+
+正在把小猫合成进庄园。`;
+    const { requestBodies, result } = await runScriptedAgent({
+        userText: "把小猫放到庄园里面",
+        responses: [{ content: command }, { content: "图片合成任务已经提交。" }],
+        executeAction: async (nextAction) => {
+            executed.push(nextAction);
+            return { ok: true, nodeId: "result-image", taskId: "image-task", status: "loading" };
+        },
+    });
+
+    assert.equal(requestBodies.length, 2);
+    assert.equal(executed.length, 1);
+    assert.equal(executed[0]?.name, "generate_image");
+    assert.deepEqual(executed[0]?.arguments.sourceNodeIds, ["estate-node", "cat-node"]);
+    assert.equal(result.reply, "图片合成任务已经提交。");
+    assert.doesNotMatch(result.reply, /generate_image|inputNodeIds/);
+});
+
+test("未知单动作 JSON 会重试并明确报错而不是作为成功回复", async () => {
+    let executions = 0;
+    const invalidCommand = JSON.stringify({ action: "compose_image", inputNodeIds: ["estate", "cat"], prompt: "合成" });
+    const { requestBodies, result } = await runScriptedAgent({
+        userText: "讨论一下当前构图",
+        responses: [{ content: invalidCommand }, { content: invalidCommand }],
+        executeAction: async () => {
+            executions += 1;
+            return { ok: true };
+        },
+    });
+
+    assert.equal(requestBodies.length, 2);
+    assert.equal(executions, 0);
+    assert.match(result.reply, /没有返回可执行的画布工具指令/);
+    assert.notEqual(result.reply, invalidCommand);
+});
+
+test("\u622a\u56fe\u5f0f\u9876\u5c42 delete_node \u4e0d\u4f1a\u8fdb\u5165\u6267\u884c\u5668", async () => {
+    let executions = 0;
+    const unsafeCommand = JSON.stringify({ action: "delete_node", nodeId: "estate" });
+    const { requestBodies, result } = await runScriptedAgent({
+        userText: "\u8ba8\u8bba\u4e00\u4e0b\u5f53\u524d\u6784\u56fe",
+        responses: [{ content: unsafeCommand }, { content: unsafeCommand }],
+        executeAction: async () => {
+            executions += 1;
+            return { ok: true, deletedNodeIds: ["estate"] };
+        },
+    });
+
+    assert.equal(requestBodies.length, 2);
+    assert.equal(executions, 0);
+    assert.match(result.reply, /\u6ca1\u6709\u8fd4\u56de\u53ef\u6267\u884c\u7684\u753b\u5e03\u5de5\u5177\u6307\u4ee4/);
+    assert.notEqual(result.reply, unsafeCommand);
+});
+
+test("\u7578\u5f62\u5355\u52a8\u4f5c JSON \u4f1a\u660e\u786e\u62a5\u9519\u800c\u4e0d\u4f1a\u4f5c\u4e3a\u6210\u529f\u56de\u590d", async () => {
+    let executions = 0;
+    const malformedCommand = JSON.stringify({ action: "generate_image", inputNodeIds: "estate", prompt: "compose image" });
+    const { requestBodies, result } = await runScriptedAgent({
+        userText: "\u8ba8\u8bba\u4e00\u4e0b\u5f53\u524d\u6784\u56fe",
+        responses: [{ content: malformedCommand }, { content: malformedCommand }],
+        executeAction: async () => {
+            executions += 1;
+            return { ok: true };
+        },
+    });
+
+    assert.equal(requestBodies.length, 2);
+    assert.equal(executions, 0);
+    assert.match(result.reply, /\u6ca1\u6709\u8fd4\u56de\u53ef\u6267\u884c\u7684\u753b\u5e03\u5de5\u5177\u6307\u4ee4/);
+    assert.notEqual(result.reply, malformedCommand);
+});
 
 test("渠道返回 200 但忽略工具时自动降级 JSON 并创建多个节点与连线", async () => {
     const executed: CanvasAgentAction[] = [];

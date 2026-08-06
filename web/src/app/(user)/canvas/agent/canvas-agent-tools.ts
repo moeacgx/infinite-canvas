@@ -59,6 +59,7 @@ export type CanvasAgentToolDefinition = {
 
 export type ParsedCanvasAgentJson = {
     parsed: boolean;
+    actionLike: boolean;
     actions: CanvasAgentAction[];
     reply: string;
 };
@@ -370,19 +371,41 @@ function invalidCanvasAgentToolMessage(name: unknown) {
 
 export function parseCanvasAgentJson(content: string): ParsedCanvasAgentJson {
     const json = extractJsonObject(content);
-    if (!json) return { parsed: false, actions: [], reply: content.trim() };
+    const actionLike = looksLikeCanvasAgentJsonAction(json);
+    if (!json) return { parsed: false, actionLike, actions: [], reply: content.trim() };
     try {
-        const payload = JSON.parse(json) as { actions?: Array<{ id?: string; tool?: string; name?: string; arguments?: unknown }>; reply?: unknown };
-        if (!Array.isArray(payload.actions)) return { parsed: false, actions: [], reply: content.trim() };
+        const payload = JSON.parse(json) as unknown;
+        if (!isRecord(payload)) return { parsed: false, actionLike, actions: [], reply: content.trim() };
+        const rawActions = canvasAgentJsonActions(payload);
+        if (!rawActions) return { parsed: false, actionLike, actions: [], reply: content.trim() };
         const fallbackActionId = createCanvasAgentFallbackActionIdFactory();
-        const actions = payload.actions.slice(0, 12).map((item) => {
+        const actions = rawActions.slice(0, 12).map((item) => {
             const name = item.tool || item.name;
             return normalizeCanvasAgentAction(name, item.arguments, optionalString(item.id) || fallbackActionId(name, item.arguments));
         });
-        return { parsed: true, actions, reply: typeof payload.reply === "string" ? payload.reply.trim() : "" };
+        return { parsed: true, actionLike, actions, reply: typeof payload.reply === "string" ? payload.reply.trim() : "" };
     } catch {
-        return { parsed: false, actions: [], reply: content.trim() };
+        return { parsed: false, actionLike, actions: [], reply: content.trim() };
     }
+}
+
+function looksLikeCanvasAgentJsonAction(content: string) {
+    return /"(?:action|actions)"\s*:/.test(content);
+}
+
+type CanvasAgentJsonActionInput = { id?: unknown; tool?: unknown; name?: unknown; arguments?: unknown };
+
+function canvasAgentJsonActions(payload: Record<string, unknown>): CanvasAgentJsonActionInput[] | null {
+    if (Array.isArray(payload.actions)) return payload.actions.every(isRecord) ? payload.actions : null;
+    // 若显式提供了畸形 actions 字段，不再回退到单动作协议，避免歧义或动作夹带。
+    if (Object.prototype.hasOwnProperty.call(payload, "actions") || typeof payload.action !== "string") return null;
+
+    const actionName = normalizeCanvasAgentActionName(payload.action);
+    if (!actionName || !isCanvasAgentMediaActionName(actionName)) return null;
+    const { action, id, reply: _reply, mode: _mode, inputNodeIds, arguments: nestedArguments, ...flatArguments } = payload;
+    const argumentsValue = isRecord(nestedArguments) ? { ...flatArguments, ...nestedArguments } : flatArguments;
+    if (!Object.prototype.hasOwnProperty.call(argumentsValue, "sourceNodeIds") && Array.isArray(inputNodeIds)) argumentsValue.sourceNodeIds = inputNodeIds;
+    return [{ id, tool: actionName, arguments: argumentsValue }];
 }
 
 export function canvasAgentActionLabel(action: CanvasAgentAction) {
@@ -415,11 +438,15 @@ export function canvasAgentActionLabel(action: CanvasAgentAction) {
 }
 
 export function isCanvasAgentMediaAction(action: CanvasAgentAction) {
-    return action.name === "generate_image" || action.name === "edit_image" || action.name === "generate_video" || action.name === "generate_audio";
+    return isCanvasAgentMediaActionName(action.name);
+}
+
+function isCanvasAgentMediaActionName(name: CanvasAgentActionName) {
+    return name === "generate_image" || name === "edit_image" || name === "generate_video" || name === "generate_audio";
 }
 
 export function userLikelyRequestedCanvasAction(text: string) {
-    return /(?:创建|新增|插入|修改|更新|删除|连接|连线|分组|整理|生成|生图|视频|音频|配音|旁白|执行|拆成|拆分|放到画布|开始做)/i.test(text);
+    return /(?:创建|新增|插入|修改|更新|删除|连接|连线|分组|整理|生成|生图|视频|音频|配音|旁白|执行|拆成|拆分|放到画布|放到|放进|放入|放在|移到|移入|置入|合成|融合|叠加|拼接|替换|开始做)/i.test(text);
 }
 
 function extractJsonObject(content: string) {
