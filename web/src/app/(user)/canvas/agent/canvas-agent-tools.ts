@@ -404,7 +404,9 @@ function canvasAgentJsonActions(payload: Record<string, unknown>): CanvasAgentJs
     if (!actionName || !isCanvasAgentMediaActionName(actionName)) return null;
     const { action, id, reply: _reply, mode: _mode, inputNodeIds, arguments: nestedArguments, ...flatArguments } = payload;
     const argumentsValue = isRecord(nestedArguments) ? { ...flatArguments, ...nestedArguments } : flatArguments;
-    if (!Object.prototype.hasOwnProperty.call(argumentsValue, "sourceNodeIds") && Array.isArray(inputNodeIds)) argumentsValue.sourceNodeIds = inputNodeIds;
+    const compatibleInputNodeIds = Array.isArray(argumentsValue.inputNodeIds) ? argumentsValue.inputNodeIds : inputNodeIds;
+    if (!Object.prototype.hasOwnProperty.call(argumentsValue, "sourceNodeIds") && Array.isArray(compatibleInputNodeIds)) argumentsValue.sourceNodeIds = compatibleInputNodeIds;
+    delete argumentsValue.inputNodeIds;
     return [{ id, tool: actionName, arguments: argumentsValue }];
 }
 

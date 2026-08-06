@@ -107,6 +107,26 @@ ${JSON.stringify(
     assert.equal(userLikelyRequestedCanvasAction("把小猫放到庄园里面"), true);
 });
 
+test("单动作 JSON 兼容 arguments 内的 inputNodeIds", () => {
+    const parsed = parseCanvasAgentJson(
+        JSON.stringify({
+            action: "generate_image",
+            arguments: {
+                title: "庄园里的小猫",
+                inputNodeIds: ["estate-node", "cat-node"],
+                prompt: "把小猫合成进庄园",
+            },
+        }),
+    );
+
+    assert.equal(parsed.parsed, true);
+    assert.deepEqual(parsed.actions[0]?.arguments, {
+        title: "庄园里的小猫",
+        prompt: "把小猫合成进庄园",
+        sourceNodeIds: ["estate-node", "cat-node"],
+    });
+});
+
 test("单动作 JSON 仍拒绝未知工具和畸形 actions 字段", () => {
     const unknown = parseCanvasAgentJson(JSON.stringify({ action: "compose_image", prompt: "合成", inputNodeIds: ["estate", "cat"] }));
     const nonMedia = parseCanvasAgentJson(JSON.stringify({ action: "delete_node", nodeId: "estate" }));
