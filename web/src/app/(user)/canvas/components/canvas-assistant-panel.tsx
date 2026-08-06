@@ -50,6 +50,7 @@ type CanvasAssistantPanelProps = {
     onSessionsChange: (sessions: CanvasAssistantSession[], activeSessionId: string | null) => void;
     onAgentConfigChange: (patch: Partial<CanvasAgentConfig>) => void;
     getAgentContext: (state: CanvasAgentState) => CanvasAgentContext;
+    getCurrentNode: (nodeId: string) => CanvasNodeData | undefined;
     onExecuteAction: (action: CanvasAgentAction, messageReferenceNodeIds: string[], signal?: AbortSignal) => Promise<CanvasAgentToolResult>;
     onMaterializeReferences: (assets: PendingAgentAsset[], signal?: AbortSignal) => Promise<void>;
     onCollapseStart: () => void;
@@ -75,6 +76,7 @@ export function CanvasAssistantPanel({
     onSessionsChange,
     onAgentConfigChange,
     getAgentContext,
+    getCurrentNode,
     onExecuteAction,
     onMaterializeReferences,
     onCollapseStart,
@@ -94,6 +96,7 @@ export function CanvasAssistantPanel({
     const pendingDeleteRef = useRef<PendingDeleteConfirmation | null>(null);
     const messageListRef = useRef<HTMLDivElement>(null);
     const attachmentCleanupTimerRef = useRef<number | null>(null);
+    const attachmentCleanupRequestedRef = useRef(false);
     const mountedRef = useRef(true);
     const [view, setView] = useState<"chat" | "history">("chat");
     const [prompt, setPrompt] = useState("");
@@ -183,20 +186,36 @@ export function CanvasAssistantPanel({
         return true;
     };
 
+    const scheduleAttachmentCleanup = () => {
+        attachmentCleanupRequestedRef.current = true;
+        if (attachmentCleanupTimerRef.current) return;
+        const run = () => {
+            attachmentCleanupTimerRef.current = null;
+            if (!attachmentCleanupRequestedRef.current) return;
+            if (uploadingAssetCountRef.current > 0) {
+                attachmentCleanupTimerRef.current = window.setTimeout(run, 500);
+                return;
+            }
+            attachmentCleanupRequestedRef.current = false;
+            cleanupImages({ sessions: sessionsRef.current });
+        };
+        attachmentCleanupTimerRef.current = window.setTimeout(run, 500);
+    };
+
     const removeDraftAsset = (assetId: string) => {
         const sessionId = activeSessionIdRef.current || resolvedActiveSessionId;
         if (!sessionId) return;
         updateDraftAssets(sessionId, (assets) => assets.filter((asset) => asset.nodeId !== assetId));
-        if (attachmentCleanupTimerRef.current) clearTimeout(attachmentCleanupTimerRef.current);
-        attachmentCleanupTimerRef.current = window.setTimeout(() => {
-            attachmentCleanupTimerRef.current = null;
-            cleanupImages({ sessions: sessionsRef.current });
-        }, 500);
+        scheduleAttachmentCleanup();
     };
 
     const handleAssistantFile = async (file: File) => {
         const targetSessionId = activeSessionIdRef.current || resolvedActiveSessionId;
         if (!targetSessionId) return;
+        if (attachmentCleanupTimerRef.current) {
+            clearTimeout(attachmentCleanupTimerRef.current);
+            attachmentCleanupTimerRef.current = null;
+        }
         const isImage = file.type.startsWith("image/");
         const isVideo = file.type.startsWith("video/");
         const isAudio = file.type.startsWith("audio/") || /\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(file.name);
@@ -232,6 +251,7 @@ export function CanvasAssistantPanel({
             if (mountedRef.current) {
                 uploadingAssetCountRef.current = Math.max(0, uploadingAssetCountRef.current - 1);
                 setUploadingAssetCount(uploadingAssetCountRef.current);
+                if (uploadingAssetCountRef.current === 0 && attachmentCleanupRequestedRef.current) scheduleAttachmentCleanup();
             }
         }
     };
@@ -271,7 +291,7 @@ export function CanvasAssistantPanel({
             const currentActiveSessionId = activeSessionIdRef.current;
             commitSessions(next, currentActiveSessionId && ids.includes(currentActiveSessionId) ? next[0].id : currentActiveSessionId);
         }
-        cleanupImages({ sessions: next });
+        scheduleAttachmentCleanup();
         setCheckedChatIds((previous) => previous.filter((id) => !ids.includes(id)));
     };
 
@@ -279,7 +299,7 @@ export function CanvasAssistantPanel({
         const session = createSession();
         commitSessions([session], session.id);
         setCheckedChatIds([]);
-        cleanupImages({ sessions: [session] });
+        scheduleAttachmentCleanup();
     };
 
     const sendMessage = async (text: string, savedReferences?: CanvasAssistantReference[], baseProtocolMessages?: CanvasAgentProtocolMessage[], onAccepted?: () => void) => {
@@ -347,7 +367,7 @@ export function CanvasAssistantPanel({
                 executeAction: async (action) => {
                     if (action.name === "delete_node") {
                         const nodeId = typeof action.arguments.nodeId === "string" ? action.arguments.nodeId : "";
-                        const node = nodes.find((item) => item.id === nodeId);
+                        const node = getCurrentNode(nodeId) || nodes.find((item) => item.id === nodeId);
                         const attachment = attachmentAssets.get(nodeId);
                         const confirmed = await new Promise<boolean>((resolve) => {
                             const pending = { title: node?.title || attachment?.reference.title || "未命名节点", resolve };

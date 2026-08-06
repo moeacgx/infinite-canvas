@@ -4698,6 +4698,7 @@ function InfiniteCanvasPage() {
                     onSessionsChange={handleAssistantSessionsChange}
                     onAgentConfigChange={handleAgentConfigChange}
                     getAgentContext={getCanvasAgentContext}
+                    getCurrentNode={(nodeId) => nodesRef.current.find((node) => node.id === nodeId)}
                     onExecuteAction={executeCanvasAgentAction}
                     onMaterializeReferences={materializeAgentReferences}
                     onCollapseStart={() => setAgentPanel((current) => ({ ...current, open: false }))}
