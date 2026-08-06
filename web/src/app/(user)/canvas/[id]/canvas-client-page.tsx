@@ -59,7 +59,7 @@ import { GROUP_PADDING, findContainingGroupId, findGroupDropTarget, getNodeBound
 import { applyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "../utils/canvas-agent-ops";
 import { deleteCanvasNodes as deleteCanvasNodesFromState } from "../utils/canvas-node-deletion";
 import { createLinkedAbortController } from "../utils/canvas-generation-abort";
-import { buildCanvasAgentContext } from "../agent/canvas-agent-context";
+import { buildCanvasAgentContext, canvasAgentMediaTaskId } from "../agent/canvas-agent-context";
 import type { CanvasAgentAction, CanvasAgentToolResult } from "../agent/canvas-agent-tools";
 import { buildNodeContext } from "@/lib/canvas/plugin-node-context";
 import { getNodeDefinition, isBuiltinNodeType, isKnownNodeType, listNodeDefinitions, useNodeRegistryVersion } from "@/lib/canvas/node-registry";
@@ -5186,7 +5186,7 @@ function canvasAgentNodeSummary(node: CanvasNodeData) {
         size: node.metadata?.size,
         seconds: node.metadata?.seconds,
         generateAudio: node.metadata?.generateAudio,
-        taskId: node.metadata?.videoTaskId,
+        taskId: canvasAgentMediaTaskId(node) || undefined,
         progress: node.metadata?.progress,
         error: node.metadata?.errorDetails,
         groupId: node.metadata?.groupId,
@@ -5198,7 +5198,7 @@ function canvasAgentTaskSummary(node: CanvasNodeData) {
     return {
         type: node.type,
         status: node.metadata?.status || NODE_STATUS_IDLE,
-        taskId: node.metadata?.videoTaskId,
+        taskId: canvasAgentMediaTaskId(node) || undefined,
         progress: node.metadata?.progress,
         error: node.metadata?.errorDetails,
         mediaUrl: content && !content.startsWith("data:") ? content : undefined,

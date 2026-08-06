@@ -297,7 +297,11 @@ export function parseCanvasAgentJson(content: string): ParsedCanvasAgentJson {
     try {
         const payload = JSON.parse(json) as { actions?: Array<{ id?: string; tool?: string; name?: string; arguments?: unknown }>; reply?: unknown };
         if (!Array.isArray(payload.actions)) return { parsed: false, actions: [], reply: content.trim() };
-        const actions = payload.actions.slice(0, 12).map((item) => normalizeCanvasAgentAction(item.tool || item.name, item.arguments, item.id || nanoid()));
+        const fallbackActionId = createCanvasAgentFallbackActionIdFactory();
+        const actions = payload.actions.slice(0, 12).map((item) => {
+            const name = item.tool || item.name;
+            return normalizeCanvasAgentAction(name, item.arguments, optionalString(item.id) || fallbackActionId(name, item.arguments));
+        });
         return { parsed: true, actions, reply: typeof payload.reply === "string" ? payload.reply.trim() : "" };
     } catch {
         return { parsed: false, actions: [], reply: content.trim() };
@@ -349,6 +353,37 @@ function extractJsonObject(content: string) {
     const start = trimmed.indexOf("{");
     const end = trimmed.lastIndexOf("}");
     return start >= 0 && end > start ? trimmed.slice(start, end + 1) : "";
+}
+
+export function createCanvasAgentFallbackActionIdFactory() {
+    const occurrenceBySignature = new Map<string, number>();
+    return (name: unknown, args: unknown) => {
+        const signature = stableJson({ name, args });
+        const occurrence = occurrenceBySignature.get(signature) || 0;
+        occurrenceBySignature.set(signature, occurrence + 1);
+        return canvasAgentFallbackActionId(name, args, occurrence);
+    };
+}
+
+export function canvasAgentActionSignature(action: Pick<CanvasAgentAction, "name" | "arguments">) {
+    return stableJson({ name: action.name, args: action.arguments });
+}
+
+function canvasAgentFallbackActionId(name: unknown, args: unknown, occurrence: number) {
+    const source = stableJson({ name, args, occurrence });
+    let hash = 0x811c9dc5;
+    for (let offset = 0; offset < source.length; offset += 1) hash = Math.imul(hash ^ source.charCodeAt(offset), 0x01000193);
+    return `agent-action-${occurrence}-${(hash >>> 0).toString(36)}`;
+}
+
+function stableJson(value: unknown): string {
+    if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+    if (isRecord(value))
+        return `{${Object.keys(value)
+            .sort()
+            .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
+            .join(",")}}`;
+    return JSON.stringify(value) ?? "null";
 }
 
 function requiredString(value: unknown, key: string) {

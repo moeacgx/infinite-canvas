@@ -87,6 +87,9 @@ test("全景首次生成和重试共用 2:1 配置归一化并将自动质量提
     assert.match(retryBlock, /requestEdit\(generationConfig,/);
     assert.match(retryBlock, /requestGeneration\(generationConfig,/);
     assert.match(source, /if \(!isCanvasImageNodeType\(node\.type\) && node\.type !== CanvasNodeType\.Video && node\.type !== CanvasNodeType\.Audio\)/);
+    const taskSummary = source.match(/function canvasAgentTaskSummary\([\s\S]*?\n\}/)?.[0];
+    assert.ok(taskSummary, "Agent 应提供独立的媒体任务摘要");
+    assert.match(taskSummary, /taskId:\s*canvasAgentMediaTaskId\(node\)\s*\|\|\s*undefined/);
 });
 
 test("节点生成态显示耗时、进度和视频专用进度条", async () => {

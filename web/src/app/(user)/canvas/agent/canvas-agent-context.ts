@@ -135,7 +135,7 @@ export function buildCanvasAgentContext(input: BuildCanvasAgentContextInput): Ca
             audioFormat: input.config.audioFormat,
         },
         tasks: includedSourceNodes.flatMap((node) => {
-            const taskId = mediaTaskId(node);
+            const taskId = canvasAgentMediaTaskId(node);
             if (!taskId) return [];
             return [
                 {
@@ -184,13 +184,13 @@ function summarizeNode(node: CanvasNodeData): CanvasAgentContextNode {
         size: node.metadata?.size,
         seconds: node.metadata?.seconds,
         generateAudio: node.metadata?.generateAudio,
-        taskId: mediaTaskId(node) || undefined,
+        taskId: canvasAgentMediaTaskId(node) || undefined,
         error: node.metadata?.errorDetails,
         groupId: node.metadata?.groupId,
     };
 }
 
-function mediaTaskId(node: CanvasNodeData) {
+export function canvasAgentMediaTaskId(node: CanvasNodeData) {
     if (node.type === CanvasNodeType.Video) return node.metadata?.videoTaskId || "";
     if (node.type === CanvasNodeType.Audio) return node.metadata?.audioTaskId || "";
     if (isCanvasImageNodeType(node.type)) return node.metadata?.imageTaskId || "";

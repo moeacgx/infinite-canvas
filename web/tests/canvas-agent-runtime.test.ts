@@ -5,7 +5,7 @@ import test from "node:test";
 
 import { createCanvasAgentExecutionBudget, createCanvasAgentState, normalizeCanvasAgentToolCalls, reserveCanvasAgentAction, runCanvasAgent } from "../src/app/(user)/canvas/agent/canvas-agent-runtime.ts";
 import type { CanvasAgentContext } from "../src/app/(user)/canvas/agent/canvas-agent-context.ts";
-import type { CanvasAgentAction, CanvasAgentToolResult } from "../src/app/(user)/canvas/agent/canvas-agent-tools.ts";
+import { parseCanvasAgentJson, type CanvasAgentAction, type CanvasAgentToolResult } from "../src/app/(user)/canvas/agent/canvas-agent-tools.ts";
 import type { CanvasAgentState } from "../src/app/(user)/canvas/types.ts";
 import { createModelChannel, defaultConfig, encodeChannelModel, withLocalChannels, type AiConfig } from "../src/stores/use-config-store.ts";
 
@@ -50,10 +50,36 @@ test("畸形原生工具调用会返回结构化错误而不是终止 Agent", ()
     assert.equal(unknownTool.rejection?.code, "invalid_tool_call");
 });
 
+test("JSON 兼容动作缺少 ID 时生成可重放且同批不冲突的稳定 ID", () => {
+    const content = JSON.stringify({
+        actions: [
+            { tool: "generate_image", arguments: { prompt: "同一张图", sourceNodeIds: [] } },
+            { tool: "generate_image", arguments: { prompt: "同一张图", sourceNodeIds: [] } },
+        ],
+        reply: "",
+    });
+    const first = parseCanvasAgentJson(content).actions;
+    const replay = parseCanvasAgentJson(content).actions;
+    const shifted = parseCanvasAgentJson(
+        JSON.stringify({
+            actions: [
+                { tool: "get_canvas_summary", arguments: {} },
+                { tool: "generate_image", arguments: { prompt: "同一张图", sourceNodeIds: [] } },
+            ],
+            reply: "",
+        }),
+    ).actions;
+
+    assert.equal(first[0]?.id, replay[0]?.id);
+    assert.equal(first[1]?.id, replay[1]?.id);
+    assert.notEqual(first[0]?.id, first[1]?.id);
+    assert.equal(first[0]?.id, shifted.find((action) => action.name === "generate_image")?.id);
+});
+
 type ScriptedModelMessage = {
     content?: string | null;
     tool_calls?: Array<{
-        id: string;
+        id?: string;
         type: "function";
         function: { name: string; arguments: string };
     }>;
@@ -200,6 +226,56 @@ test("模型返回澄清问题时不会强制切换 JSON 模式", async () => {
     assert.equal(result.reply, "你希望创建几个分镜节点？");
 });
 
+test("没有问号的阻塞信息也会作为澄清回复保留", async () => {
+    const clarification = "还缺少分镜数量，请补充后我再创建";
+    const { requestBodies, result } = await runScriptedAgent({
+        userText: "请创建分镜节点",
+        responses: [{ content: clarification }],
+        executeAction: async () => ({ ok: true }),
+    });
+
+    assert.equal(requestBodies.length, 1);
+    assert.equal(result.reply, clarification);
+});
+
+test("无需补充等否定表达不会阻止画布动作降级执行", async () => {
+    const executed: CanvasAgentAction[] = [];
+    const { requestBodies, result } = await runScriptedAgent({
+        userText: "请创建一个文本节点",
+        responses: [
+            { content: "无需补充，我现在创建。" },
+            {
+                content: JSON.stringify({
+                    actions: [{ tool: "create_text_node", arguments: { title: "节点", content: "内容", sourceNodeIds: [] } }],
+                    reply: "正在创建",
+                }),
+            },
+            { content: JSON.stringify({ actions: [], reply: "文本节点已经创建。" }) },
+        ],
+        executeAction: async (nextAction) => {
+            executed.push(nextAction);
+            return { ok: true, nodeId: "text-node" };
+        },
+    });
+
+    assert.equal(requestBodies.length, 3);
+    assert.equal(executed.length, 1);
+    assert.equal(executed[0]?.name, "create_text_node");
+    assert.equal(result.reply, "文本节点已经创建。");
+});
+
+test("合法 JSON 空动作会保留前置条件回复而不是误报不兼容", async () => {
+    const reply = "当前没有可连接的节点，请先创建至少两个节点";
+    const { requestBodies, result } = await runScriptedAgent({
+        userText: "请连接画布上的两个节点",
+        responses: [{ content: JSON.stringify({ actions: [], reply }) }],
+        executeAction: async () => ({ ok: true }),
+    });
+
+    assert.equal(requestBodies.length, 1);
+    assert.equal(result.reply, reply);
+});
+
 test("兼容 JSON 仍无动作时只重试一次并返回明确错误", async () => {
     let executions = 0;
     const { requestBodies, result } = await runScriptedAgent({
@@ -252,4 +328,168 @@ test("已提交媒体工具后普通文本收尾不会触发降级或重复生�
     assert.equal(executed.length, 1);
     assert.equal(executed[0]?.name, "generate_image");
     assert.equal(result.reply, "图片任务已经提交，请稍后查看结果。");
+});
+
+test("原生工具缺少调用 ID 时不同动作仍可按顺序执行", async () => {
+    const executed: CanvasAgentAction[] = [];
+    const { requestBodies, result } = await runScriptedAgent({
+        userText: "读取画布后创建一个文本节点",
+        responses: [
+            {
+                content: null,
+                tool_calls: [{ type: "function", function: { name: "get_canvas_summary", arguments: "{}" } }],
+            },
+            {
+                content: null,
+                tool_calls: [
+                    {
+                        type: "function",
+                        function: {
+                            name: "create_text_node",
+                            arguments: JSON.stringify({ title: "节点", content: "内容", sourceNodeIds: [] }),
+                        },
+                    },
+                ],
+            },
+            { content: "文本节点已经创建。" },
+        ],
+        executeAction: async (nextAction) => {
+            executed.push(nextAction);
+            return nextAction.name === "get_canvas_summary" ? { ok: true, nodes: [] } : { ok: true, nodeId: "text-node" };
+        },
+    });
+
+    assert.equal(requestBodies.length, 3);
+    assert.deepEqual(
+        executed.map((nextAction) => nextAction.name),
+        ["get_canvas_summary", "create_text_node"],
+    );
+    assert.notEqual(executed[0]?.id, executed[1]?.id);
+    assert.equal(result.reply, "文本节点已经创建。");
+});
+
+test("无副作用读取动作允许在同一轮重复执行", async () => {
+    const executed: CanvasAgentAction[] = [];
+    const { result } = await runScriptedAgent({
+        userText: "创建节点前后都读取一次画布",
+        responses: [
+            { content: null, tool_calls: [{ type: "function", function: { name: "get_canvas_summary", arguments: "{}" } }] },
+            {
+                content: null,
+                tool_calls: [
+                    {
+                        type: "function",
+                        function: { name: "create_text_node", arguments: JSON.stringify({ title: "节点", content: "内容", sourceNodeIds: [] }) },
+                    },
+                ],
+            },
+            { content: null, tool_calls: [{ type: "function", function: { name: "get_canvas_summary", arguments: "{}" } }] },
+            { content: "已在创建前后读取画布。" },
+        ],
+        executeAction: async (nextAction) => {
+            executed.push(nextAction);
+            return nextAction.name === "create_text_node" ? { ok: true, nodeId: "text-node" } : { ok: true, nodes: [] };
+        },
+    });
+
+    assert.deepEqual(
+        executed.map((nextAction) => nextAction.name),
+        ["get_canvas_summary", "create_text_node", "get_canvas_summary"],
+    );
+    assert.equal(result.reply, "已在创建前后读取画布。");
+});
+
+test("供应商更换调用 ID 时相同媒体写操作仍只提交一次", async () => {
+    const executed: CanvasAgentAction[] = [];
+    const firstArguments = { prompt: " 雨夜城市霓虹 ", sourceNodeIds: [], count: "1", ignored: "field" };
+    const secondArguments = { prompt: "雨夜城市霓虹", sourceNodeIds: [], count: 1 };
+    const { requestBodies, result } = await runScriptedAgent({
+        userText: "生成一张城市夜景图片",
+        responses: [
+            {
+                content: null,
+                tool_calls: [{ id: "provider-call-a", type: "function", function: { name: "generate_image", arguments: JSON.stringify(firstArguments) } }],
+            },
+            {
+                content: null,
+                tool_calls: [{ id: "provider-call-b", type: "function", function: { name: "generate_image", arguments: JSON.stringify(secondArguments) } }],
+            },
+            { content: "图片任务已经提交。" },
+        ],
+        executeAction: async (nextAction) => {
+            executed.push(nextAction);
+            return { ok: true, nodeId: "image-node", taskId: "image-task", status: "loading" };
+        },
+    });
+
+    assert.equal(executed.length, 1);
+    assert.match(String(requestBodies[2]?.messages?.at(-1)?.content), /duplicate_action/);
+    assert.equal(result.reply, "图片任务已经提交。");
+});
+
+test("失败动作修正参数后可复用调用 ID", async () => {
+    const executedSeconds: unknown[] = [];
+    const action = (seconds: number) => ({ id: "video-action", tool: "generate_video", arguments: { prompt: "雨夜城市", sourceNodeIds: [], seconds } });
+    const { result } = await runScriptedAgent({
+        userText: "生成一个 5 秒视频",
+        responses: [
+            { content: "我来生成。" },
+            { content: JSON.stringify({ actions: [action(15)], reply: "正在提交" }) },
+            { content: JSON.stringify({ actions: [action(5)], reply: "已修正时长" }) },
+            { content: JSON.stringify({ actions: [], reply: "5 秒视频任务已经提交。" }) },
+        ],
+        executeAction: async (nextAction) => {
+            executedSeconds.push(nextAction.arguments.seconds);
+            return executedSeconds.length === 1 ? { ok: false, code: "unsupported_duration", message: "仅支持 5 秒" } : { ok: true, nodeId: "video-node", taskId: "video-task" };
+        },
+    });
+
+    assert.deepEqual(executedSeconds, [15, 5]);
+    assert.equal(result.reply, "5 秒视频任务已经提交。");
+});
+
+test("同一批两个完全相同的媒体动作都允许执行", async () => {
+    const mediaAction = { tool: "generate_image", arguments: { prompt: "同一构图", sourceNodeIds: [] } };
+    const executed: CanvasAgentAction[] = [];
+    const { result } = await runScriptedAgent({
+        userText: "生成两张内容相同的图片",
+        responses: [{ content: "我来生成两张。" }, { content: JSON.stringify({ actions: [mediaAction, mediaAction], reply: "正在生成" }) }, { content: JSON.stringify({ actions: [], reply: "两张图片任务已经提交。" }) }],
+        executeAction: async (nextAction) => {
+            executed.push(nextAction);
+            return { ok: true, nodeId: `image-${executed.length}`, taskId: `task-${executed.length}` };
+        },
+    });
+
+    assert.equal(executed.length, 2);
+    assert.notEqual(executed[0]?.id, executed[1]?.id);
+    assert.equal(result.reply, "两张图片任务已经提交。");
+});
+
+test("JSON 降级多轮重放同一媒体动作时只提交一次", async () => {
+    const mediaAction = {
+        tool: "generate_image",
+        arguments: { prompt: "雨夜城市霓虹", sourceNodeIds: [] },
+    };
+    const executed: CanvasAgentAction[] = [];
+    const { requestBodies, result } = await runScriptedAgent({
+        userText: "生成一张城市夜景图片",
+        responses: [
+            { content: "好的，我来生成。" },
+            { content: JSON.stringify({ actions: [{ tool: "get_canvas_summary", arguments: {} }, mediaAction], reply: "正在生成" }) },
+            { content: JSON.stringify({ actions: [mediaAction, mediaAction], reply: "继续生成" }) },
+            { content: JSON.stringify({ actions: [], reply: "图片任务已经提交。" }) },
+        ],
+        executeAction: async (nextAction) => {
+            executed.push(nextAction);
+            return nextAction.name === "get_canvas_summary" ? { ok: true, nodes: [] } : { ok: true, nodeId: "image-node", taskId: "image-task", status: "loading" };
+        },
+    });
+
+    assert.equal(requestBodies.length, 4);
+    assert.deepEqual(
+        executed.map((nextAction) => nextAction.name),
+        ["get_canvas_summary", "generate_image"],
+    );
+    assert.match(String(requestBodies[3]?.messages?.at(-1)?.content), /duplicate_action/);
+    assert.equal(result.reply, "图片任务已经提交。");
 });
