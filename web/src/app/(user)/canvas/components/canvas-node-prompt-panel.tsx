@@ -16,7 +16,7 @@ import { CanvasAudioSettingsPopover, type CanvasAudioSettingKey } from "./canvas
 import { CanvasPromptChipInput } from "./canvas-prompt-chip-input";
 import { CanvasVideoSettingsPopover, type CanvasVideoFrameOption, type CanvasVideoResourceOption } from "./canvas-video-settings-popover";
 import { CanvasNodeType, type CanvasGenerationMode, type CanvasNodeData } from "../types";
-import { PANORAMA_IMAGE_SIZE, isCanvasImageNodeType, isPanoramaNodeType } from "../utils/canvas-panorama";
+import { PANORAMA_DEFAULT_QUALITY, PANORAMA_IMAGE_SIZE, PANORAMA_OUTPUT_LABEL, isCanvasImageNodeType, isPanoramaNodeType, panoramaSettingsHint } from "../utils/canvas-panorama";
 import type { CanvasResourceReference } from "../utils/canvas-resource-references";
 
 export type CanvasNodeGenerationMode = CanvasGenerationMode;
@@ -100,7 +100,10 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                             <CanvasImageSettingsPopover
                                 config={config}
                                 placement="topLeft"
-                                buttonClassName="!h-10 !max-w-[170px] !justify-start !rounded-full !px-3"
+                                buttonClassName={isPanorama ? "!h-10 !max-w-[210px] !justify-start !rounded-full !px-3" : "!h-10 !max-w-[170px] !justify-start !rounded-full !px-3"}
+                                buttonLabel={isPanorama ? "图像设置" : undefined}
+                                fixedSizeLabel={isPanorama ? PANORAMA_OUTPUT_LABEL : undefined}
+                                fixedSizeHint={isPanorama ? panoramaSettingsHint() : undefined}
                                 onConfigChange={(key, value) => onConfigChange(node.id, key === "count" ? { count: Number(value) || 1 } : { [key]: value })}
                                 onMissingConfig={() => openConfigDialog(true)}
                                 onOpenChange={onImageSettingsOpenChange}
@@ -178,7 +181,7 @@ function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: Can
     return {
         ...globalConfig,
         model,
-        quality: node.metadata?.quality || globalConfig.quality || defaultConfig.quality,
+        quality: node.metadata?.quality || (isPanoramaNodeType(node.type) ? PANORAMA_DEFAULT_QUALITY : globalConfig.quality || defaultConfig.quality),
         size: isPanoramaNodeType(node.type) ? PANORAMA_IMAGE_SIZE : node.metadata?.size || (mode === "video" ? globalConfig.videoSize || "1280x720" : globalConfig.size || defaultConfig.size),
         background: node.metadata?.background ?? globalConfig.background ?? defaultConfig.background,
         videoSeconds: node.metadata?.seconds || globalConfig.videoSeconds || defaultConfig.videoSeconds,

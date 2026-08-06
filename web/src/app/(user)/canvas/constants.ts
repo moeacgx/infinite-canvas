@@ -1,7 +1,7 @@
 import { CanvasNodeType } from "./types";
 import type { CanvasNodeMetadata, CanvasNodeTypeId } from "./types";
 import { getRegisteredNodeSpec } from "../../../lib/canvas/node-registry";
-import { PANORAMA_IMAGE_SIZE, PANORAMA_NODE_SIZE } from "./utils/canvas-panorama";
+import { PANORAMA_DEFAULT_QUALITY, PANORAMA_IMAGE_SIZE, PANORAMA_NODE_SIZE } from "./utils/canvas-panorama";
 
 type CanvasNodeSpec = {
     width: number;
@@ -28,7 +28,7 @@ export const NODE_SPECS = {
     },
     [CanvasNodeType.Panorama]: {
         ...NODE_DEFAULT_SIZE[CanvasNodeType.Panorama],
-        metadata: { content: "", status: "idle", size: PANORAMA_IMAGE_SIZE, panoramaSourcePrompt: "" },
+        metadata: { content: "", status: "idle", size: PANORAMA_IMAGE_SIZE, quality: PANORAMA_DEFAULT_QUALITY, panoramaSourcePrompt: "" },
     },
     [CanvasNodeType.Text]: {
         ...NODE_DEFAULT_SIZE[CanvasNodeType.Text],
