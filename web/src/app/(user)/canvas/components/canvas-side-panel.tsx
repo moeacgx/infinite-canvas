@@ -20,8 +20,9 @@ import { useThemeStore } from "@/stores/use-theme-store";
 import type { CanvasNodeResource } from "@/types/canvas-plugin";
 
 import type { CanvasNodeData, InsertAssetPayload } from "../types";
+import { CANVAS_ASSET_DRAG_TYPE, startCanvasAssetDrag } from "../utils/canvas-asset-transfer";
 
-export const CANVAS_ASSET_DRAG_TYPE = "application/x-infinite-canvas-asset";
+export { CANVAS_ASSET_DRAG_TYPE } from "../utils/canvas-asset-transfer";
 export const CANVAS_SIDE_PANEL_MIN_WIDTH = 240;
 export const CANVAS_SIDE_PANEL_MAX_WIDTH = 440;
 
@@ -433,9 +434,7 @@ function DraggableAssetCard({
             draggable
             title={title}
             onDragStart={(event) => {
-                event.dataTransfer.setData(CANVAS_ASSET_DRAG_TYPE, JSON.stringify(payload));
-                event.dataTransfer.effectAllowed = "copy";
-                onAssetDragStart?.(payload);
+                startCanvasAssetDrag(event.dataTransfer, payload, onAssetDragStart);
             }}
             onDragEnd={() => onAssetDragEnd?.()}
             className="group relative aspect-square cursor-grab overflow-hidden rounded-lg border transition duration-200 hover:-translate-y-0.5 hover:shadow-lg active:cursor-grabbing"
@@ -444,21 +443,21 @@ function DraggableAssetCard({
             {kind === "text" ? (
                 imageUrl ? (
                     <div className="flex size-full flex-col">
-                        <img src={imageUrl} alt={title} className="h-1/2 w-full object-cover" />
+                        <img src={imageUrl} alt={title} draggable={false} className="h-1/2 w-full object-cover" />
                         <div className="h-1/2 overflow-hidden whitespace-pre-wrap break-words p-2.5 text-[11px] leading-snug opacity-80">{text}</div>
                     </div>
                 ) : (
                     <div className="size-full overflow-hidden whitespace-pre-wrap break-words p-2.5 text-[11px] leading-snug opacity-80">{text}</div>
                 )
             ) : kind === "video" && mediaUrl ? (
-                <video src={mediaUrl + "#t=0.1"} muted playsInline preload="metadata" className="size-full bg-black object-cover transition duration-300 group-hover:scale-[1.04]" />
+                <video src={mediaUrl + "#t=0.1"} muted playsInline preload="metadata" draggable={false} className="size-full bg-black object-cover transition duration-300 group-hover:scale-[1.04]" />
             ) : kind === "audio" ? (
                 <span className="flex size-full flex-col items-center justify-center gap-2 px-3 text-center">
                     <AudioLines className="size-9 opacity-55" />
                     <span className="line-clamp-2 text-[11px] font-medium opacity-70">{title}</span>
                 </span>
             ) : imageUrl ? (
-                <img src={imageUrl} alt={title} className="size-full object-cover transition duration-300 group-hover:scale-[1.04]" />
+                <img src={imageUrl} alt={title} draggable={false} className="size-full object-cover transition duration-300 group-hover:scale-[1.04]" />
             ) : (
                 <span className="grid size-full place-items-center">
                     <FileText className="size-8 opacity-45" />
@@ -473,7 +472,7 @@ function assetPayload(asset: Asset): InsertAssetPayload {
     if (asset.kind === "image")
         return {
             kind: "image",
-            dataUrl: asset.data.dataUrl,
+            dataUrl: asset.data.dataUrl || asset.coverUrl,
             storageKey: asset.data.storageKey,
             title: asset.title,
             assetId: asset.id,
@@ -492,10 +491,10 @@ function assetPayload(asset: Asset): InsertAssetPayload {
 function libraryPayload(asset: AssetLibraryItem): InsertAssetPayload {
     const assetType = String(asset.type);
     if (assetType === "text") return { kind: "text", content: asset.content, title: asset.title, assetId: asset.id, source: "library" };
-    if (assetType === "image") return { kind: "image", dataUrl: asset.url, title: asset.title, assetId: asset.id, source: "library" };
+    if (assetType === "image") return { kind: "image", dataUrl: asset.url || asset.coverUrl, title: asset.title, assetId: asset.id, source: "library" };
     if (assetType === "video") return { kind: "video", url: asset.url, title: asset.title, assetId: asset.id, source: "library" };
     if (assetType === "audio") return { kind: "audio", url: asset.url, title: asset.title, assetId: asset.id, source: "library" };
-    return { kind: "image", dataUrl: asset.url, title: asset.title, assetId: asset.id, source: "library" };
+    return { kind: "image", dataUrl: asset.url || asset.coverUrl, title: asset.title, assetId: asset.id, source: "library" };
 }
 
 const CanvasPromptsTab = memo(function CanvasPromptsTab({ theme, onInsert }: { theme: CanvasTheme; onInsert?: (payload: InsertAssetPayload) => void }) {
