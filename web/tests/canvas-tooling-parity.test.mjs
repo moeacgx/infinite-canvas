@@ -37,6 +37,6 @@ test("左侧面板包含画布、资产、提示词库，并继续支持插件�
     assert.match(sidePanelSource, /fetchAssetLibrary/);
     assert.match(sidePanelSource, /fetchPrompts/);
     assert.match(sidePanelSource, /QuickAssetFormModal/);
-    assert.match(sidePanelSource, /CANVAS_ASSET_DRAG_TYPE, JSON\.stringify\(payload\)/);
+    assert.match(sidePanelSource, /startCanvasAssetDrag\(event\.dataTransfer, payload, onAssetDragStart\)/);
     assert.match(sidePanelSource, /data-canvas-side-panel-backdrop/);
 });

@@ -62,6 +62,7 @@ import { createLinkedAbortController } from "../utils/canvas-generation-abort";
 import { buildCanvasAgentContext, canvasAgentMediaTaskId } from "../agent/canvas-agent-context";
 import { findCanvasAgentAttachmentPosition, materializePendingAgentAssetsOnce } from "../agent/canvas-agent-attachments";
 import type { CanvasAgentAction, CanvasAgentToolResult } from "../agent/canvas-agent-tools";
+import { createCanvasAssetInsertGuard, isCanvasAssetInsertCanceled, resolveCanvasAssetDropPayload, resolveCanvasImageForInsert } from "../utils/canvas-asset-transfer";
 import { buildNodeContext } from "@/lib/canvas/plugin-node-context";
 import { getNodeDefinition, isBuiltinNodeType, isKnownNodeType, listNodeDefinitions, useNodeRegistryVersion } from "@/lib/canvas/node-registry";
 import type { CanvasNodeToolbarItem, CanvasPluginAi, CanvasPluginHost } from "@/types/canvas-plugin";
@@ -2287,7 +2288,7 @@ function InfiniteCanvasPage() {
                 return;
             }
             if (!node.metadata?.content) return message.error("没有可保存的图片");
-            const dataUrl = node.metadata.storageKey ? "" : node.metadata.content;
+            const dataUrl = node.metadata.content;
             addAsset({
                 kind: "image",
                 title: node.metadata?.prompt?.slice(0, 24) || "画布图片",
@@ -2680,14 +2681,32 @@ function InfiniteCanvasPage() {
         [createAudioFileNode, createImageFileNode, createVideoFileNode, screenToCanvas, size.height, size.width],
     );
 
+    const insertAssetForCurrentProject = useCallback((payload: InsertAssetPayload, position?: Position) => {
+        const assertActive = createCanvasAssetInsertGuard(projectEpochRef.current, () => projectEpochRef.current);
+        return insertAssetAtRef.current(payload, position, undefined, { assertActive });
+    }, []);
+
+    const reportAssetInsertError = useCallback(
+        (error: unknown) => {
+            if (isCanvasAssetInsertCanceled(error)) return;
+            message.error(error instanceof Error ? error.message : "素材插入失败");
+        },
+        [message],
+    );
+
     const handleDrop = useCallback(
         (event: ReactDragEvent<HTMLDivElement>) => {
             event.preventDefault();
             const serializedAsset = event.dataTransfer.getData(CANVAS_ASSET_DRAG_TYPE);
-            const assetPayload = draggedAssetPayloadRef.current || parseCanvasAssetDragPayload(serializedAsset);
-            if (assetPayload) {
-                draggedAssetPayloadRef.current = null;
-                void insertAssetAtRef.current(assetPayload, screenToCanvas(event.clientX, event.clientY));
+            const draggedAssetPayload = draggedAssetPayloadRef.current;
+            draggedAssetPayloadRef.current = null;
+            const assetDrop = resolveCanvasAssetDropPayload(serializedAsset, draggedAssetPayload);
+            if (assetDrop.matched) {
+                if (!assetDrop.payload) {
+                    message.error(assetDrop.error || "素材内容无效，无法插入");
+                    return;
+                }
+                void insertAssetForCurrentProject(assetDrop.payload, screenToCanvas(event.clientX, event.clientY)).catch(reportAssetInsertError);
                 return;
             }
             const file = Array.from(event.dataTransfer.files).find((item) => item.type.startsWith("image/") || item.type.startsWith("video/") || isAudioFile(item));
@@ -2696,7 +2715,7 @@ function InfiniteCanvasPage() {
             const pos = screenToCanvas(event.clientX, event.clientY);
             void (isAudioFile(file) ? createAudioFileNode(file, pos) : file.type.startsWith("video/") ? createVideoFileNode(file, pos) : createImageFileNode(file, pos, true));
         },
-        [createAudioFileNode, createImageFileNode, createVideoFileNode, screenToCanvas],
+        [createAudioFileNode, createImageFileNode, createVideoFileNode, insertAssetForCurrentProject, message, reportAssetInsertError, screenToCanvas],
     );
 
     const handleAssistantSessionsChange = useCallback((sessions: CanvasAssistantSession[], activeId: string | null) => {
@@ -3951,6 +3970,7 @@ function InfiniteCanvasPage() {
     );
 
     const appendInsertedNode = useCallback((node: CanvasNodeData, options?: InsertAssetOptions) => {
+        options?.assertActive?.();
         if (nodesRef.current.some((item) => item.id === node.id)) return false;
         // ref 先同步，保证后续工具在同一轮可以立即读取新节点；函数式更新处理并发插入和其他排队状态变更。
         const nextNodes = [...nodesRef.current, node];
@@ -3972,9 +3992,7 @@ function InfiniteCanvasPage() {
     const insertAssistantImage = useCallback(
         async (image: CanvasAssistantImage, position?: Position, nodeId?: string, options?: InsertAssetOptions) => {
             options?.assertActive?.();
-            const storedImage = image.storageKey
-                ? { url: image.dataUrl, storageKey: image.storageKey, width: image.width || 1, height: image.height || 1, bytes: image.bytes || 0, mimeType: image.mimeType || "image/png" }
-                : await uploadImage(image.dataUrl);
+            const storedImage = await resolveCanvasImageForInsert(image, resolveImageUrl, uploadImage);
             options?.assertActive?.();
             const meta = image.width && image.height ? { width: image.width, height: image.height } : storedImage.width > 1 && storedImage.height > 1 ? storedImage : await readImageMeta(storedImage.url);
             options?.assertActive?.();
@@ -4138,10 +4156,13 @@ function InfiniteCanvasPage() {
         };
     }, [message, projectId, projectReady]);
 
-    const handleAssetInsert = useCallback((payload: InsertAssetPayload) => {
-        void insertAssetAtRef.current(payload);
-        setAssetPickerOpen(false);
-    }, []);
+    const handleAssetInsert = useCallback(
+        (payload: InsertAssetPayload) => {
+            void insertAssetForCurrentProject(payload).catch(reportAssetInsertError);
+            setAssetPickerOpen(false);
+        },
+        [insertAssetForCurrentProject, reportAssetInsertError],
+    );
 
     // --- 传给 CanvasNode 的回调/渲染函数统一 memo 化 ---
     // CanvasNode 是 React.memo,但只要这些 prop 每次渲染都是新引用,memo 就失效,
@@ -5079,20 +5100,6 @@ function audioExtension(mimeType?: string) {
     if (mimeType?.includes("flac")) return "flac";
     if (mimeType?.includes("pcm")) return "pcm";
     return "mp3";
-}
-
-function parseCanvasAssetDragPayload(serialized: string): InsertAssetPayload | null {
-    if (!serialized) return null;
-    try {
-        const payload = JSON.parse(serialized) as Record<string, unknown>;
-        if (!payload || typeof payload !== "object" || typeof payload.title !== "string") return null;
-        if (payload.kind === "text" && typeof payload.content === "string") return payload as InsertAssetPayload;
-        if (payload.kind === "image" && typeof payload.dataUrl === "string") return payload as InsertAssetPayload;
-        if ((payload.kind === "video" || payload.kind === "audio") && typeof payload.url === "string") return payload as InsertAssetPayload;
-    } catch {
-        return null;
-    }
-    return null;
 }
 
 function imageMetadata(image: UploadedImage): CanvasNodeMetadata {

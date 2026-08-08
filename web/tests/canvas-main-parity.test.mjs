@@ -6,7 +6,8 @@ const source = await readFile(new URL("../src/app/(user)/canvas/[id]/canvas-clie
 
 test("画布资源拖放和蒙版编辑进入真实生成配置", () => {
     assert.match(source, /CANVAS_ASSET_DRAG_TYPE/);
-    assert.match(source, /insertAssetAtRef\.current\(assetPayload, screenToCanvas/);
+    assert.match(source, /resolveCanvasAssetDropPayload\(serializedAsset, draggedAssetPayload\)/);
+    assert.match(source, /insertAssetForCurrentProject\(assetDrop\.payload, screenToCanvas/);
     assert.match(source, /payload\.channelId \|\| decodeChannelModel\(selectedModel\)/);
     assert.match(source, /imageChannelId: selectedChannelId/);
     assert.match(source, /channelId: config\.imageChannelId \|\| config\.activeChannelId/);
