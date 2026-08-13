@@ -14,6 +14,7 @@ import { CanvasCameraControl } from "./canvas-camera-control";
 import { CanvasAudioSettingsPopover, type CanvasAudioSettingKey } from "./canvas-audio-settings-popover";
 import { CanvasVideoSettingsPopover, type CanvasVideoFrameOption, type CanvasVideoResourceOption } from "./canvas-video-settings-popover";
 import type { CanvasGenerationMode, CanvasNodeData, CanvasNodeMetadata } from "../types";
+import { validateImageConfigParameters } from "@/lib/image-model-capabilities";
 
 type CanvasConfigNodePanelProps = {
     node: CanvasNodeData;
@@ -37,10 +38,11 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, videoFram
     const config = buildNodeConfig(globalConfig, node, mode);
     const count = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const credits = requestCreditCost({ channelMode: config.channelMode, modelCosts, model: config.model, count: mode === "image" ? count : 1 });
+    const imageParameterError = mode === "image" ? validateImageConfigParameters(config, config.model) : "";
     const chipStyle = { background: theme.node.fill, borderColor: theme.node.stroke, color: theme.node.text };
     const hasAnyInput = Boolean(inputSummary.textCount || inputSummary.imageCount || inputSummary.videoCount || inputSummary.audioCount);
     const hasComposerContent = Boolean((node.metadata?.composerContent ?? node.metadata?.prompt ?? "").trim());
-    const canGenerate = hasComposerContent || (mode === "audio" ? inputSummary.textCount > 0 : hasAnyInput);
+    const canGenerate = (hasComposerContent || (mode === "audio" ? inputSummary.textCount > 0 : hasAnyInput)) && !imageParameterError;
 
     return (
         <div className="flex h-full w-full cursor-move flex-col px-3 pb-3 pt-7 text-sm" style={{ color: theme.node.text }} onWheel={(event) => event.stopPropagation()}>
@@ -137,6 +139,7 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, videoFram
                         autoAdjustOverflow={false}
                         buttonClassName="canvas-compact-control !h-10 !w-full !justify-start !rounded-lg !px-2"
                         onConfigChange={(key, value) => onConfigChange(node.id, key === "count" ? { count: Number(value) || 1 } : { [key]: value })}
+                        model={config.model}
                     />
                 ) : mode === "audio" ? (
                     <CanvasAudioSettingsPopover
@@ -151,11 +154,18 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, videoFram
                 ) : null}
             </div>
 
+            {imageParameterError ? (
+                <div className="mb-2 text-xs leading-5 opacity-70" style={{ color: theme.node.muted }}>
+                    {imageParameterError}
+                </div>
+            ) : null}
+
             <Button
                 type="primary"
                 className="mt-auto !h-9 !w-full !cursor-pointer !rounded-lg"
                 danger={isRunning}
                 disabled={!isRunning && !canGenerate}
+                title={!isRunning ? imageParameterError || undefined : undefined}
                 onMouseDown={(event) => event.stopPropagation()}
                 onClick={() => (isRunning ? onStop(node.id) : onGenerate(node.id))}
             >

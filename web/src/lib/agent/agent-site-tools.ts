@@ -4,6 +4,7 @@ import { useCanvasStore } from "@/app/(user)/canvas/stores/use-canvas-store";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { modelOptionLabel, modelOptionName, selectableModelsByCapability, useConfigStore, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
+import { imageQualityOptions, supportedImageSizeOptions, validateImageConfigParameters } from "@/lib/image-model-capabilities";
 
 export const SITE_TOOL_NAMES = ["canvas_list_projects", "workbench_image_get_config", "workbench_image_generate", "workbench_video_get_config", "workbench_video_generate", "prompts_search", "assets_list", "assets_add"] as const;
 
@@ -76,8 +77,8 @@ function getImageConfig() {
     return {
         current: { model, modelName: modelOptionName(model), quality: config.quality || "auto", size: config.size || "1:1", count: config.count || "1" },
         models: modelOptions(config, "image"),
-        qualityOptions: ["auto", "high", "medium", "low"],
-        sizeOptions: ["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16", "21:9", "2048x2048", "2048x1152", "1152x2048", "3136x1344", "3840x2160", "2160x3840", "3808x1632", "auto"],
+        qualityOptions: imageQualityOptions.map((item) => item.value),
+        sizeOptions: supportedImageSizeOptions(model, config.quality).map((item) => item.value),
         countRange: { min: 1, max: 10 },
     };
 }
@@ -93,11 +94,15 @@ function runImageWorkbench(input: SiteToolInput, navigate: Navigate) {
         store.updateConfig("count", count);
         applied.count = count;
     }
-    const prompt = typeof input.prompt === "string" ? input.prompt : undefined;
     const run = input.run !== false;
+    const nextConfig = useConfigStore.getState().config;
+    const nextModel = nextConfig.imageModel || nextConfig.model;
+    const parameterError = validateImageConfigParameters({ ...nextConfig, model: nextModel, imageModel: nextModel }, nextModel);
+    if (run && parameterError) throw new Error(parameterError);
+    const prompt = typeof input.prompt === "string" ? input.prompt : undefined;
     useWorkbenchAgentStore.getState().dispatchImage({ prompt, run });
     navigate("/image");
-    return { ok: true, navigated: "/image", prompt, run, applied, note: run ? "已跳转生图工作台并触发生成" : "已跳转生图工作台并填入参数" };
+    return { ok: true, navigated: "/image", prompt, run, applied, note: parameterError ? `已跳转生图工作台并填入参数；${parameterError}` : run ? "已跳转生图工作台并触发生成" : "已跳转生图工作台并填入参数" };
 }
 
 function getVideoConfig() {

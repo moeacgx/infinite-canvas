@@ -18,6 +18,7 @@ import { CanvasVideoSettingsPopover, type CanvasVideoFrameOption, type CanvasVid
 import { CanvasNodeType, type CanvasGenerationMode, type CanvasNodeData } from "../types";
 import { PANORAMA_DEFAULT_QUALITY, PANORAMA_IMAGE_SIZE, PANORAMA_OUTPUT_LABEL, isCanvasImageNodeType, isPanoramaNodeType, panoramaSettingsHint } from "../utils/canvas-panorama";
 import type { CanvasResourceReference } from "../utils/canvas-resource-references";
+import { validateImageConfigParameters } from "@/lib/image-model-capabilities";
 
 export type CanvasNodeGenerationMode = CanvasGenerationMode;
 export type { CanvasVideoFrameOption };
@@ -51,6 +52,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
     const sourcePrompt = isPanorama ? node.metadata?.panoramaSourcePrompt || "" : node.metadata?.prompt || "";
     const [prompt, setPrompt] = useState(isEditingExistingContent ? "" : sourcePrompt);
     const credits = requestCreditCost({ channelMode: config.channelMode, modelCosts, model: config.model, count: mode === "image" ? config.count : 1 });
+    const imageParameterError = mode === "image" ? validateImageConfigParameters(config, config.model) : "";
 
     // 仅在切换节点时恢复对应提示词，同一节点生成完成后保留当前输入。
     useEffect(() => {
@@ -63,7 +65,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
         if (!isEditingExistingContent) onPromptChange(node.id, value);
     };
 
-    const canSubmit = Boolean(prompt.trim()) || (isPanorama && (hasImageContent || mentionReferences.length > 0));
+    const canSubmit = (Boolean(prompt.trim()) || (isPanorama && (hasImageContent || mentionReferences.length > 0))) && !imageParameterError;
 
     const submit = () => {
         const text = prompt.trim();
@@ -91,7 +93,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                 placeholder={isPanorama ? "描述想生成的全景，或上传/连接图片作为参考" : promptPlaceholder(mode, hasImageContent, hasTextContent)}
             />
 
-            <div className="mt-2 flex min-w-0 items-center justify-between gap-2">
+            <div className="mt-2 flex min-w-0 flex-wrap items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2">
                     <CanvasPromptLibrary onSelect={updatePrompt} />
                     {mode === "image" ? (
@@ -108,6 +110,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                                 onMissingConfig={() => openConfigDialog(true)}
                                 onOpenChange={onImageSettingsOpenChange}
                                 showSize={!isPanorama}
+                                model={config.model}
                             />
                         </>
                     ) : mode === "video" ? (
@@ -143,8 +146,9 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                     className="!h-10 !min-w-16 shrink-0 !rounded-full !px-3"
                     danger={isRunning}
                     disabled={!isRunning && !canSubmit}
+                    title={!isRunning ? imageParameterError || undefined : undefined}
                     onClick={() => (isRunning ? onStop(node.id) : submit())}
-                    aria-label={isRunning ? "停止生成" : "生成"}
+                    aria-label={isRunning ? "停止生成" : imageParameterError || "生成"}
                 >
                     <span className="flex items-center gap-1.5">
                         {isRunning ? (
@@ -166,6 +170,11 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                         )}
                     </span>
                 </Button>
+            {imageParameterError ? (
+                <div className="basis-full text-xs leading-5 opacity-70" style={{ color: theme.node.muted }}>
+                    {imageParameterError}
+                </div>
+            ) : null}
             </div>
         </div>
     );

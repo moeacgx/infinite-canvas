@@ -403,7 +403,7 @@ function AgentMediaSettingsPanel({
                             />
                         </div>
                     ) : null}
-                    <ImageSettingsPanel config={imageConfig} onConfigChange={onImageConfigChange} theme={theme} showTitle={false} showCount className="space-y-4" />
+                    <ImageSettingsPanel config={imageConfig} model={imageModel} onConfigChange={onImageConfigChange} theme={theme} showTitle={false} showCount className="space-y-4" />
                 </div>
             ) : (
                 <div className="mt-4 space-y-4">

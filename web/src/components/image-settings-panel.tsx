@@ -6,37 +6,19 @@ import { ConfigProvider, Switch } from "antd";
 import { type CanvasTheme } from "@/lib/canvas-theme";
 import type { AiConfig } from "@/stores/use-config-store";
 
-const qualityOptions = [
-    { value: "auto", label: "自动" },
-    { value: "high", label: "高" },
-    { value: "medium", label: "中" },
-    { value: "low", label: "低" },
-];
+import { hasImageModelSizeList, imageModelCapabilityHint, imageQualityOptions, imageSizeLabel, imageSizeOptions, imageSizeUnsupportedReason, isImageQualitySupported, isImageSizeSupported } from "@/lib/image-model-capabilities";
+
 const DIMENSION_STEP = 16;
 
-const aspectOptions = [
-    { value: "1:1", label: "1:1", width: 1024, height: 1024, icon: "square" },
-    { value: "3:2", label: "3:2", width: 1536, height: 1024, icon: "landscape" },
-    { value: "2:3", label: "2:3", width: 1024, height: 1536, icon: "portrait" },
-    { value: "4:3", label: "4:3", width: 1024, height: 768, icon: "landscape" },
-    { value: "3:4", label: "3:4", width: 768, height: 1024, icon: "portrait" },
-    { value: "16:9", label: "16:9", width: 1920, height: 1080, icon: "landscape" },
-    { value: "9:16", label: "9:16", width: 1080, height: 1920, icon: "portrait" },
-    { value: "21:9", label: "21:9", width: 1568, height: 672, icon: "landscape" },
-    { value: "1:1-2k", label: "1:1(2k)", size: "2048x2048", width: 2048, height: 2048, icon: "square" },
-    { value: "16:9-2k", label: "16:9(2k)", size: "2048x1152", width: 2048, height: 1152, icon: "landscape" },
-    { value: "9:16-2k", label: "9:16(2k)", size: "1152x2048", width: 1152, height: 2048, icon: "portrait" },
-    { value: "21:9-2k", label: "21:9(2k)", size: "3136x1344", width: 3136, height: 1344, icon: "landscape" },
-    { value: "16:9-4k", label: "16:9(4k)", size: "3840x2160", width: 3840, height: 2160, icon: "landscape" },
-    { value: "9:16-4k", label: "9:16(4k)", size: "2160x3840", width: 2160, height: 3840, icon: "portrait" },
-    { value: "21:9-4k", label: "21:9(4k)", size: "3808x1632", width: 3808, height: 1632, icon: "landscape" },
-    { value: "auto", label: "auto", width: 0, height: 0, icon: "auto" },
-];
+const aspectOptions = imageSizeOptions;
+const qualityOptions = imageQualityOptions;
+
 
 type ImageSettingsPanelProps = {
     config: AiConfig;
     onConfigChange: (key: "quality" | "size" | "count" | "background", value: string) => void;
     theme: CanvasTheme;
+    model?: string;
     showTitle?: boolean;
     showCount?: boolean;
     showSize?: boolean;
@@ -45,17 +27,20 @@ type ImageSettingsPanelProps = {
     quickCount?: number;
 };
 
-export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = true, showSize = true, showCount = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5", maxCount = 15, quickCount = 10 }: ImageSettingsPanelProps) {
+export function ImageSettingsPanel({ config, onConfigChange, theme, model: modelOverride, showTitle = true, showSize = true, showCount = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5", maxCount = 15, quickCount = 10 }: ImageSettingsPanelProps) {
     const [snapDimensionToStep, setSnapDimensionToStep] = useState(true);
+    const model = modelOverride || config.imageModel || config.model;
     const quality = config.quality || "auto";
     const count = Math.max(1, Math.min(maxCount, Math.floor(Math.abs(Number(config.count)) || 1)));
     const activeSize = config.size || "auto";
     const transparentBackground = config.background === "transparent";
-    const selectedAspect = aspectOptions.find((item) => (item.size || item.value) === activeSize || item.value === activeSize);
+    const selectedAspect = aspectOptions.find((item) => item.value === activeSize) || aspectOptions.find((item) => imageSizeLabel(activeSize) === item.label);
     const dimensions = readSizeDimensions(activeSize, selectedAspect || aspectOptions[0]);
+    const capabilityHint = imageModelCapabilityHint(model);
+    const fixedSizeOptionsOnly = hasImageModelSizeList(model);
     const selectAspect = (value: string) => {
         const option = aspectOptions.find((item) => item.value === value);
-        onConfigChange("size", option?.size || option?.value || "auto");
+        onConfigChange("size", option?.value || "auto");
     };
     const updateDimension = (key: "width" | "height", value: number | null) => {
         const next = Math.max(1, Math.floor(value || dimensions[key] || 1024));
@@ -79,11 +64,14 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                 <div className="space-y-2.5">
                     <SettingTitle color={theme.node.muted}>质量</SettingTitle>
                     <div className="grid grid-cols-4 gap-2.5">
-                        {qualityOptions.map((item) => (
-                            <OptionPill key={item.value} selected={quality === item.value} theme={theme} onClick={() => onConfigChange("quality", item.value)}>
-                                {item.label}
-                            </OptionPill>
-                        ))}
+                        {qualityOptions.map((item) => {
+                            const disabled = !isImageQualitySupported(model, item.value);
+                            return (
+                                <OptionPill key={item.value} selected={quality === item.value} disabled={disabled} title={disabled ? `${model} 不支持质量 ${item.value}` : undefined} theme={theme} onClick={() => onConfigChange("quality", item.value)}>
+                                    {item.label}
+                                </OptionPill>
+                            );
+                        })}
                     </div>
                 </div>
                 {showSize ? (
@@ -95,34 +83,45 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                                     <span className="text-xs font-medium" style={{ color: theme.node.muted }}>
                                         16倍数对齐
                                     </span>
-                                    <span title="输入完成后自动向上补成 16 的倍数" onMouseDown={(event) => event.stopPropagation()}>
-                                        <Switch size="small" checked={snapDimensionToStep} onChange={setSnapDimensionToStep} />
+                                    <span title={fixedSizeOptionsOnly ? "当前模型只支持固定尺寸列表" : "输入完成后自动向上补成 16 的倍数"} onMouseDown={(event) => event.stopPropagation()}>
+                                        <Switch size="small" checked={snapDimensionToStep} disabled={fixedSizeOptionsOnly} onChange={setSnapDimensionToStep} />
                                     </span>
                                 </div>
                             </div>
                             <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2.5">
-                                <DimensionInput prefix="W" value={dimensions.width} disabled={activeSize === "auto"} theme={theme} alignToStep={snapDimensionToStep} onChange={(value) => updateDimension("width", value)} />
+                                <DimensionInput prefix="W" value={dimensions.width} disabled={activeSize === "auto" || fixedSizeOptionsOnly} theme={theme} alignToStep={snapDimensionToStep} onChange={(value) => updateDimension("width", value)} />
                                 <span className="text-lg opacity-45">↔</span>
-                                <DimensionInput prefix="H" value={dimensions.height} disabled={activeSize === "auto"} theme={theme} alignToStep={snapDimensionToStep} onChange={(value) => updateDimension("height", value)} />
+                                <DimensionInput prefix="H" value={dimensions.height} disabled={activeSize === "auto" || fixedSizeOptionsOnly} theme={theme} alignToStep={snapDimensionToStep} onChange={(value) => updateDimension("height", value)} />
                             </div>
                         </div>
                         <div className="space-y-2.5">
-                            <SettingTitle color={theme.node.muted}>宽高比</SettingTitle>
+                            <SettingTitle color={theme.node.muted}>尺寸预设</SettingTitle>
                             <div className="grid grid-cols-4 gap-2.5">
-                                {aspectOptions.map((item) => (
-                                    <button
-                                        key={item.value}
-                                        type="button"
-                                        className="flex h-[72px] cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border bg-transparent text-sm transition hover:opacity-80"
-                                        style={{ borderColor: selectedAspect?.value === item.value ? theme.node.text : theme.node.stroke, background: "transparent", color: theme.node.text }}
-                                        onMouseDown={(event) => event.stopPropagation()}
-                                        onClick={() => selectAspect(item.value)}
-                                    >
-                                        <AspectIcon type={item.icon} width={item.width} height={item.height} color={theme.node.text} />
-                                        <span>{item.label}</span>
-                                    </button>
-                                ))}
+                                {aspectOptions.map((item) => {
+                                    const disabled = !isImageSizeSupported(model, item.value, quality);
+                                    const reason = disabled ? imageSizeUnsupportedReason(model, item.value, quality) : "";
+                                    return (
+                                        <button
+                                            key={item.value}
+                                            type="button"
+                                            disabled={disabled}
+                                            title={reason || undefined}
+                                            className="flex h-[72px] cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border bg-transparent text-sm transition hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:opacity-35"
+                                            style={{ borderColor: selectedAspect?.value === item.value ? theme.node.text : theme.node.stroke, background: "transparent", color: theme.node.text }}
+                                            onMouseDown={(event) => event.stopPropagation()}
+                                            onClick={() => !disabled && selectAspect(item.value)}
+                                        >
+                                            <AspectIcon type={item.icon} width={item.width} height={item.height} color={theme.node.text} />
+                                            <span>{item.label}</span>
+                                        </button>
+                                    );
+                                })}
                             </div>
+                            {capabilityHint ? (
+                                <div className="text-xs leading-5" style={{ color: theme.node.muted, opacity: 0.78 }}>
+                                    {capabilityHint}
+                                </div>
+                            ) : null}
                         </div>
                     </>
                 ) : null}
@@ -168,12 +167,10 @@ export function ImageSettingsTheme({ theme, children }: { theme: CanvasTheme; ch
     );
 }
 
-export function imageQualityLabel(value: string) {
-    return ({ auto: "自动", high: "高", medium: "中", low: "低" } as Record<string, string>)[value] || value;
-}
+export { imageSizeLabel };
 
-export function imageSizeLabel(size: string) {
-    return aspectOptions.find((item) => (item.size || item.value) === size || item.value === size)?.label || size;
+export function imageQualityLabel(value: string) {
+    return imageQualityOptions.find((item) => item.value === value)?.label || value;
 }
 
 export function imageFormatLabel(format: string) {
@@ -181,14 +178,16 @@ export function imageFormatLabel(format: string) {
     return labels[format] || format;
 }
 
-function OptionPill({ selected, theme, onClick, children }: { selected: boolean; theme: CanvasTheme; onClick: () => void; children: ReactNode }) {
+function OptionPill({ selected, disabled, title, theme, onClick, children }: { selected: boolean; disabled?: boolean; title?: string; theme: CanvasTheme; onClick: () => void; children: ReactNode }) {
     return (
         <button
             type="button"
-            className="h-9 cursor-pointer rounded-full border px-2 text-sm transition hover:opacity-80"
+            disabled={disabled}
+            title={title}
+            className="h-9 cursor-pointer rounded-full border px-2 text-sm transition hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:opacity-40"
             style={{ background: "transparent", borderColor: selected ? theme.node.text : theme.node.stroke, color: theme.node.text }}
             onMouseDown={(event) => event.stopPropagation()}
-            onClick={onClick}
+            onClick={() => !disabled && onClick()}
         >
             {children}
         </button>

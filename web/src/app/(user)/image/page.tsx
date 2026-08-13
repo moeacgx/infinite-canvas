@@ -47,6 +47,7 @@ import { deleteStoredImages, imageToDataUrl, resolveImageUrl, uploadImage, uploa
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
 import type { ReferenceImage } from "@/types/image";
+import { imageQualityOptions, imageSizeOptions, imageSizeUnsupportedReason, isImageQualitySupported, validateImageConfigParameters } from "@/lib/image-model-capabilities";
 
 type GeneratedImage = {
     id: string;
@@ -170,7 +171,8 @@ export default function ImagePage() {
     const effectiveConfigRef = useRef(effectiveConfig);
 
     const model = resolveCapabilityModel(effectiveConfig, "image");
-    const canGenerate = Boolean(prompt.trim()) && uploadingCount === 0;
+    const imageParameterError = validateImageConfigParameters({ ...effectiveConfig, model, imageModel: model }, model);
+    const canGenerate = Boolean(prompt.trim()) && uploadingCount === 0 && !imageParameterError;
     const generationCount = Math.max(1, Math.min(10, Number(config.count) || 1));
     const pendingCount = results.filter((item) => item.status === "pending").length;
     const pendingLogCount = logs.filter((log) => log.status === "生成中" && log.task && !log.images.length).length;
@@ -989,6 +991,11 @@ export default function ImagePage() {
             openConfigDialog(true);
             return null;
         }
+        const parameterError = validateImageConfigParameters({ ...baseConfig, model: requestModel, imageModel: requestModel }, requestModel);
+        if (parameterError) {
+            message.warning(parameterError);
+            return null;
+        }
         const requestConfig = { ...baseConfig, model: requestModel, imageModel: requestModel, activeChannelId: requestChannelId, imageChannelId: requestChannelId, count: "1" };
         return {
             text,
@@ -1136,6 +1143,7 @@ export default function ImagePage() {
                             config={effectiveConfig}
                             model={model}
                             canGenerate={canGenerate}
+                            generationDisabledReason={imageParameterError}
                             pendingCount={pendingCount}
                             updateConfig={updateWorkbenchConfig}
                             openConfigDialog={openConfigDialog}
@@ -1229,6 +1237,7 @@ export default function ImagePage() {
                             config={effectiveConfig}
                             model={model}
                             canGenerate={canGenerate}
+                            generationDisabledReason={imageParameterError}
                             pendingCount={pendingCount}
                             updateConfig={updateWorkbenchConfig}
                             openConfigDialog={openConfigDialog}
@@ -1312,31 +1321,9 @@ export default function ImagePage() {
     );
 }
 
-const quickSizeOptions = [
-    { value: "auto", label: "auto" },
-    { value: "1:1", label: "1:1" },
-    { value: "3:2", label: "3:2" },
-    { value: "2:3", label: "2:3" },
-    { value: "4:3", label: "4:3" },
-    { value: "3:4", label: "3:4" },
-    { value: "16:9", label: "16:9" },
-    { value: "9:16", label: "9:16" },
-    { value: "21:9", label: "21:9" },
-    { value: "2048x2048", label: "1:1 2K" },
-    { value: "2048x1152", label: "16:9 2K" },
-    { value: "1152x2048", label: "9:16 2K" },
-    { value: "3136x1344", label: "21:9 2K" },
-    { value: "3840x2160", label: "16:9 4K" },
-    { value: "2160x3840", label: "9:16 4K" },
-    { value: "3808x1632", label: "21:9 4K" },
-];
+const quickSizeOptions = imageSizeOptions.map(({ value, label }) => ({ value, label }));
 
-const quickQualityOptions = [
-    { value: "auto", label: "自动" },
-    { value: "high", label: "高" },
-    { value: "medium", label: "中" },
-    { value: "low", label: "低" },
-];
+const quickQualityOptions = imageQualityOptions;
 
 function WorkbenchPanel({
     layout,
@@ -1346,6 +1333,7 @@ function WorkbenchPanel({
     config,
     model,
     canGenerate,
+    generationDisabledReason,
     pendingCount,
     updateConfig,
     openConfigDialog,
@@ -1370,6 +1358,7 @@ function WorkbenchPanel({
     config: AiConfig;
     model: string;
     canGenerate: boolean;
+    generationDisabledReason: string;
     pendingCount: number;
     updateConfig: UpdateAiConfig;
     openConfigDialog: (shouldPromptContinue?: boolean) => void;
@@ -1388,6 +1377,14 @@ function WorkbenchPanel({
     uploadingCount: number;
 }) {
     const [bottomSettingsCollapsed, setBottomSettingsCollapsed] = useState(true);
+    const sizeOptions = quickSizeOptions.map((item) => {
+        const reason = imageSizeUnsupportedReason(model, item.value, config.quality);
+        return { ...item, disabled: Boolean(reason), title: reason || undefined };
+    });
+    const qualityOptions = quickQualityOptions.map((item) => {
+        const disabled = !isImageQualitySupported(model, item.value);
+        return { ...item, disabled, title: disabled ? `${model} 不支持质量 ${item.value}` : undefined };
+    });
 
     if (layout === "bottom") {
         return (
@@ -1425,6 +1422,7 @@ function WorkbenchPanel({
                                     className="h-9 rounded-xl px-4 font-medium lg:!hidden"
                                     icon={pendingCount ? <Square className="size-4" /> : <Sparkles className="size-4" />}
                                     disabled={!pendingCount && !canGenerate}
+                                    title={!pendingCount ? generationDisabledReason || undefined : undefined}
                                     onClick={pendingCount ? onStop : onGenerate}
                                 >
                                     {pendingCount ? `停止 ${pendingCount} 个任务` : "开始创作"}
@@ -1464,8 +1462,8 @@ function WorkbenchPanel({
                                     />
                                 </div>
                             </label>
-                            <QuickSelect label="尺寸" value={config.size || "auto"} options={quickSizeOptions} onChange={(value) => updateConfig("size", value)} />
-                            <QuickSelect label="质量" value={config.quality || "auto"} options={quickQualityOptions} onChange={(value) => updateConfig("quality", value)} />
+                            <QuickSelect label="尺寸" value={config.size || "auto"} options={sizeOptions} onChange={(value) => updateConfig("size", value)} />
+                            <QuickSelect label="质量" value={config.quality || "auto"} options={qualityOptions} onChange={(value) => updateConfig("quality", value)} />
                             <QuickNumber label="数量" value={config.count || "1"} min={1} max={10} onChange={(value) => updateConfig("count", value)} />
                             <ReferenceQuickActions references={references} onUploadReferences={onUploadReferences} />
                             <Button
@@ -1474,11 +1472,13 @@ function WorkbenchPanel({
                                 className="hidden h-11 min-w-28 rounded-xl lg:inline-flex"
                                 icon={pendingCount ? <Square className="size-4" /> : <Sparkles className="size-4" />}
                                 disabled={!pendingCount && !canGenerate}
+                                title={!pendingCount ? generationDisabledReason || undefined : undefined}
                                 onClick={pendingCount ? onStop : onGenerate}
                             >
                                 {pendingCount ? `停止 ${pendingCount} 个任务` : "开始创作"}
                             </Button>
                         </div>
+                        {generationDisabledReason ? <div className="text-xs leading-5 text-red-500 dark:text-red-300">{generationDisabledReason}</div> : null}
                         {references.length || uploadingCount > 0 ? <ReferenceStrip className="mt-3" references={references} compact onRemoveReference={onRemoveReference} uploadingCount={uploadingCount} /> : null}
                     </div>
                 </div>
@@ -1548,10 +1548,12 @@ function WorkbenchPanel({
                     block
                     icon={pendingCount ? <Square className="size-4" /> : <Sparkles className="size-4" />}
                     disabled={!pendingCount && !canGenerate}
+                    title={!pendingCount ? generationDisabledReason || undefined : undefined}
                     onClick={pendingCount ? onStop : onGenerate}
                 >
                     {pendingCount ? `停止生成（${pendingCount}）` : "开始生成"}
                 </Button>
+                {generationDisabledReason && !pendingCount ? <div className="mt-2 text-xs leading-5 text-red-500 dark:text-red-300">{generationDisabledReason}</div> : null}
             </div>
         </div>
     );
@@ -1622,13 +1624,13 @@ function ReferenceQuickActions({ references, onUploadReferences }: { references:
     );
 }
 
-function QuickSelect({ label, value, options, onChange }: { label: string; value: string; options: { value: string; label: string }[]; onChange: (value: string) => void }) {
+function QuickSelect({ label, value, options, onChange }: { label: string; value: string; options: { value: string; label: string; disabled?: boolean; title?: string }[]; onChange: (value: string) => void }) {
     return (
         <label className="grid gap-1 text-xs text-stone-500 dark:text-stone-400">
             {label}
-            <select className="h-11 min-w-0 rounded-xl border border-stone-200 bg-background px-3 text-sm text-stone-900 outline-none dark:border-stone-800 dark:text-stone-100" value={value} onChange={(event) => onChange(event.target.value)}>
+            <select className="h-11 min-w-0 rounded-xl border border-stone-200 bg-background px-3 text-sm text-stone-900 outline-none dark:border-stone-800 dark:text-stone-100" value={value} title={options.find((item) => item.value === value)?.title} onChange={(event) => onChange(event.target.value)}>
                 {options.map((item) => (
-                    <option key={item.value} value={item.value}>
+                    <option key={item.value} value={item.value} disabled={item.disabled} title={item.title}>
                         {item.label}
                     </option>
                 ))}
@@ -2002,7 +2004,7 @@ function GenerationSettings({ config, model, updateConfig, openConfigDialog }: {
                     </div>
                 </div>
             </section>
-            <ImageSettingsPanel config={config} onConfigChange={(key, value) => updateConfig(key, value)} theme={theme} showTitle={false} className="space-y-3" maxCount={10} />
+            <ImageSettingsPanel config={config} model={model} onConfigChange={(key, value) => updateConfig(key, value)} theme={theme} showTitle={false} className="space-y-3" maxCount={10} />
         </div>
     );
 }

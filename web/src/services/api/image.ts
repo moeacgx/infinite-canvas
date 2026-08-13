@@ -24,6 +24,7 @@ import { channelAxiosRequest, channelFetch } from "@/services/api/channel-reques
 import { isEventStreamResponse, parseImagesApiStream, parseResponsesApiStream, parseResponsesImageData } from "@/services/api/image-stream";
 import { normalizePluginImages, resolveModelPluginResultUrl, runModelPlugin, sanitizeModelPluginText } from "@/services/api/model-plugin";
 import { networkFailureMessage } from "@/services/api/network-error";
+import { normalizeImageBackground, normalizeImageQuality, resolveImageModelRequestSize, validateImageModelParameters, type ImageQualityValue } from "@/lib/image-model-capabilities";
 
 export type ChatCompletionMessage = {
     role: "system" | "user" | "assistant";
@@ -96,143 +97,18 @@ export class ImageRequestError extends Error {
     }
 }
 
-const QUALITY_BASE: Record<string, number> = {
-    low: 1024,
-    medium: 2048,
-    high: 2880,
-    standard: 1024,
-    hd: 2048,
-};
-const QUALITY_ALIASES: Record<string, string> = {
-    "1k": "low",
-    "2k": "medium",
-    "4k": "high",
-};
-const DEFAULT_IMAGE_SHORT_SIDE = 1024;
-const IMAGE_SIZE_STEP = 16;
-const IMAGE_MIN_PIXELS = 655360;
-const IMAGE_MAX_PIXELS = 8294400;
-const IMAGE_MAX_EDGE = 3840;
-const IMAGE_MAX_RATIO = 3;
 const IMAGE_OUTPUT_FORMAT = "png";
 const NEW_API_IMAGE_TASK_POLL_INTERVAL_MS = 2500;
 const NEW_API_IMAGE_TASK_MAX_ATTEMPTS = 240;
 const IMAGE_REQUEST_MAX_CONCURRENCY = 3;
 
-function normalizeQuality(quality: string) {
-    const value = quality.trim().toLowerCase();
-    const normalized = QUALITY_ALIASES[value] || value;
-    return QUALITY_BASE[normalized] ? normalized : undefined;
-}
-
-/** 仅透传 transparent；空值或其他值继续使用接口默认背景。 */
-function normalizeBackground(background: string | undefined) {
-    return background?.trim().toLowerCase() === "transparent" ? "transparent" : undefined;
-}
-
-/** Map "quality + ratio" to an explicit pixel dimension like "3840x2160". */
-function resolveSize(quality: string | undefined, ratio: string): string {
-    const parsedRatio = parseImageRatio(ratio);
-    const basePixels = quality ? QUALITY_BASE[quality] : undefined;
-    const exactSize = resolveExactRatioSize(parsedRatio.width, parsedRatio.height, basePixels);
-    if (exactSize) return exactSize;
-    const isLandscape = parsedRatio.width >= parsedRatio.height;
-    const longRatio = isLandscape ? parsedRatio.width / parsedRatio.height : parsedRatio.height / parsedRatio.width;
-    let longSide: number;
-    let shortSide: number;
-
-    if (basePixels) {
-        const targetPixels = basePixels * basePixels;
-        const longSideRaw = Math.sqrt(targetPixels * longRatio);
-        longSide = Math.floor(longSideRaw / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
-        shortSide = Math.round(longSide / longRatio / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
-    } else {
-        shortSide = DEFAULT_IMAGE_SHORT_SIDE;
-        longSide = Math.round((shortSide * longRatio) / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
-    }
-
-    const width = isLandscape ? longSide : shortSide;
-    const height = isLandscape ? shortSide : longSide;
-    validateImageSize(width, height);
-    return `${width}x${height}`;
-}
-
-function resolveExactRatioSize(widthRatio: number, heightRatio: number, basePixels?: number) {
-    const reduced = reduceImageRatio(widthRatio, heightRatio);
-    if (Math.max(reduced.width, reduced.height) > 32) return undefined;
-
-    const ratioPixels = reduced.width * reduced.height;
-    const desiredUnit = basePixels ? Math.sqrt((basePixels * basePixels) / ratioPixels) : DEFAULT_IMAGE_SHORT_SIDE / Math.min(reduced.width, reduced.height);
-    const minimumUnit = Math.ceil(Math.sqrt(IMAGE_MIN_PIXELS / ratioPixels) / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
-    const maximumUnitByPixels = Math.floor(Math.sqrt(IMAGE_MAX_PIXELS / ratioPixels) / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
-    const maximumUnitByEdge = Math.floor(IMAGE_MAX_EDGE / Math.max(reduced.width, reduced.height) / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
-    const maximumUnit = Math.min(maximumUnitByPixels, maximumUnitByEdge);
-    if (minimumUnit > maximumUnit || maximumUnit < IMAGE_SIZE_STEP) return undefined;
-
-    const unit = Math.min(maximumUnit, Math.max(minimumUnit, Math.round(desiredUnit / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP));
-    const width = reduced.width * unit;
-    const height = reduced.height * unit;
-    validateImageSize(width, height);
-    return `${width}x${height}`;
-}
-
-function reduceImageRatio(width: number, height: number) {
-    let scale = 1;
-    while (scale < 1000 && (!Number.isInteger(width * scale) || !Number.isInteger(height * scale))) scale *= 10;
-    let scaledWidth = Math.round(width * scale);
-    let scaledHeight = Math.round(height * scale);
-    const divisor = greatestCommonDivisor(scaledWidth, scaledHeight);
-    scaledWidth /= divisor;
-    scaledHeight /= divisor;
-    return { width: scaledWidth, height: scaledHeight };
-}
-
-function greatestCommonDivisor(left: number, right: number) {
-    let a = Math.abs(left);
-    let b = Math.abs(right);
-    while (b) {
-        const remainder = a % b;
-        a = b;
-        b = remainder;
-    }
-    return a || 1;
-}
-
-function parseImageRatio(value: string) {
-    const parts = value.split(":");
-    if (parts.length !== 2) throw new Error("图像尺寸格式不支持，请使用 auto、9:16 或 1024x1024");
-    const w = Number(parts[0]);
-    const h = Number(parts[1]);
-    if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) throw new Error("图像比例必须是正数，例如 9:16");
-    if (Math.max(w, h) / Math.min(w, h) > IMAGE_MAX_RATIO) throw new Error("图像宽高比不能超过 3:1，请调整尺寸");
-    return { width: w, height: h };
-}
-
-function parseImageDimensions(value: string) {
-    const match = value.match(/^(\d+)x(\d+)$/i);
-    if (!match) return null;
-    return { width: Number(match[1]), height: Number(match[2]) };
-}
-
-function validateImageSize(width: number, height: number) {
-    if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) throw new Error("图像尺寸必须是正整数，例如 1024x1024");
-    if (width % IMAGE_SIZE_STEP !== 0 || height % IMAGE_SIZE_STEP !== 0) throw new Error("图像尺寸的宽高必须是 16 的倍数，请调整尺寸");
-    if (Math.max(width, height) > IMAGE_MAX_EDGE) throw new Error("图像尺寸最长边不能超过 3840px，请调整尺寸");
-    if (Math.max(width, height) / Math.min(width, height) > IMAGE_MAX_RATIO) throw new Error("图像宽高比不能超过 3:1，请调整尺寸");
-    const pixels = width * height;
-    if (pixels < IMAGE_MIN_PIXELS || pixels > IMAGE_MAX_PIXELS) throw new Error("图像总像素需在 655360 到 8294400 之间，请调整尺寸");
-}
-
-function resolveRequestSize(quality: string | undefined, size: string) {
-    const value = size.trim();
-    if (!value || value.toLowerCase() === "auto") return undefined;
-    const dimensions = parseImageDimensions(value);
-    if (dimensions) {
-        validateImageSize(dimensions.width, dimensions.height);
-        return `${dimensions.width}x${dimensions.height}`;
-    }
-    if (value.includes(":")) return resolveSize(quality, value);
-    throw new Error("图像尺寸格式不支持，请使用 auto、9:16 或 1024x1024");
+function resolveImageRequestParameters(config: AiConfig, model: string) {
+    const quality = normalizeImageQuality(config.quality);
+    const requestSize = resolveImageModelRequestSize(model, quality, config.size);
+    const background = normalizeImageBackground(config.background);
+    const error = validateImageModelParameters(model, { size: requestSize || "auto", quality: (quality || "auto") as ImageQualityValue, background });
+    if (error) throw new Error(error);
+    return { quality, requestSize, background };
 }
 
 async function resolveImageDataUrl(item: Record<string, unknown>, config?: AiConfig, signal?: AbortSignal) {
@@ -466,9 +342,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
     const channelOptions = resolveImageChannelOptions(config, channelModel);
     const script = resolveModelScript(config, channelModel, "image");
     if (script) {
-        const quality = normalizeQuality(config.quality);
-        const requestSize = resolveRequestSize(quality, config.size);
-        const background = normalizeBackground(config.background);
+        const { quality, requestSize, background } = resolveImageRequestParameters(config, requestConfig.model);
         try {
             const result = await runModelPlugin({
                 capability: "image",
@@ -496,9 +370,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
             throw new Error(readAxiosError(error, "请求失败"));
         }
     }
-    const quality = normalizeQuality(config.quality);
-    const requestSize = resolveRequestSize(quality, config.size);
-    const background = normalizeBackground(config.background);
+    const { quality, requestSize, background } = resolveImageRequestParameters(config, requestConfig.model);
     const payload = {
         model: requestConfig.model,
         prompt: withSystemPrompt(requestConfig, prompt),
@@ -602,9 +474,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     const requestPrompt = buildImageReferencePromptText(prompt, references);
     const script = resolveModelScript(config, channelModel, "image");
     if (script) {
-        const quality = normalizeQuality(config.quality);
-        const requestSize = resolveRequestSize(quality, config.size);
-        const background = normalizeBackground(config.background);
+        const { quality, requestSize, background } = resolveImageRequestParameters(config, requestConfig.model);
         const images = await Promise.all(references.map((image) => imageToDataUrl(image, options?.signal)));
         const maskDataUrl = mask ? await imageToDataUrl(mask, options?.signal) : "";
         try {
@@ -635,9 +505,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
             throw new Error(readAxiosError(error, "请求失败"));
         }
     }
-    const quality = normalizeQuality(config.quality);
-    const requestSize = resolveRequestSize(quality, config.size);
-    const background = normalizeBackground(config.background);
+    const { quality, requestSize, background } = resolveImageRequestParameters(config, requestConfig.model);
     if (channelOptions.apiMode === "responses") {
         if (mask) throw new Error("Responses API 暂不支持蒙版编辑，请切换到 Images API");
         try {

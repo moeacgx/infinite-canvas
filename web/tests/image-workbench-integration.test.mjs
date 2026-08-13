@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { createModelChannel, defaultConfig, encodeChannelModel, resolveCapabilityModel, resolveImageChannelOptions, withLocalChannels } from "../src/stores/use-config-store.ts";
+import { imageQualityOptions, isImageQualitySupported, supportedImageSizeOptions, validateImageConfigParameters } from "../src/lib/image-model-capabilities.ts";
 import { buildWorkflowRunConfig, resolveWorkflowRuntime } from "../src/components/workflows/workflow-runtime.ts";
 
 const imagePageSource = readFileSync(new URL("../src/app/(user)/image/page.tsx", import.meta.url), "utf8");
@@ -102,14 +103,21 @@ test("生图页保留模型渠道切换、工作流入口与可取消的即时�
     assert.match(imagePageSource, /const nextLogs = \(await readStoredLogs\(\)\)\.filter\(\(log\) => !deletedLogIdsRef\.current\.has\(log\.id\)\)/);
 });
 
-test("生图尺寸预设补齐 21:9 且 GPT 4K 预设最长边不超过 3840", () => {
-    for (const source of [imagePageSource, imageSettingsSource, agentSiteToolsSource]) {
-        assert.match(source, /3136x1344/);
-        assert.match(source, /3808x1632/);
-        assert.doesNotMatch(source, /6272x2688/);
-    }
-    assert.match(imagePageSource, /\{ value: "21:9", label: "21:9" \}/);
-    assert.match(imageSettingsSource, /size: "3808x1632", width: 3808, height: 1632/);
+test("GPT 企业图片模型按后台规格限制尺寸和质量", () => {
+    const gptImage1Sizes = ["auto", "1024x1024", "1024x1536", "1536x1024"];
+    const gptImage2Sizes = [...gptImage1Sizes, "2048x2048", "2048x1152", "1152x2048", "2560x1440", "1440x2560", "3136x1344", "3840x2160", "2160x3840", "3808x1632"];
+
+    assert.deepEqual(supportedImageSizeOptions("gpt-image-1-enterprise", "medium").map((item) => item.value), gptImage1Sizes);
+    assert.deepEqual(supportedImageSizeOptions("gpt-image-1.5-enterprise", "medium").map((item) => item.value), gptImage1Sizes);
+    assert.deepEqual(supportedImageSizeOptions("gpt-image-2-enterprise", "medium").map((item) => item.value), gptImage2Sizes);
+    assert.deepEqual(imageQualityOptions.filter((item) => isImageQualitySupported("gpt-image-2-enterprise", item.value)).map((item) => item.value), ["auto", "high", "medium", "low"]);
+    assert.equal(validateImageConfigParameters({ model: "gpt-image-2-enterprise", size: "auto", quality: "high" }), "");
+    assert.equal(validateImageConfigParameters({ model: "gpt-image-2-enterprise", size: "1024x1024", quality: "auto" }), "");
+    assert.equal(validateImageConfigParameters({ model: "gpt-image-2-enterprise", size: "1152x2048", quality: "high" }), "");
+    assert.equal(validateImageConfigParameters({ model: "gpt-image-2-enterprise", size: "3808x1632", quality: "high" }), "");
+    assert.match(validateImageConfigParameters({ model: "gpt-image-2-enterprise", size: "6272x2688", quality: "high" }), /最长边不能超过 3840px/);
+    assert.match(imageSettingsSource, /const aspectOptions = imageSizeOptions/);
+    assert.match(agentSiteToolsSource, /supportedImageSizeOptions\(model, config\.quality\)/);
 });
 
 test("生图结果操作栏在窄屏分行并允许操作按钮换行", () => {

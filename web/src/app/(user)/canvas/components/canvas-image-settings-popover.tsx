@@ -25,9 +25,10 @@ type CanvasImageSettingsPopoverProps = {
     showCount?: boolean;
     showSize?: boolean;
     buttonIcon?: ReactNode;
+    model?: string;
 };
 
-export function CanvasImageSettingsPopover({ config, onConfigChange, onOpenChange, buttonClassName, placement = "topLeft", showCount = true, showSize = true, buttonLabel, fixedSizeLabel, fixedSizeHint, buttonIcon }: CanvasImageSettingsPopoverProps) {
+export function CanvasImageSettingsPopover({ config, onConfigChange, onOpenChange, buttonClassName, placement = "topLeft", showCount = true, showSize = true, buttonLabel, fixedSizeLabel, fixedSizeHint, buttonIcon, model }: CanvasImageSettingsPopoverProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const buttonRef = useRef<HTMLSpanElement>(null);
     const panelRef = useRef<HTMLDivElement>(null);
@@ -64,7 +65,7 @@ export function CanvasImageSettingsPopover({ config, onConfigChange, onOpenChang
         };
     }, [onOpenChange, open]);
 
-    const panel = open && buttonRect ? <ImageSettingsPortal buttonRect={buttonRect} panelRef={panelRef} placement={placement} theme={theme} config={config} onConfigChange={onConfigChange} showCount={showCount} showSize={showSize} fixedSizeLabel={fixedSizeLabel} fixedSizeHint={fixedSizeHint} /> : null;
+    const panel = open && buttonRect ? <ImageSettingsPortal buttonRect={buttonRect} panelRef={panelRef} placement={placement} theme={theme} config={config} model={model} onConfigChange={onConfigChange} showCount={showCount} showSize={showSize} fixedSizeLabel={fixedSizeLabel} fixedSizeHint={fixedSizeHint} /> : null;
 
     return (
         <>
@@ -98,6 +99,7 @@ function ImageSettingsPortal({
     placement,
     theme,
     config,
+    model,
     onConfigChange,
     showCount,
     showSize,
@@ -109,6 +111,7 @@ function ImageSettingsPortal({
     placement: CanvasImageSettingsPopoverProps["placement"];
     theme: (typeof canvasThemes)[keyof typeof canvasThemes];
     config: AiConfig;
+    model?: string;
     onConfigChange: (key: keyof AiConfig, value: string) => void;
     showCount: boolean;
     showSize: boolean;
@@ -148,7 +151,7 @@ function ImageSettingsPortal({
                     {fixedSizeHint ? <div className="mt-1 text-xs leading-5 opacity-70">{fixedSizeHint}</div> : null}
                 </div>
             ) : null}
-            <ImageSettingsPanel config={config} onConfigChange={(key, value) => onConfigChange(key, value)} theme={theme} className="space-y-4" showTitle={!fixedSizeLabel} showCount={showCount} showSize={showSize} />
+            <ImageSettingsPanel config={config} model={model} onConfigChange={(key, value) => onConfigChange(key, value)} theme={theme} className="space-y-4" showTitle={!fixedSizeLabel} showCount={showCount} showSize={showSize} />
         </div>,
         document.body,
     );
