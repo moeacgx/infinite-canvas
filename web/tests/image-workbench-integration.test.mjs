@@ -7,6 +7,8 @@ import { buildWorkflowRunConfig, resolveWorkflowRuntime } from "../src/component
 
 const imagePageSource = readFileSync(new URL("../src/app/(user)/image/page.tsx", import.meta.url), "utf8");
 const workflowSource = readFileSync(new URL("../src/components/workflows/creative-workflow-workspace.tsx", import.meta.url), "utf8");
+const imageSettingsSource = readFileSync(new URL("../src/components/image-settings-panel.tsx", import.meta.url), "utf8");
+const agentSiteToolsSource = readFileSync(new URL("../src/lib/agent/agent-site-tools.ts", import.meta.url), "utf8");
 
 test("生图工作台按编码模型选择正确渠道并隔离 Images 与 Responses 配置", () => {
     const channels = [createModelChannel({ id: "images", models: ["gpt-image-1"], imageApiMode: "images" }), createModelChannel({ id: "responses", models: ["gpt-image-1", "gpt-5.6"], imageApiMode: "responses", responsesImageModel: "gpt-5.6" })];
@@ -98,6 +100,16 @@ test("生图页保留模型渠道切换、工作流入口与可取消的即时�
     assert.match(workflowSource, /buildWorkflowRunConfig\(effectiveConfig, workflow\.config, runtime\)/);
     assert.match(imagePageSource, /const storedLogs = \(await readStoredLogs\(\)\)\.filter\(\(item\) => !deletedLogIdsRef\.current\.has\(item\.id\)\)/);
     assert.match(imagePageSource, /const nextLogs = \(await readStoredLogs\(\)\)\.filter\(\(log\) => !deletedLogIdsRef\.current\.has\(log\.id\)\)/);
+});
+
+test("生图尺寸预设补齐 21:9 且 GPT 4K 预设最长边不超过 3840", () => {
+    for (const source of [imagePageSource, imageSettingsSource, agentSiteToolsSource]) {
+        assert.match(source, /3136x1344/);
+        assert.match(source, /3808x1632/);
+        assert.doesNotMatch(source, /6272x2688/);
+    }
+    assert.match(imagePageSource, /\{ value: "21:9", label: "21:9" \}/);
+    assert.match(imageSettingsSource, /size: "3808x1632", width: 3808, height: 1632/);
 });
 
 test("生图结果操作栏在窄屏分行并允许操作按钮换行", () => {

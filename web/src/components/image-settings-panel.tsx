@@ -29,7 +29,7 @@ const aspectOptions = [
     { value: "21:9-2k", label: "21:9(2k)", size: "3136x1344", width: 3136, height: 1344, icon: "landscape" },
     { value: "16:9-4k", label: "16:9(4k)", size: "3840x2160", width: 3840, height: 2160, icon: "landscape" },
     { value: "9:16-4k", label: "9:16(4k)", size: "2160x3840", width: 2160, height: 3840, icon: "portrait" },
-    { value: "21:9-4k", label: "21:9(4k)", size: "6272x2688", width: 6272, height: 2688, icon: "landscape" },
+    { value: "21:9-4k", label: "21:9(4k)", size: "3808x1632", width: 3808, height: 1632, icon: "landscape" },
     { value: "auto", label: "auto", width: 0, height: 0, icon: "auto" },
 ];
 

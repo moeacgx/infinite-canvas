@@ -40,6 +40,7 @@ export type StorageConfig = {
 };
 
 const store = localforage.createInstance({ name: "infinite-canvas", storeName: "image_files" });
+const imageLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
 const objectUrls = new Map<string, string>();
 const serverUrls = new Map<string, string>();
 export const USER_STORAGE_PROVIDER_KEY = "infinite-canvas:user_storage_provider";
@@ -257,6 +258,9 @@ export async function deleteStoredImages(keys: Iterable<string>) {
 
 export async function cleanupUnusedImages(usedData: unknown) {
     const usedKeys = collectImageStorageKeys(usedData);
+    await imageLogStore.iterate((value) => {
+        collectImageStorageKeys(value, usedKeys);
+    });
     const unused: string[] = [];
     await store.iterate((_value, key) => {
         if (!usedKeys.has(key)) unused.push(key);

@@ -200,6 +200,42 @@ test("图片比例换算保持常见比例并遵守最大边长", async (context
     assert.deepEqual(sizes, ["2816x1584", "1584x2816", "3840x1280"]);
 });
 
+test("GPT 图片 21:9 4K 精确尺寸最长边不超过 3840", async (context) => {
+    const originalFetch = globalThis.fetch;
+    context.after(() => {
+        globalThis.fetch = originalFetch;
+    });
+
+    const requestBodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = async (_input, init) => {
+        requestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(JSON.stringify({ output: [{ type: "image_generation_call", result: "SU1BR0U=" }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+        });
+    };
+
+    const channel = createModelChannel({
+        id: "gpt-4k",
+        name: "GPT 4K",
+        baseUrl: "https://relay.example.com",
+        apiKey: "test-key",
+        apiFormat: "openai",
+        requestMode: "direct",
+        imageApiMode: "responses",
+        responsesImageModel: "gpt-5.6",
+        models: ["gpt-image-2", "gpt-5.6"],
+    });
+    const selectedModel = encodeChannelModel("gpt-4k", "gpt-image-2");
+    const config = withLocalChannels({ ...defaultConfig, channelMode: "local", imageModel: selectedModel, imageModels: [selectedModel], count: "1" }, [channel]);
+
+    await requestGeneration({ ...config, quality: "high", size: "3808x1632" }, "PROMPT");
+    await assert.rejects(() => requestGeneration({ ...config, quality: "high", size: "6272x2688" }, "PROMPT"), /最长边不能超过 3840px/);
+
+    const sizes = requestBodies.map((body) => (body.tools as Array<Record<string, unknown>>)[0]?.size);
+    assert.deepEqual(sizes, ["3808x1632"]);
+});
+
 test("全景 2:1 生成与编辑请求保留归一化质量并按质量换算输出尺寸", async (context) => {
     const originalFetch = globalThis.fetch;
     context.after(() => {

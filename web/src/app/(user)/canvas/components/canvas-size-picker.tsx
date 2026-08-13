@@ -5,7 +5,7 @@ import { Select } from "antd";
 
 import { cn } from "@/lib/utils";
 
-const sizeOptions = ["auto", "1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"];
+const sizeOptions = ["auto", "1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16", "21:9", "2048x2048", "2048x1152", "1152x2048", "3136x1344", "3840x2160", "2160x3840", "3808x1632"];
 
 type CanvasSizePickerProps = {
     value: string;

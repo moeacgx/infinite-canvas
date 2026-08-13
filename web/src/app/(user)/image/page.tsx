@@ -1319,10 +1319,16 @@ const quickSizeOptions = [
     { value: "2:3", label: "2:3" },
     { value: "4:3", label: "4:3" },
     { value: "3:4", label: "3:4" },
+    { value: "16:9", label: "16:9" },
     { value: "9:16", label: "9:16" },
-    { value: "2048x2048", label: "1:1 2k" },
-    { value: "2048x1152", label: "16:9 2k" },
-    { value: "1152x2048", label: "9:16 2k" },
+    { value: "21:9", label: "21:9" },
+    { value: "2048x2048", label: "1:1 2K" },
+    { value: "2048x1152", label: "16:9 2K" },
+    { value: "1152x2048", label: "9:16 2K" },
+    { value: "3136x1344", label: "21:9 2K" },
+    { value: "3840x2160", label: "16:9 4K" },
+    { value: "2160x3840", label: "9:16 4K" },
+    { value: "3808x1632", label: "21:9 4K" },
 ];
 
 const quickQualityOptions = [

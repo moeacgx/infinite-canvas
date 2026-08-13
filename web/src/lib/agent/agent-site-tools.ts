@@ -77,7 +77,7 @@ function getImageConfig() {
         current: { model, modelName: modelOptionName(model), quality: config.quality || "auto", size: config.size || "1:1", count: config.count || "1" },
         models: modelOptions(config, "image"),
         qualityOptions: ["auto", "high", "medium", "low"],
-        sizeOptions: ["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16", "2048x2048", "2048x1152", "1152x2048", "3840x2160", "2160x3840", "auto"],
+        sizeOptions: ["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16", "21:9", "2048x2048", "2048x1152", "1152x2048", "3136x1344", "3840x2160", "2160x3840", "3808x1632", "auto"],
         countRange: { min: 1, max: 10 },
     };
 }
