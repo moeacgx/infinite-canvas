@@ -236,6 +236,7 @@ function resolveExactRatioSize(widthRatio: number, heightRatio: number, basePixe
     const maximumUnitByPixels = Math.floor(Math.sqrt(IMAGE_MAX_PIXELS / ratioPixels) / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
     const maximumEdge = Math.min(IMAGE_MAX_EDGE, limit?.maxEdge || IMAGE_MAX_EDGE);
     const maximumUnitByEdge = Math.floor(maximumEdge / Math.max(reduced.width, reduced.height) / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
+    const maximumUnit = Math.min(maximumUnitByPixels, maximumUnitByEdge);
     if (minimumUnit > maximumUnit || maximumUnit < IMAGE_SIZE_STEP) return undefined;
 
     const unit = Math.min(maximumUnit, Math.max(minimumUnit, Math.round(desiredUnit / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP));
