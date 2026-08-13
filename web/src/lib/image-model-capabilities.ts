@@ -8,10 +8,14 @@ export type ImageSizeOption = {
 };
 
 type ImageModelCapability = {
-    sizes?: string[];
+    maxEdge?: number;
     qualities?: ImageQualityValue[];
     transparentBackground?: boolean;
     hint: string;
+};
+
+type ImageSizeLimit = {
+    maxEdge?: number;
 };
 
 const QUALITY_BASE: Record<string, number> = {
@@ -32,33 +36,31 @@ const IMAGE_MIN_PIXELS = 655360;
 const IMAGE_MAX_PIXELS = 8294400;
 const IMAGE_MAX_EDGE = 3840;
 const IMAGE_MAX_RATIO = 3;
-const SUPPORTED_QUALITIES: ImageQualityValue[] = ["auto", "high", "medium", "low"];
 const ENTERPRISE_IMAGE_QUALITIES: ImageQualityValue[] = ["auto", "high", "medium", "low"];
 
-const GPT_IMAGE_1_ENTERPRISE_SIZES = ["auto", "1024x1024", "1024x1536", "1536x1024"];
-const GPT_IMAGE_2_ENTERPRISE_SIZES = ["auto", "1024x1024", "1024x1536", "1536x1024", "2048x2048", "2048x1152", "1152x2048", "2560x1440", "1440x2560", "3136x1344", "3840x2160", "2160x3840", "3808x1632"];
-const GPT_IMAGE_2_4K_SIZES = GPT_IMAGE_2_ENTERPRISE_SIZES;
+const GPT_IMAGE_1_ENTERPRISE_MAX_EDGE = 1536;
+const GPT_IMAGE_2_ENTERPRISE_MAX_EDGE = 3840;
 
 const IMAGE_MODEL_CAPABILITIES: Record<string, ImageModelCapability> = {
     "gpt-image-1-enterprise": {
-        sizes: GPT_IMAGE_1_ENTERPRISE_SIZES,
+        maxEdge: GPT_IMAGE_1_ENTERPRISE_MAX_EDGE,
         qualities: ENTERPRISE_IMAGE_QUALITIES,
-        hint: "gpt-image-1-enterprise 支持 auto、1024x1024、1024x1536、1536x1024；质量档位 auto、low、medium、high。",
+        hint: "gpt-image-1-enterprise 支持最长边不超过 1536px 的自定义尺寸，宽高需为 16 的倍数；质量档位 auto、low、medium、high。",
     },
     "gpt-image-1.5-enterprise": {
-        sizes: GPT_IMAGE_1_ENTERPRISE_SIZES,
+        maxEdge: GPT_IMAGE_1_ENTERPRISE_MAX_EDGE,
         qualities: ENTERPRISE_IMAGE_QUALITIES,
-        hint: "gpt-image-1.5-enterprise 支持 auto、1024x1024、1024x1536、1536x1024；质量档位 auto、low、medium、high。",
+        hint: "gpt-image-1.5-enterprise 支持最长边不超过 1536px 的自定义尺寸，宽高需为 16 的倍数；质量档位 auto、low、medium、high。",
     },
     "gpt-image-2-enterprise": {
-        sizes: GPT_IMAGE_2_ENTERPRISE_SIZES,
+        maxEdge: GPT_IMAGE_2_ENTERPRISE_MAX_EDGE,
         qualities: ENTERPRISE_IMAGE_QUALITIES,
-        hint: "gpt-image-2-enterprise 支持 auto、1024x1024、1024x1536、1536x1024、2048x2048、2048x1152、1152x2048、2560x1440、1440x2560、3136x1344、3840x2160、2160x3840、3808x1632；质量档位 auto、low、medium、high。",
+        hint: "gpt-image-2-enterprise 支持最长边不超过 3840px 的自定义尺寸，宽高需为 16 的倍数；质量档位 auto、low、medium、high。",
     },
     "gpt-image-2-4k": {
-        sizes: GPT_IMAGE_2_4K_SIZES,
+        maxEdge: GPT_IMAGE_2_ENTERPRISE_MAX_EDGE,
         qualities: ENTERPRISE_IMAGE_QUALITIES,
-        hint: "gpt-image-2-4K 按 GPT Image 2 企业版固定规格限制，支持最长边不超过 3840 的 2K/4K 固定尺寸；质量档位 auto、low、medium、high。",
+        hint: "gpt-image-2-4K 支持最长边不超过 3840px 的自定义尺寸，宽高需为 16 的倍数；质量档位 auto、low、medium、high。",
     },
 };
 
@@ -107,30 +109,20 @@ export function normalizeImageBackground(background: string | undefined) {
     return background?.trim().toLowerCase() === "transparent" ? "transparent" : undefined;
 }
 
-export function resolveImageRequestSize(quality: string | undefined, size: string | undefined) {
+export function resolveImageRequestSize(quality: string | undefined, size: string | undefined, limit?: ImageSizeLimit) {
     const value = (size || "").trim();
     if (!value || value.toLowerCase() === "auto") return undefined;
     const dimensions = parseImageDimensions(value);
     if (dimensions) {
-        validateGenericImageSize(dimensions.width, dimensions.height);
+        validateGenericImageSize(dimensions.width, dimensions.height, limit);
         return `${dimensions.width}x${dimensions.height}`;
     }
-    if (value.includes(":")) return resolveRatioSize(quality, value);
+    if (value.includes(":")) return resolveRatioSize(quality, value, limit);
     throw new Error("图像尺寸格式不支持，请使用 auto、9:16 或 1024x1024");
 }
 
 export function resolveImageModelRequestSize(model: string, quality: string | undefined, size: string | undefined) {
-    const capability = imageModelCapability(model);
-    if (!capability?.sizes?.length) return resolveImageRequestSize(quality, size);
-    const value = (size || "").trim();
-    if (!value || value.toLowerCase() === "auto") return undefined;
-    const dimensions = parseImageDimensions(value);
-    if (dimensions) {
-        validateGenericImageSize(dimensions.width, dimensions.height);
-        return `${dimensions.width}x${dimensions.height}`;
-    }
-    if (value.includes(":")) throw new Error(`${imageModelName(model)} 只支持固定尺寸列表，请选择 ${capability.sizes.join("、")}，或切换模型。`);
-    return resolveImageRequestSize(quality, value);
+    return resolveImageRequestSize(quality, size, imageModelCapability(model));
 }
 
 export function validateImageConfigParameters(config: { model?: string; imageModel?: string; quality?: string; size?: string; background?: string }, model = imageConfigModel(config)) {
@@ -149,7 +141,8 @@ export function validateImageModelParameters(model: string, params: { size?: str
     if (!capability) return "";
     const modelName = imageModelName(model);
     const size = params.size || "auto";
-    if (capability.sizes && !capability.sizes.includes(size)) return `${modelName} 不支持尺寸 ${size}，请选择该模型支持的尺寸：${capability.sizes.join("、")}，或切换模型。`;
+    const dimensions = size === "auto" ? null : parseImageDimensions(size);
+    if (dimensions && capability.maxEdge && Math.max(dimensions.width, dimensions.height) > capability.maxEdge) return `${modelName} 图像尺寸最长边不能超过 ${capability.maxEdge}px，请调整尺寸。`;
     const quality = (params.quality || "auto") as ImageQualityValue;
     if (capability.qualities && !capability.qualities.includes(quality)) return `${modelName} 不支持质量档位 ${quality}，请选择 ${capability.qualities.join("、")}，或切换模型。`;
     if (params.background === "transparent" && capability.transparentBackground === false) return `${modelName} 不支持透明背景，请关闭透明背景或切换模型。`;
@@ -189,11 +182,6 @@ export function imageSizeLabel(size: string) {
 export function supportedImageSizeOptions(model: string, quality: string | undefined) {
     return imageSizeOptions.filter((item) => isImageSizeSupported(model, item.value, quality));
 }
-export function hasImageModelSizeList(model: string) {
-    return Boolean(imageModelCapability(model)?.sizes?.length);
-}
-
-
 function imageModelCapability(model: string) {
     return IMAGE_MODEL_CAPABILITIES[normalizeImageModelName(model)];
 }
@@ -212,10 +200,10 @@ function normalizeImageModelName(model: string) {
     return imageModelName(model).toLowerCase();
 }
 
-function resolveRatioSize(quality: string | undefined, ratio: string): string {
+function resolveRatioSize(quality: string | undefined, ratio: string, limit?: ImageSizeLimit): string {
     const parsedRatio = parseImageRatio(ratio);
     const basePixels = quality ? QUALITY_BASE[quality] : undefined;
-    const exactSize = resolveExactRatioSize(parsedRatio.width, parsedRatio.height, basePixels);
+    const exactSize = resolveExactRatioSize(parsedRatio.width, parsedRatio.height, basePixels, limit);
     if (exactSize) return exactSize;
     const isLandscape = parsedRatio.width >= parsedRatio.height;
     const longRatio = isLandscape ? parsedRatio.width / parsedRatio.height : parsedRatio.height / parsedRatio.width;
@@ -234,11 +222,11 @@ function resolveRatioSize(quality: string | undefined, ratio: string): string {
 
     const width = isLandscape ? longSide : shortSide;
     const height = isLandscape ? shortSide : longSide;
-    validateGenericImageSize(width, height);
+    validateGenericImageSize(width, height, limit);
     return `${width}x${height}`;
 }
 
-function resolveExactRatioSize(widthRatio: number, heightRatio: number, basePixels?: number) {
+function resolveExactRatioSize(widthRatio: number, heightRatio: number, basePixels?: number, limit?: ImageSizeLimit) {
     const reduced = reduceImageRatio(widthRatio, heightRatio);
     if (Math.max(reduced.width, reduced.height) > 32) return undefined;
 
@@ -246,14 +234,14 @@ function resolveExactRatioSize(widthRatio: number, heightRatio: number, basePixe
     const desiredUnit = basePixels ? Math.sqrt((basePixels * basePixels) / ratioPixels) : DEFAULT_IMAGE_SHORT_SIDE / Math.min(reduced.width, reduced.height);
     const minimumUnit = Math.ceil(Math.sqrt(IMAGE_MIN_PIXELS / ratioPixels) / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
     const maximumUnitByPixels = Math.floor(Math.sqrt(IMAGE_MAX_PIXELS / ratioPixels) / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
-    const maximumUnitByEdge = Math.floor(IMAGE_MAX_EDGE / Math.max(reduced.width, reduced.height) / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
-    const maximumUnit = Math.min(maximumUnitByPixels, maximumUnitByEdge);
+    const maximumEdge = Math.min(IMAGE_MAX_EDGE, limit?.maxEdge || IMAGE_MAX_EDGE);
+    const maximumUnitByEdge = Math.floor(maximumEdge / Math.max(reduced.width, reduced.height) / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
     if (minimumUnit > maximumUnit || maximumUnit < IMAGE_SIZE_STEP) return undefined;
 
     const unit = Math.min(maximumUnit, Math.max(minimumUnit, Math.round(desiredUnit / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP));
     const width = reduced.width * unit;
     const height = reduced.height * unit;
-    validateGenericImageSize(width, height);
+    validateGenericImageSize(width, height, limit);
     return `${width}x${height}`;
 }
 
@@ -299,10 +287,11 @@ function parseImageDimensions(value: string) {
     return { width: Number(match[1]), height: Number(match[2]) };
 }
 
-function validateGenericImageSize(width: number, height: number) {
+function validateGenericImageSize(width: number, height: number, limit?: ImageSizeLimit) {
     if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) throw new Error("图像尺寸必须是正整数，例如 1024x1024");
     if (width % IMAGE_SIZE_STEP !== 0 || height % IMAGE_SIZE_STEP !== 0) throw new Error("图像尺寸的宽高必须是 16 的倍数，请调整尺寸");
-    if (Math.max(width, height) > IMAGE_MAX_EDGE) throw new Error("图像尺寸最长边不能超过 3840px，请调整尺寸");
+    const maxEdge = Math.min(IMAGE_MAX_EDGE, limit?.maxEdge || IMAGE_MAX_EDGE);
+    if (Math.max(width, height) > maxEdge) throw new Error(`图像尺寸最长边不能超过 ${maxEdge}px，请调整尺寸`);
     if (Math.max(width, height) / Math.min(width, height) > IMAGE_MAX_RATIO) throw new Error("图像宽高比不能超过 3:1，请调整尺寸");
     const pixels = width * height;
     if (pixels < IMAGE_MIN_PIXELS || pixels > IMAGE_MAX_PIXELS) throw new Error("图像总像素需在 655360 到 8294400 之间，请调整尺寸");

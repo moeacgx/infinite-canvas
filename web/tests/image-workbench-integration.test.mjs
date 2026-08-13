@@ -103,20 +103,21 @@ test("生图页保留模型渠道切换、工作流入口与可取消的即时�
     assert.match(imagePageSource, /const nextLogs = \(await readStoredLogs\(\)\)\.filter\(\(log\) => !deletedLogIdsRef\.current\.has\(log\.id\)\)/);
 });
 
-test("GPT 企业图片模型按后台规格限制尺寸和质量", () => {
-    const gptImage1Sizes = ["auto", "1024x1024", "1024x1536", "1536x1024"];
-    const gptImage2Sizes = [...gptImage1Sizes, "2048x2048", "2048x1152", "1152x2048", "2560x1440", "1440x2560", "3136x1344", "3840x2160", "2160x3840", "3808x1632"];
+test("GPT 企业图片模型只按最长边限制尺寸和质量", () => {
+    const gptImage1Options = supportedImageSizeOptions("gpt-image-1-enterprise", "medium").map((item) => item.value);
+    const gptImage2Options = supportedImageSizeOptions("gpt-image-2-enterprise", "medium").map((item) => item.value);
 
-    assert.deepEqual(supportedImageSizeOptions("gpt-image-1-enterprise", "medium").map((item) => item.value), gptImage1Sizes);
-    assert.deepEqual(supportedImageSizeOptions("gpt-image-1.5-enterprise", "medium").map((item) => item.value), gptImage1Sizes);
-    assert.deepEqual(supportedImageSizeOptions("gpt-image-2-enterprise", "medium").map((item) => item.value), gptImage2Sizes);
+    assert.ok(gptImage1Options.includes("1536x1024"));
+    assert.ok(!gptImage1Options.includes("2048x2048"));
+    assert.ok(gptImage2Options.includes("3808x1632"));
     assert.deepEqual(imageQualityOptions.filter((item) => isImageQualitySupported("gpt-image-2-enterprise", item.value)).map((item) => item.value), ["auto", "high", "medium", "low"]);
     assert.equal(validateImageConfigParameters({ model: "gpt-image-2-enterprise", size: "auto", quality: "high" }), "");
-    assert.equal(validateImageConfigParameters({ model: "gpt-image-2-enterprise", size: "1024x1024", quality: "auto" }), "");
-    assert.equal(validateImageConfigParameters({ model: "gpt-image-2-enterprise", size: "1152x2048", quality: "high" }), "");
+    assert.equal(validateImageConfigParameters({ model: "gpt-image-1-enterprise", size: "1232x1360", quality: "auto" }), "");
+    assert.equal(validateImageConfigParameters({ model: "gpt-image-2-enterprise", size: "1792x1008", quality: "high" }), "");
     assert.equal(validateImageConfigParameters({ model: "gpt-image-2-enterprise", size: "3808x1632", quality: "high" }), "");
     assert.match(validateImageConfigParameters({ model: "gpt-image-2-enterprise", size: "6272x2688", quality: "high" }), /最长边不能超过 3840px/);
-    assert.match(imageSettingsSource, /const aspectOptions = imageSizeOptions/);
+    assert.match(validateImageConfigParameters({ model: "gpt-image-1-enterprise", size: "1600x1024", quality: "medium" }), /最长边不能超过 1536px/);
+    assert.match(imageSettingsSource, /<Switch size="small" checked=\{snapDimensionToStep\} onChange=\{setSnapDimensionToStep\}/);
     assert.match(agentSiteToolsSource, /supportedImageSizeOptions\(model, config\.quality\)/);
 });
 

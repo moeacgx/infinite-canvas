@@ -6,7 +6,7 @@ import { ConfigProvider, Switch } from "antd";
 import { type CanvasTheme } from "@/lib/canvas-theme";
 import type { AiConfig } from "@/stores/use-config-store";
 
-import { hasImageModelSizeList, imageModelCapabilityHint, imageQualityOptions, imageSizeLabel, imageSizeOptions, imageSizeUnsupportedReason, isImageQualitySupported, isImageSizeSupported } from "@/lib/image-model-capabilities";
+import { imageModelCapabilityHint, imageQualityOptions, imageSizeLabel, imageSizeOptions, imageSizeUnsupportedReason, isImageQualitySupported, isImageSizeSupported } from "@/lib/image-model-capabilities";
 
 const DIMENSION_STEP = 16;
 
@@ -37,7 +37,6 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, model: model
     const selectedAspect = aspectOptions.find((item) => item.value === activeSize) || aspectOptions.find((item) => imageSizeLabel(activeSize) === item.label);
     const dimensions = readSizeDimensions(activeSize, selectedAspect || aspectOptions[0]);
     const capabilityHint = imageModelCapabilityHint(model);
-    const fixedSizeOptionsOnly = hasImageModelSizeList(model);
     const selectAspect = (value: string) => {
         const option = aspectOptions.find((item) => item.value === value);
         onConfigChange("size", option?.value || "auto");
@@ -83,15 +82,15 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, model: model
                                     <span className="text-xs font-medium" style={{ color: theme.node.muted }}>
                                         16倍数对齐
                                     </span>
-                                    <span title={fixedSizeOptionsOnly ? "当前模型只支持固定尺寸列表" : "输入完成后自动向上补成 16 的倍数"} onMouseDown={(event) => event.stopPropagation()}>
-                                        <Switch size="small" checked={snapDimensionToStep} disabled={fixedSizeOptionsOnly} onChange={setSnapDimensionToStep} />
+                                    <span title="输入完成后自动向上补成 16 的倍数" onMouseDown={(event) => event.stopPropagation()}>
+                                        <Switch size="small" checked={snapDimensionToStep} onChange={setSnapDimensionToStep} />
                                     </span>
                                 </div>
                             </div>
                             <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2.5">
-                                <DimensionInput prefix="W" value={dimensions.width} disabled={activeSize === "auto" || fixedSizeOptionsOnly} theme={theme} alignToStep={snapDimensionToStep} onChange={(value) => updateDimension("width", value)} />
+                                <DimensionInput prefix="W" value={dimensions.width} disabled={activeSize === "auto"} theme={theme} alignToStep={snapDimensionToStep} onChange={(value) => updateDimension("width", value)} />
                                 <span className="text-lg opacity-45">↔</span>
-                                <DimensionInput prefix="H" value={dimensions.height} disabled={activeSize === "auto" || fixedSizeOptionsOnly} theme={theme} alignToStep={snapDimensionToStep} onChange={(value) => updateDimension("height", value)} />
+                                <DimensionInput prefix="H" value={dimensions.height} disabled={activeSize === "auto"} theme={theme} alignToStep={snapDimensionToStep} onChange={(value) => updateDimension("height", value)} />
                             </div>
                         </div>
                         <div className="space-y-2.5">
