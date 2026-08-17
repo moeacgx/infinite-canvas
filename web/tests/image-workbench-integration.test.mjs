@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { createModelChannel, defaultConfig, encodeChannelModel, resolveCapabilityModel, resolveImageChannelOptions, withLocalChannels } from "../src/stores/use-config-store.ts";
+import { createModelChannel, defaultConfig, encodeChannelModel, filterModelsByCapability, resolveCapabilityModel, resolveImageChannelOptions, withLocalChannels } from "../src/stores/use-config-store.ts";
 import { imageQualityOptions, isImageQualitySupported, supportedImageSizeOptions, validateImageConfigParameters } from "../src/lib/image-model-capabilities.ts";
 import { buildWorkflowRunConfig, resolveWorkflowRuntime } from "../src/components/workflows/workflow-runtime.ts";
 
@@ -103,20 +103,32 @@ test("生图页保留模型渠道切换、工作流入口与可取消的即时�
     assert.match(imagePageSource, /const nextLogs = \(await readStoredLogs\(\)\)\.filter\(\(log\) => !deletedLogIdsRef\.current\.has\(log\.id\)\)/);
 });
 
-test("GPT 企业图片模型只按最长边限制尺寸和质量", () => {
+test("GPT 企业图片模型和 Banana 图片模型按各自尺寸限制校验", () => {
     const gptImage1Options = supportedImageSizeOptions("gpt-image-1-enterprise", "medium").map((item) => item.value);
     const gptImage2Options = supportedImageSizeOptions("gpt-image-2-enterprise", "medium").map((item) => item.value);
+    const bananaOptions = supportedImageSizeOptions("nano-banana", "medium").map((item) => item.value);
 
     assert.ok(gptImage1Options.includes("1536x1024"));
     assert.ok(!gptImage1Options.includes("2048x2048"));
     assert.ok(gptImage2Options.includes("3808x1632"));
+    assert.ok(gptImage2Options.includes("3840x2160"));
+    assert.ok(!gptImage2Options.includes("4096x4096"));
+    assert.ok(bananaOptions.includes("4096x4096"));
     assert.deepEqual(imageQualityOptions.filter((item) => isImageQualitySupported("gpt-image-2-enterprise", item.value)).map((item) => item.value), ["auto", "high", "medium", "low"]);
     assert.equal(validateImageConfigParameters({ model: "gpt-image-2-enterprise", size: "auto", quality: "high" }), "");
     assert.equal(validateImageConfigParameters({ model: "gpt-image-1-enterprise", size: "1232x1360", quality: "auto" }), "");
     assert.equal(validateImageConfigParameters({ model: "gpt-image-2-enterprise", size: "1792x1008", quality: "high" }), "");
     assert.equal(validateImageConfigParameters({ model: "gpt-image-2-enterprise", size: "3808x1632", quality: "high" }), "");
+    assert.equal(validateImageConfigParameters({ model: "gpt-image-2-enterprise", size: "3840x2160", quality: "high" }), "");
+    assert.equal(validateImageConfigParameters({ model: "gpt-image-2-enterprise", size: "2160x3840", quality: "high" }), "");
+    assert.equal(validateImageConfigParameters({ model: "nano-banana", size: "4096x4096", quality: "high" }), "");
+    assert.equal(validateImageConfigParameters({ model: "nano-banana", size: "1025x1025", quality: "high" }), "");
+    assert.match(validateImageConfigParameters({ model: "gpt-image-2-enterprise", size: "2560x2560", quality: "high" }), /短边不能超过 2160px/);
+    assert.match(validateImageConfigParameters({ model: "gpt-image-2-enterprise", size: "1793x1008", quality: "high" }), /宽高必须是 16 的倍数/);
     assert.match(validateImageConfigParameters({ model: "gpt-image-2-enterprise", size: "6272x2688", quality: "high" }), /最长边不能超过 3840px/);
     assert.match(validateImageConfigParameters({ model: "gpt-image-1-enterprise", size: "1600x1024", quality: "medium" }), /最长边不能超过 1536px/);
+    assert.match(validateImageConfigParameters({ model: "nano-banana", size: "4097x4096", quality: "high" }), /最长边不能超过 4096px/);
+    assert.deepEqual(filterModelsByCapability(["gpt-5", "nano-banana"], "image"), ["nano-banana"]);
     assert.match(imageSettingsSource, /<Switch size="small" checked=\{snapDimensionToStep\} onChange=\{setSnapDimensionToStep\}/);
     assert.match(agentSiteToolsSource, /supportedImageSizeOptions\(model, config\.quality\)/);
 });

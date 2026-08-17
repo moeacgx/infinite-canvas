@@ -114,6 +114,6 @@ function guessCapability(model: string): ModelCapability {
     const value = model.toLowerCase();
     if (/video|veo|sora|seedance|kling|wan/.test(value)) return "video";
     if (/audio|tts|speech|voice|music/.test(value)) return "audio";
-    if (/image|imagen|flux|dall|seedream|sdxl/.test(value)) return "image";
+    if (/image|imagen|banana|flux|dall|seedream|sdxl/.test(value)) return "image";
     return "text";
 }

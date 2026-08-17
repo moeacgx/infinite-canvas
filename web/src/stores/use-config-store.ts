@@ -384,6 +384,7 @@ function isImageModelName(model: string) {
         (value.includes("seedream") ||
             value.includes("gpt-image") ||
             value.includes("image") ||
+            value.includes("banana") ||
             value.includes("dall-e") ||
             value.includes("dalle") ||
             value.includes("imagen") ||
