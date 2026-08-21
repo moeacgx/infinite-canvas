@@ -209,7 +209,7 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
                 continue;
             }
             if (!parsedJson.parsed && !hasExecutedActions && likelyCanvasAction && !isClarifyingReply) {
-                const unsupported = "当前文本模型没有返回可执行的画布工具指令。可以继续讨论文本内容，但无法可靠地自动创建节点或执行生成；请在全局配置中更换支持 Tool Calling 或稳定 JSON 输出的文本模型。";
+                const unsupported = "当前文本模型没有返回可执行的画布工具指令。可以继续讨论文本内容，但无法可靠地自动创建节点或执行生成；请在创作 Agent 顶部切换支持 Tool Calling 或稳定 JSON 输出的文本模型。";
                 protocolMessages = trimProtocolMessages([...protocolMessages, { role: "assistant" as const, content: unsupported }]);
                 return { reply: unsupported, state, protocolMessages: persistCanvasAgentProtocolMessages(protocolMessages) };
             }

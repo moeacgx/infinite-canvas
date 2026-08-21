@@ -154,10 +154,13 @@ test("image workbench snapshots persist the selected image model explicitly", ()
     assert.match(imagePageSource, /background:\s*config\.background/);
 });
 
-test("canvas creative agent resolves the text model before delegating media tools", () => {
+test("canvas creative agent uses the active session text model and isolates cross-model history", () => {
     assert.match(assistantPanelSource, /resolveCapabilityModel/);
-    assert.match(assistantPanelSource, /const textModel = resolveCapabilityModel\(effectiveConfig,\s*"text",\s*effectiveConfig\.textModel \|\| effectiveConfig\.model\)/);
-    assert.match(assistantPanelSource, /requestConfig[\s\S]*model:\s*textModel,[\s\S]*textModel/);
+    assert.match(assistantPanelSource, /activeSession\?\.textModel \|\| effectiveConfig\.textModel/);
+    assert.match(assistantPanelSource, /const textModel = resolveCapabilityModel\(effectiveConfig,\s*"text",\s*session\.textModel \|\| effectiveConfig\.textModel \|\| effectiveConfig\.model\)/);
+    assert.match(assistantPanelSource, /capability="text"/);
+    assert.match(assistantPanelSource, /createSession\(textModel, textChannelId\)/);
+    assert.match(assistantPanelSource, /session\?\.messages\.length \|\| session\?\.protocolMessages\.length/);
     assert.match(assistantPanelSource, /runCanvasAgent[\s\S]*onExecuteAction/);
 });
 
