@@ -86,6 +86,11 @@
 - 提交完成后，给当前提交打最新版本号对应的 tag，例如 `v0.0.5`。
 - 发版本流程中不要执行编译、测试或构建，除非用户明确要求。
 
+## 参考仓库
+
+- 进行实现或差异对照时，可参考：https://github.com/basketikun/infinite-canvas 与 https://github.com/tigerowo/infinite-canvas。
+- 当前 Git `upstream` 指向 https://github.com/tigerowo/infinite-canvas，并优先作为本项目的代码对照基线。
+
 ## 项目注意事项
 
 - 当前画布项目和“我的素材”主要保存在浏览器本地，不要在文档中误写成已支持云同步。
