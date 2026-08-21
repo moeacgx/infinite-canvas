@@ -234,6 +234,8 @@ export type CanvasAssistantSession = {
     id: string;
     title: string;
     messages: CanvasAssistantMessage[];
+    textModel?: string;
+    textChannelId?: string;
     draftAssets?: PendingAgentAsset[];
     agentState: CanvasAgentState;
     protocolMessages: CanvasAgentProtocolMessage[];
