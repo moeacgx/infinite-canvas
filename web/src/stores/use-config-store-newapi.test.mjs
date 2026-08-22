@@ -16,6 +16,7 @@ const videoSource = readFileSync(resolve(root, "../services/api/video.ts"), "utf
 const audioSource = readFileSync(resolve(root, "../services/api/audio.ts"), "utf8");
 const userStatusSource = readFileSync(resolve(root, "../components/layout/user-status-actions.tsx"), "utf8");
 const assistantPanelSource = readFileSync(resolve(root, "../app/(user)/canvas/components/canvas-assistant-panel.tsx"), "utf8");
+const composerSource = readFileSync(resolve(root, "../app/(user)/canvas/components/canvas-assistant-composer.tsx"), "utf8");
 const nodePromptPanelSource = readFileSync(resolve(root, "../app/(user)/canvas/components/canvas-node-prompt-panel.tsx"), "utf8");
 const configNodePanelSource = readFileSync(resolve(root, "../app/(user)/canvas/components/canvas-config-node-panel.tsx"), "utf8");
 
@@ -154,13 +155,16 @@ test("image workbench snapshots persist the selected image model explicitly", ()
     assert.match(imagePageSource, /background:\s*config\.background/);
 });
 
-test("canvas creative agent uses the active session text model and isolates cross-model history", () => {
-    assert.match(assistantPanelSource, /resolveCapabilityModel/);
+test("canvas creative agent keeps text model changes in the active session and composer", () => {
     assert.match(assistantPanelSource, /activeSession\?\.textModel \|\| effectiveConfig\.textModel/);
     assert.match(assistantPanelSource, /const textModel = resolveCapabilityModel\(effectiveConfig,\s*"text",\s*session\.textModel \|\| effectiveConfig\.textModel \|\| effectiveConfig\.model\)/);
-    assert.match(assistantPanelSource, /capability="text"/);
-    assert.match(assistantPanelSource, /createSession\(textModel, textChannelId\)/);
-    assert.match(assistantPanelSource, /session\?\.messages\.length \|\| session\?\.protocolMessages\.length/);
+    assert.match(assistantPanelSource, /updateSession\(sessionId,[\s\S]*textModel,[\s\S]*textChannelId/);
+    assert.doesNotMatch(assistantPanelSource, /session\?\.messages\.length \|\| session\?\.protocolMessages\.length/);
+    assert.doesNotMatch(assistantPanelSource, /新建会话/);
+    assert.match(assistantPanelSource, /textModel=\{activeTextModel\}/);
+    assert.match(composerSource, /ariaLabel="对话文本模型"/);
+    assert.match(composerSource, /capability="text"/);
+    assert.match(composerSource, /onTextModelChange/);
     assert.match(assistantPanelSource, /runCanvasAgent[\s\S]*onExecuteAction/);
 });
 
