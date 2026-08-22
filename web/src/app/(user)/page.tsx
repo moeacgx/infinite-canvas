@@ -9,7 +9,7 @@ import { fetchPrompts, type Prompt } from "@/services/api/prompts";
 import { cn } from "@/lib/utils";
 import { uploadMediaFile } from "@/services/file-storage";
 import { uploadImage } from "@/services/image-storage";
-import { useEffectiveConfig } from "@/stores/use-config-store";
+import { decodeChannelModel, resolveCapabilityModel, useEffectiveConfig } from "@/stores/use-config-store";
 import { AssetPickerModal } from "./canvas/components/asset-picker-modal";
 import { CanvasAssistantComposer } from "./canvas/components/canvas-assistant-composer";
 import { createPendingAgentAsset } from "./canvas/agent/canvas-agent-attachments";
@@ -52,6 +52,15 @@ export default function IndexPage() {
         videoGenerateAudio: effectiveConfig.videoGenerateAudio,
         videoWatermark: effectiveConfig.videoWatermark,
     }));
+    const [selectedTextModel, setSelectedTextModel] = useState("");
+    const [selectedTextChannelId, setSelectedTextChannelId] = useState("");
+    const textModel = resolveCapabilityModel(effectiveConfig, "text", selectedTextModel || effectiveConfig.textModel || effectiveConfig.model);
+    const textChannelId = selectedTextChannelId || decodeChannelModel(textModel)?.channelId || effectiveConfig.textChannelId;
+    const selectTextModel = (model: string, channelId: string | undefined) => {
+        const resolvedModel = resolveCapabilityModel(effectiveConfig, "text", model);
+        setSelectedTextModel(resolvedModel);
+        setSelectedTextChannelId(channelId || decodeChannelModel(resolvedModel)?.channelId || "");
+    };
     const uploadInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
@@ -109,7 +118,7 @@ export default function IndexPage() {
         for (let i = 1; titles.has(title); i++) title = `无限画布 ${i}`;
         const projectId = createProject(title, {
             agentConfig,
-            pendingAgentRequest: { prompt: text, assets: pendingAssets },
+            pendingAgentRequest: { prompt: text, assets: pendingAssets, textModel, textChannelId },
         });
         router.push(`/canvas/${projectId}`);
     };
@@ -127,6 +136,9 @@ export default function IndexPage() {
                             isRunning={false}
                             submitDisabled={submitting || uploadingCount > 0}
                             references={pendingAssets.map((asset) => asset.reference)}
+                            textModel={textModel}
+                            textChannelId={textChannelId}
+                            onTextModelChange={selectTextModel}
                             agentConfig={agentConfig}
                             onAgentConfigChange={(patch) => setAgentConfig((current) => ({ ...current, ...patch }))}
                             onPromptChange={setPrompt}

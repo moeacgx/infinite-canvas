@@ -85,7 +85,7 @@ type CanvasAssistantPanelProps = {
     onExecuteAction: (action: CanvasAgentAction, messageReferenceNodeIds: string[], signal?: AbortSignal) => Promise<CanvasAgentToolResult>;
     onMaterializeReferences: (assets: PendingAgentAsset[], signal?: AbortSignal) => Promise<void>;
     onClose: () => void;
-    initialRequest?: { prompt: string; references: CanvasAssistantReference[] } | null;
+    initialRequest?: { prompt: string; references: CanvasAssistantReference[]; textModel?: string; textChannelId?: string } | null;
     onInitialRequestConsumed?: () => void;
 };
 
@@ -476,6 +476,15 @@ export function CanvasAssistantPanel({
     useEffect(() => {
         if (!initialRequest || consumedInitialRequestRef.current === initialRequest || (!initialRequest.prompt.trim() && !initialRequest.references.length)) return;
         if (runningRef.current) return;
+        const targetSessionId = activeSessionIdRef.current || sessionsRef.current[0]?.id;
+        if (targetSessionId && initialRequest.textModel) {
+            updateSession(targetSessionId, (current) => ({
+                ...current,
+                textModel: initialRequest.textModel,
+                textChannelId: initialRequest.textChannelId || decodeChannelModel(initialRequest.textModel)?.channelId || "",
+                updatedAt: new Date().toISOString(),
+            }));
+        }
         void sendMessage(initialRequest.prompt, initialRequest.references, undefined, () => {
             consumedInitialRequestRef.current = initialRequest;
             onInitialRequestConsumed?.();

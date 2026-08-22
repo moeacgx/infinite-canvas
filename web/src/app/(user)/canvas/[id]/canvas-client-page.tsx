@@ -389,7 +389,7 @@ function InfiniteCanvasPage() {
     const [chatSessions, setChatSessions] = useState<CanvasAssistantSession[]>([]);
     const [activeChatId, setActiveChatId] = useState<string | null>(null);
     const [agentConfig, setAgentConfig] = useState<CanvasAgentConfig | null>(null);
-    const [initialAgentRequest, setInitialAgentRequest] = useState<{ prompt: CanvasPendingAgentRequest["prompt"]; references: CanvasAssistantReference[] } | null>(null);
+    const [initialAgentRequest, setInitialAgentRequest] = useState<{ prompt: CanvasPendingAgentRequest["prompt"]; references: CanvasAssistantReference[]; textModel?: string; textChannelId?: string } | null>(null);
     const [viewport, setViewport] = useState<ViewportTransform>({ x: 0, y: 0, k: 1 });
     const [size, setSize] = useState({ width: 1200, height: 720 });
     const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
@@ -4154,7 +4154,7 @@ function InfiniteCanvasPage() {
                 return payload.kind === "image" ? { ...reference, dataUrl: payload.dataUrl } : payload.kind === "video" || payload.kind === "audio" ? { ...reference, url: payload.url } : reference;
             });
             if (!isCurrent()) return;
-            setInitialAgentRequest({ prompt: request.prompt, references });
+            setInitialAgentRequest({ prompt: request.prompt, references, textModel: request.textModel, textChannelId: request.textChannelId });
         })().catch((error) => {
             if (!isCurrent()) return;
             consumedAgentRequestProjectRef.current = null;
