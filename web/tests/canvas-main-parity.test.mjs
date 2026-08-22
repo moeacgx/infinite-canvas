@@ -31,6 +31,19 @@ test("创作 Agent 读取完整图片和视频规格而非固定数量", () => {
     assert.doesNotMatch(source, /imageCount: 1,/);
 });
 
+test("创作 Agent 使用画布浮动窗口而不是占用侧栏", async () => {
+    const panelSource = await readFile(new URL("../src/app/(user)/canvas/components/canvas-assistant-panel.tsx", import.meta.url), "utf8");
+    const storeSource = await readFile(new URL("../src/app/(user)/canvas/stores/use-canvas-store.ts", import.meta.url), "utf8");
+    assert.match(source, /CanvasAssistantLauncher/);
+    assert.doesNotMatch(source, /assistantCollapsed/);
+    assert.match(panelSource, /className="fixed z-\[140\]/);
+    assert.match(panelSource, /data-canvas-agent-launcher/);
+    assert.match(panelSource, /beginInteraction\(event, "drag"\)/);
+    assert.match(panelSource, /clampOnResize/);
+    assert.match(storeSource, /height: 640/);
+    assert.match(storeSource, /position\?: Position/);
+});
+
 test("画布持久化视频任务并在刷新后恢复查询", () => {
     assert.match(source, /createVideoGenerationTask\(/);
     assert.match(source, /canvasVideoTaskMetadata\(task\)/);

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { ChangeEvent as ReactChangeEvent, DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from "react";
 import dynamic from "next/dynamic";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { BookOpen, ChevronLeft, ChevronRight, Globe2, Group, Home, ImageIcon, Images, Layers3, List, Menu, MessageSquare, Music2, PanelLeftClose, PanelLeftOpen, Plus, Puzzle, Redo2, Settings2, Trash2, Undo2, Upload, Video, X } from "lucide-react";
+import { BookOpen, ChevronLeft, ChevronRight, Globe2, Group, Home, ImageIcon, Images, Layers3, List, Menu, Music2, PanelLeftClose, PanelLeftOpen, Plus, Puzzle, Redo2, Settings2, Trash2, Undo2, Upload, Video, X } from "lucide-react";
 import { saveAs } from "file-saver";
 
 import { requestEdit, requestGeneration, requestImageQuestion, type ChatCompletionMessage } from "@/services/api/image";
@@ -33,7 +33,7 @@ import { CanvasConfigComposer } from "../components/canvas-config-composer";
 import { CanvasConfigNodePanel } from "../components/canvas-config-node-panel";
 import { CanvasDirector } from "../components/canvas-director";
 import { CanvasDirectorNodePanel } from "../components/canvas-director-node-panel";
-import { CanvasAssistantPanel } from "../components/canvas-assistant-panel";
+import { CanvasAssistantLauncher, CanvasAssistantPanel, type CanvasAssistantBounds } from "../components/canvas-assistant-panel";
 import { CanvasPluginManagerModal } from "../components/canvas-plugin-manager-modal";
 import { CanvasPluginErrorBoundary } from "../components/canvas-plugin-error-boundary";
 import { CanvasNodeContextMenu } from "../components/canvas-context-menu";
@@ -2731,6 +2731,10 @@ function InfiniteCanvasPage() {
         [resolvedAgentConfig],
     );
 
+    const handleAgentPanelBoundsChange = useCallback((bounds: CanvasAssistantBounds) => {
+        setAgentPanel((current) => ({ ...current, width: bounds.width, height: bounds.height, position: { x: bounds.x, y: bounds.y } }));
+    }, []);
+
     const startTitleEditing = useCallback(() => {
         setTitleDraft(currentProject?.title || "未命名画布");
         setTitleEditing(true);
@@ -4355,11 +4359,6 @@ function InfiniteCanvasPage() {
                     onUndo={undoCanvas}
                     onRedo={redoCanvas}
                     onOpenPlugins={() => setPluginManagerOpen(true)}
-                    assistantCollapsed={!agentPanel.open}
-                    onExpandAssistant={() => {
-                        setAssistantMounted(true);
-                        setAgentPanel((current) => ({ ...current, open: true }));
-                    }}
                 />
 
                 <InfiniteCanvas
@@ -4710,6 +4709,14 @@ function InfiniteCanvasPage() {
 
                 <AssetPickerModal open={assetPickerOpen} defaultTab={assetPickerTab} onInsert={handleAssetInsert} onClose={() => setAssetPickerOpen(false)} />
                 <CanvasPluginManagerModal open={pluginManagerOpen} onClose={() => setPluginManagerOpen(false)} />
+                {!agentPanel.open ? (
+                    <CanvasAssistantLauncher
+                        onOpen={() => {
+                            setAssistantMounted(true);
+                            setAgentPanel((current) => ({ ...current, open: true }));
+                        }}
+                    />
+                ) : null}
             </section>
             {assistantMounted ? (
                 <CanvasAssistantPanel
@@ -4719,8 +4726,11 @@ function InfiniteCanvasPage() {
                     sessions={chatSessions}
                     activeSessionId={activeChatId}
                     agentConfig={resolvedAgentConfig}
+                    open={agentPanel.open}
                     width={agentPanel.width}
-                    onWidthChange={(width) => setAgentPanel((current) => ({ ...current, width }))}
+                    height={agentPanel.height}
+                    position={agentPanel.position}
+                    onBoundsChange={handleAgentPanelBoundsChange}
                     onSelectNodeIds={setSelectedNodeIds}
                     onSessionsChange={handleAssistantSessionsChange}
                     onAgentConfigChange={handleAgentConfigChange}
@@ -4728,8 +4738,7 @@ function InfiniteCanvasPage() {
                     getCurrentNode={(nodeId) => nodesRef.current.find((node) => node.id === nodeId)}
                     onExecuteAction={executeCanvasAgentAction}
                     onMaterializeReferences={materializeAgentReferences}
-                    onCollapseStart={() => setAgentPanel((current) => ({ ...current, open: false }))}
-                    onCollapse={() => setAssistantMounted(false)}
+                    onClose={() => setAgentPanel((current) => ({ ...current, open: false }))}
                     initialRequest={initialAgentRequest}
                     onInitialRequestConsumed={() => {
                         setInitialAgentRequest(null);
@@ -4897,8 +4906,6 @@ function CanvasTopBar({
     onUndo,
     onRedo,
     onOpenPlugins,
-    assistantCollapsed,
-    onExpandAssistant,
 }: {
     title: string;
     sidePanelOpen: boolean;
@@ -4919,8 +4926,6 @@ function CanvasTopBar({
     onUndo: () => void;
     onRedo: () => void;
     onOpenPlugins: () => void;
-    assistantCollapsed: boolean;
-    onExpandAssistant: () => void;
 }) {
     const colorTheme = useThemeStore((state) => state.theme);
     const theme = canvasThemes[colorTheme];
@@ -5024,22 +5029,6 @@ function CanvasTopBar({
                         >
                             <span className="hidden sm:inline">扩展</span>
                         </Button>
-                        {assistantCollapsed ? (
-                            <>
-                                <span className="hidden h-6 w-px shrink-0 sm:block" style={{ background: theme.toolbar.border }} />
-                                <Button
-                                    type="text"
-                                    className="!h-10 !w-10 !min-w-10 !rounded-xl !px-0 !font-medium sm:!w-auto sm:!px-3"
-                                    style={{ background: theme.toolbar.panel, color: theme.node.text, boxShadow: "0 10px 30px rgba(28,25,23,.10)" }}
-                                    icon={<MessageSquare className="size-4" />}
-                                    onClick={onExpandAssistant}
-                                    aria-label="创作 Agent"
-                                    title="创作 Agent"
-                                >
-                                    <span className="hidden sm:inline">创作 Agent</span>
-                                </Button>
-                            </>
-                        ) : null}
                     </div>
                 </div>
             </div>

@@ -1,7 +1,7 @@
 "use client";
 
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
-import { History, Bot, PanelRightClose, Plus, RotateCcw, Sparkles, Trash2, Video, X } from "lucide-react";
+import { type CSSProperties, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { Bot, History, Minus, Plus, RotateCcw, Sparkles, Trash2, Video, X } from "lucide-react";
 import { App, Button, Modal, Tooltip } from "antd";
 import { motion } from "motion/react";
 import { nanoid } from "nanoid";
@@ -35,8 +35,36 @@ import {
 import { isCanvasImageNodeType } from "../utils/canvas-node-type";
 import { AssetPickerModal } from "./asset-picker-modal";
 import { AssistantReferenceChip, CanvasAssistantComposer } from "./canvas-assistant-composer";
-const PANEL_MOTION_MS = 500;
-const PANEL_MOTION_SECONDS = PANEL_MOTION_MS / 1000;
+const PANEL_MOTION_SECONDS = 0.25;
+
+const FLOATING_AGENT_MIN_WIDTH = 320;
+const FLOATING_AGENT_MIN_HEIGHT = 420;
+
+export type CanvasAssistantBounds = { x: number; y: number; width: number; height: number };
+
+function clampFloatingBounds(bounds: CanvasAssistantBounds): CanvasAssistantBounds {
+    const viewportWidth = typeof window === "undefined" ? Math.max(bounds.width + 24, 1024) : window.innerWidth;
+    const viewportHeight = typeof window === "undefined" ? Math.max(bounds.height + 24, 720) : window.innerHeight;
+    const minWidth = Math.min(FLOATING_AGENT_MIN_WIDTH, Math.max(280, viewportWidth - 24));
+    const minHeight = Math.min(FLOATING_AGENT_MIN_HEIGHT, Math.max(320, viewportHeight - 24));
+    const width = Math.min(Math.max(bounds.width, minWidth), Math.max(minWidth, viewportWidth - 24));
+    const height = Math.min(Math.max(bounds.height, minHeight), Math.max(minHeight, viewportHeight - 24));
+    return {
+        width,
+        height,
+        x: Math.max(12, Math.min(viewportWidth - width - 12, bounds.x)),
+        y: Math.max(12, Math.min(viewportHeight - height - 12, bounds.y)),
+    };
+}
+
+function initialFloatingBounds(width: number, height: number, position?: { x: number; y: number }): CanvasAssistantBounds {
+    const viewportWidth = typeof window === "undefined" ? 1280 : window.innerWidth;
+    const viewportHeight = typeof window === "undefined" ? 800 : window.innerHeight;
+    const safe = clampFloatingBounds({ x: position?.x ?? viewportWidth - width - 24, y: position?.y ?? viewportHeight - height - 24, width, height });
+    return safe;
+}
+
+type FloatingInteraction = { kind: "drag" | "resize"; startX: number; startY: number; startBounds: CanvasAssistantBounds };
 
 type CanvasAssistantPanelProps = {
     nodes: CanvasNodeData[];
@@ -44,8 +72,11 @@ type CanvasAssistantPanelProps = {
     sessions: CanvasAssistantSession[];
     activeSessionId: string | null;
     agentConfig: CanvasAgentConfig;
+    open: boolean;
     width: number;
-    onWidthChange: (width: number) => void;
+    height: number;
+    position?: { x: number; y: number };
+    onBoundsChange: (bounds: CanvasAssistantBounds) => void;
     onSelectNodeIds: (ids: Set<string>) => void;
     onSessionsChange: (sessions: CanvasAssistantSession[], activeSessionId: string | null) => void;
     onAgentConfigChange: (patch: Partial<CanvasAgentConfig>) => void;
@@ -53,8 +84,7 @@ type CanvasAssistantPanelProps = {
     getCurrentNode: (nodeId: string) => CanvasNodeData | undefined;
     onExecuteAction: (action: CanvasAgentAction, messageReferenceNodeIds: string[], signal?: AbortSignal) => Promise<CanvasAgentToolResult>;
     onMaterializeReferences: (assets: PendingAgentAsset[], signal?: AbortSignal) => Promise<void>;
-    onCollapseStart: () => void;
-    onCollapse: () => void;
+    onClose: () => void;
     initialRequest?: { prompt: string; references: CanvasAssistantReference[] } | null;
     onInitialRequestConsumed?: () => void;
 };
@@ -70,8 +100,11 @@ export function CanvasAssistantPanel({
     sessions,
     activeSessionId,
     agentConfig,
+    open,
     width,
-    onWidthChange,
+    height,
+    position,
+    onBoundsChange,
     onSelectNodeIds,
     onSessionsChange,
     onAgentConfigChange,
@@ -79,8 +112,7 @@ export function CanvasAssistantPanel({
     getCurrentNode,
     onExecuteAction,
     onMaterializeReferences,
-    onCollapseStart,
-    onCollapse,
+    onClose,
     initialRequest,
     onInitialRequestConsumed,
 }: CanvasAssistantPanelProps) {
@@ -103,19 +135,31 @@ export function CanvasAssistantPanel({
     const [isRunning, setIsRunning] = useState(false);
     const [checkedChatIds, setCheckedChatIds] = useState<string[]>([]);
     const [deleteChatIds, setDeleteChatIds] = useState<string[]>([]);
-    const [closing, setClosing] = useState(false);
-    const [resizing, setResizing] = useState(false);
     const [removedReferenceIds, setRemovedReferenceIds] = useState<Set<string>>(new Set());
     const [pendingDelete, setPendingDelete] = useState<PendingDeleteConfirmation | null>(null);
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
     const [uploadingAssetCount, setUploadingAssetCount] = useState(0);
     const uploadingAssetCountRef = useRef(0);
+    const [bounds, setBounds] = useState(() => initialFloatingBounds(width, height, position));
+    const [interacting, setInteracting] = useState(false);
+    const boundsRef = useRef(bounds);
+    const interactionCleanupRef = useRef<(() => void) | null>(null);
     const uploadInputRef = useRef<HTMLInputElement>(null);
     const [initialSession] = useState(createSession);
     const safeSessions = sessions.length ? sessions : [initialSession];
     const resolvedActiveSessionId = activeSessionId && safeSessions.some((session) => session.id === activeSessionId) ? activeSessionId : safeSessions[0]?.id || null;
     const sessionsRef = useRef<CanvasAssistantSession[]>(safeSessions);
     const activeSessionIdRef = useRef<string | null>(resolvedActiveSessionId);
+
+    useEffect(() => {
+        boundsRef.current = bounds;
+    }, [bounds]);
+
+    useEffect(() => {
+        setBounds(initialFloatingBounds(width, height, position));
+    }, [height, position?.x, position?.y, width]);
+
+    useEffect(() => () => interactionCleanupRef.current?.(), []);
 
     useEffect(() => {
         sessionsRef.current = safeSessions;
@@ -453,45 +497,82 @@ export function CanvasAssistantPanel({
         void sendMessage(user.text, user.references, protocolMessages.slice(0, findProtocolTurnStart(protocolMessages, user.text)));
     };
 
-    const startResize = () => {
-        const move = (event: MouseEvent) => onWidthChange(Math.min(760, Math.max(320, window.innerWidth - event.clientX)));
-        const stop = () => {
-            setResizing(false);
-            document.body.style.cursor = "";
-            document.body.style.userSelect = "";
-            document.removeEventListener("mousemove", move);
-            document.removeEventListener("mouseup", stop);
-        };
-        setResizing(true);
-        document.body.style.cursor = "col-resize";
-        document.body.style.userSelect = "none";
-        document.addEventListener("mousemove", move);
-        document.addEventListener("mouseup", stop);
+    const updateBounds = (next: CanvasAssistantBounds) => {
+        const clamped = clampFloatingBounds(next);
+        boundsRef.current = clamped;
+        setBounds(clamped);
     };
 
-    const collapse = () => {
-        setClosing(true);
-        onCollapseStart();
-        window.setTimeout(onCollapse, PANEL_MOTION_MS);
+    const beginInteraction = (event: ReactPointerEvent<HTMLElement>, kind: FloatingInteraction["kind"]) => {
+        if (!open) return;
+        event.preventDefault();
+        event.stopPropagation();
+        interactionCleanupRef.current?.();
+        const startBounds = boundsRef.current;
+        const startX = event.clientX;
+        const startY = event.clientY;
+        const move = (moveEvent: PointerEvent) => {
+            const deltaX = moveEvent.clientX - startX;
+            const deltaY = moveEvent.clientY - startY;
+            updateBounds(kind === "drag" ? { ...startBounds, x: startBounds.x + deltaX, y: startBounds.y + deltaY } : { ...startBounds, width: startBounds.width + deltaX, height: startBounds.height + deltaY });
+        };
+        const stop = () => {
+            document.removeEventListener("pointermove", move);
+            document.removeEventListener("pointerup", stop);
+            document.body.style.userSelect = "";
+            document.body.style.cursor = "";
+            interactionCleanupRef.current = null;
+            setInteracting(false);
+            onBoundsChange(boundsRef.current);
+        };
+        interactionCleanupRef.current = stop;
+        setInteracting(true);
+        document.body.style.userSelect = "none";
+        document.body.style.cursor = kind === "drag" ? "grabbing" : "se-resize";
+        document.addEventListener("pointermove", move);
+        document.addEventListener("pointerup", stop);
     };
+
+    const close = () => {
+        settleDeleteConfirmation(false);
+        setAssetPickerOpen(false);
+        onClose();
+    };
+
+    useEffect(() => {
+        const clampOnResize = () => {
+            const next = clampFloatingBounds(boundsRef.current);
+            boundsRef.current = next;
+            setBounds(next);
+            onBoundsChange(next);
+        };
+        window.addEventListener("resize", clampOnResize);
+        return () => window.removeEventListener("resize", clampOnResize);
+    }, [onBoundsChange]);
 
     return (
         <motion.div
-            className="flex shrink-0"
-            initial={{ width: 0, opacity: 0 }}
-            animate={{ width: closing ? 0 : width + 1, opacity: closing ? 0 : 1 }}
-            transition={{ duration: resizing ? 0 : PANEL_MOTION_SECONDS, ease: [0.22, 1, 0.36, 1] }}
-            style={{ overflow: "clip", pointerEvents: closing ? "none" : undefined }}
+            className="fixed z-[140] max-w-[calc(100vw-24px)]"
+            initial={false}
+            animate={{ opacity: open ? 1 : 0, scale: open ? 1 : 0.96, y: open ? 0 : 16 }}
+            transition={{ duration: interacting ? 0 : PANEL_MOTION_SECONDS, ease: [0.22, 1, 0.36, 1] }}
+            aria-hidden={!open}
+            style={{ left: bounds.x, top: bounds.y, width: bounds.width, height: bounds.height, pointerEvents: open ? "auto" : "none", visibility: open ? "visible" : "hidden" }}
         >
             <motion.aside
-                className="relative flex shrink-0 flex-col border-l"
-                initial={{ x: 48 }}
-                animate={{ x: closing ? 28 : 0 }}
-                transition={{ duration: resizing ? 0 : PANEL_MOTION_SECONDS, ease: [0.22, 1, 0.36, 1] }}
-                style={{ width, background: theme.node.panel, borderColor: theme.node.stroke, color: theme.node.text }}
+                className="relative flex h-full w-full flex-col overflow-hidden rounded-[26px] border shadow-[0_24px_90px_rgba(28,25,23,.24)] backdrop-blur-2xl"
+                initial={false}
+                animate={{ x: 0 }}
+                style={{ background: theme.toolbar.panel, borderColor: theme.node.stroke, color: theme.node.text, backdropFilter: "blur(24px) saturate(145%)" }}
             >
-                <button type="button" className="absolute inset-y-0 left-0 z-40 w-4 -translate-x-1/2 cursor-col-resize" onMouseDown={startResize} aria-label="调整右侧面板宽度" />
-                <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: theme.node.stroke }}>
+                <div
+                    className="flex shrink-0 cursor-grab items-center justify-between border-b px-4 py-3 active:cursor-grabbing"
+                    style={{ borderColor: theme.node.stroke }}
+                    onPointerDown={(event) => {
+                        if ((event.target as HTMLElement).closest("button")) return;
+                        beginInteraction(event, "drag");
+                    }}
+                >
                     <div className="flex min-w-0 items-center gap-1.5 text-sm font-medium">
                         <Bot className="size-4 shrink-0" />
                         <span className="shrink-0">{view === "history" ? "历史记录" : "创作 Agent"}</span>
@@ -524,7 +605,16 @@ export function CanvasAssistantPanel({
                             </>
                         ) : null}
                         <Tooltip title={view === "history" ? "返回对话" : "历史记录"}>
-                            <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" style={iconButtonStyle} icon={<History className="size-4" />} disabled={isRunning} onClick={() => setView(view === "history" ? "chat" : "history")} />
+                            <Button
+                                type="text"
+                                shape="circle"
+                                className="!h-8 !w-8 !min-w-8"
+                                style={iconButtonStyle}
+                                icon={<History className="size-4" />}
+                                disabled={isRunning}
+                                onClick={() => setView(view === "history" ? "chat" : "history")}
+                                aria-label={view === "history" ? "返回对话" : "历史记录"}
+                            />
                         </Tooltip>
                         <Tooltip title="新对话">
                             <Button
@@ -538,10 +628,14 @@ export function CanvasAssistantPanel({
                                     startChatSession();
                                     setView("chat");
                                 }}
+                                aria-label="新对话"
                             />
                         </Tooltip>
-                        <Tooltip title="收起对话">
-                            <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" style={iconButtonStyle} icon={<PanelRightClose className="size-4" />} onClick={collapse} />
+                        <Tooltip title="最小化 Agent">
+                            <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" style={iconButtonStyle} icon={<Minus className="size-4" />} onClick={close} aria-label="最小化 Agent" />
+                        </Tooltip>
+                        <Tooltip title="关闭 Agent">
+                            <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" style={iconButtonStyle} icon={<X className="size-4" />} onClick={close} aria-label="关闭 Agent" />
                         </Tooltip>
                     </div>
                 </div>
@@ -668,8 +762,40 @@ export function CanvasAssistantPanel({
                         if (file) void handleAssistantFile(file);
                     }}
                 />
+                <button
+                    type="button"
+                    className="absolute bottom-1 right-1 z-20 hidden size-4 cursor-se-resize rounded-sm opacity-35 transition hover:opacity-80 md:block"
+                    onPointerDown={(event) => beginInteraction(event, "resize")}
+                    aria-label="调整 Agent 窗口大小"
+                />
             </motion.aside>
         </motion.div>
+    );
+}
+export function CanvasAssistantLauncher({ onOpen }: { onOpen: () => void }) {
+    const theme = canvasThemes[useThemeStore((state) => state.theme)];
+    return (
+        <motion.button
+            type="button"
+            data-canvas-agent-launcher
+            className="fixed bottom-20 right-4 z-[130] inline-flex items-center gap-2 rounded-full border px-2.5 py-2 shadow-[0_16px_42px_rgba(28,25,23,.22)] backdrop-blur-xl transition sm:bottom-6 sm:right-6"
+            style={{ background: theme.toolbar.panel, borderColor: theme.node.stroke, color: theme.node.text }}
+            whileHover={{ y: -2, scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+                event.stopPropagation();
+                onOpen();
+            }}
+            aria-label="打开创作 Agent"
+            title="打开创作 Agent"
+        >
+            <span className="relative grid size-9 place-items-center rounded-full" style={{ background: theme.toolbar.activeBg, color: theme.node.activeStroke }}>
+                <Bot className="size-4" />
+                <span className="absolute right-0.5 top-0.5 size-2 rounded-full border" style={{ background: "#10b981", borderColor: theme.toolbar.panel }} />
+            </span>
+            <span className="hidden pr-1 text-[11px] font-semibold uppercase tracking-[0.18em] sm:inline">Agent</span>
+        </motion.button>
     );
 }
 
