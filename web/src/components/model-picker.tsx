@@ -18,9 +18,10 @@ type ModelPickerProps = {
     placeholder?: string;
     onMissingConfig?: () => void;
     disabled?: boolean;
+    ariaLabel?: string;
 };
 
-export function ModelPicker({ config, value, onChange, capability, className, fullWidth = false, placeholder = "选择模型", onMissingConfig, disabled = false }: ModelPickerProps) {
+export function ModelPicker({ config, value, onChange, capability, className, fullWidth = false, placeholder = "选择模型", onMissingConfig, disabled = false, ariaLabel }: ModelPickerProps) {
     const pickerId = useId();
     const [open, setOpen] = useState(false);
     const options = useMemo(
@@ -59,6 +60,7 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
                 )}
                 onMouseDown={(event) => event.stopPropagation()}
                 onPointerDown={(event) => event.stopPropagation()}
+                aria-label={ariaLabel}
                 title={currentLabel || placeholder}
             >
                 <ModelIcon model={current} />

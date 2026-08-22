@@ -9,13 +9,12 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { ImageGenerationPending } from "@/components/image-generation-pending";
-import { ModelPicker } from "@/components/model-picker";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { cn } from "@/lib/utils";
 import { deleteStoredMedia, uploadMediaFile } from "@/services/file-storage";
 import { deleteStoredImages, imageToDataUrl, uploadImage } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
-import { decodeChannelModel, modelOptionName, resolveCapabilityModel, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
+import { decodeChannelModel, resolveCapabilityModel, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { createCanvasAgentState, runCanvasAgent } from "../agent/canvas-agent-runtime";
 import { canvasAgentActionAttachmentIds, canvasAgentActionNeedsAttachmentMaterialization, canvasAgentSessionAssets, createPendingAgentAsset, mergeCanvasAssistantReferences } from "../agent/canvas-agent-attachments";
@@ -180,21 +179,10 @@ export function CanvasAssistantPanel({
         if (isRunning) return;
         const textModel = resolveCapabilityModel(effectiveConfig, "text", model);
         const textChannelId = channelId || decodeChannelModel(textModel)?.channelId || "";
-        if (textModel === activeTextModel) return;
+        if (textModel === activeTextModel && textChannelId === activeTextChannelId) return;
         const sessionId = activeSessionIdRef.current || resolvedActiveSessionId;
-        const session = sessionsRef.current.find((item) => item.id === sessionId);
-        if (session?.messages.length || session?.protocolMessages.length) {
-            const next = createSession(textModel, textChannelId);
-            commitSessions([next, ...sessionsRef.current], next.id);
-            toast.success(`已切换至 ${modelOptionName(textModel)}，已保留原对话并新建会话`);
-            return;
-        }
-        if (session) {
-            updateSession(session.id, (current) => ({ ...current, textModel, textChannelId, updatedAt: new Date().toISOString() }));
-            return;
-        }
-        const next = createSession(textModel, textChannelId);
-        commitSessions([next, ...sessionsRef.current], next.id);
+        if (!sessionId) return;
+        updateSession(sessionId, (current) => ({ ...current, textModel, textChannelId, updatedAt: new Date().toISOString() }));
     };
 
     const updateDraftAssets = (sessionId: string, updater: (assets: PendingAgentAsset[]) => PendingAgentAsset[]) => {
@@ -332,7 +320,7 @@ export function CanvasAssistantPanel({
         const references = savedReferences || composerReferences;
         if (!text.trim() && !references.length) return;
         runningRef.current = true;
-        const session = activeSession || createSession();
+        const session = sessionsRef.current.find((item) => item.id === (activeSessionIdRef.current || resolvedActiveSessionId)) || activeSession || createSession();
         if (!activeSession) {
             commitSessions([session], session.id);
         }
@@ -507,19 +495,6 @@ export function CanvasAssistantPanel({
                     <div className="flex min-w-0 items-center gap-1.5 text-sm font-medium">
                         <Bot className="size-4 shrink-0" />
                         <span className="shrink-0">{view === "history" ? "历史记录" : "创作 Agent"}</span>
-                        {view === "chat" ? (
-                            <ModelPicker
-                                config={effectiveConfig}
-                                value={activeTextModel}
-                                channelId={activeTextChannelId}
-                                capability="text"
-                                placeholder="选择对话模型"
-                                disabled={isRunning}
-                                className="!h-8 !w-[104px] !min-w-0 !rounded-md !border-0 !bg-transparent !px-1.5 !text-xs !shadow-none hover:!bg-muted data-[state=open]:!border-0 data-[state=open]:!ring-0 sm:!w-[148px]"
-                                onChange={selectTextModel}
-                                onMissingConfig={() => openConfigDialog(true)}
-                            />
-                        ) : null}
                     </div>
                     <div className="flex items-center gap-1">
                         {view === "history" ? (
@@ -617,6 +592,9 @@ export function CanvasAssistantPanel({
                             </div>
                         ) : null}
                         <CanvasAssistantComposer
+                            textModel={activeTextModel}
+                            textChannelId={activeTextChannelId}
+                            onTextModelChange={selectTextModel}
                             prompt={prompt}
                             isRunning={isRunning}
                             submitDisabled={uploadingAssetCount > 0}

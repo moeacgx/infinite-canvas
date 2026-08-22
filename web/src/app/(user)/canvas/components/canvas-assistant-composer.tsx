@@ -19,8 +19,11 @@ export type CanvasAssistantComposerProps = {
     isRunning: boolean;
     submitDisabled?: boolean;
     references: CanvasAssistantReference[];
+    textModel?: string;
+    textChannelId?: string;
     agentConfig: CanvasAgentConfig;
     onAgentConfigChange: (patch: Partial<CanvasAgentConfig>) => void;
+    onTextModelChange?: (model: string, channelId: string | undefined) => void;
     onPromptChange: (prompt: string) => void;
     onSubmit: () => void | Promise<void>;
     onStop?: () => void;
@@ -35,8 +38,11 @@ export function CanvasAssistantComposer({
     isRunning,
     submitDisabled = false,
     references,
+    textModel,
+    textChannelId,
     agentConfig,
     onAgentConfigChange,
+    onTextModelChange,
     onPromptChange,
     onSubmit,
     onStop,
@@ -162,6 +168,20 @@ export function CanvasAssistantComposer({
                         >
                             <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8 !shrink-0" style={{ color: theme.node.text }} icon={<Menu className="size-4" />} aria-label="添加素材" />
                         </Dropdown>
+                        {onTextModelChange ? (
+                            <ModelPicker
+                                config={effectiveConfig}
+                                value={textModel}
+                                channelId={textChannelId}
+                                capability="text"
+                                placeholder="对话模型"
+                                ariaLabel="对话文本模型"
+                                disabled={isRunning}
+                                onChange={onTextModelChange}
+                                onMissingConfig={() => openConfigDialog(false)}
+                                className="!h-8 !min-w-0 !max-w-[112px] !shrink-0 !rounded-full !px-2.5 !text-xs sm:!max-w-[132px] sm:!text-sm"
+                            />
+                        ) : null}
                         <AgentMediaSettings
                             theme={theme}
                             imageConfig={imageConfig}
