@@ -200,6 +200,7 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
             const reply = (parsedJson.parsed ? parsedJson.reply : turn.content).trim();
             const likelyCanvasAction = parsedJson.actionLike || userLikelyRequestedCanvasAction(input.userText);
             const isClarifyingReply = !parsedJson.actionLike && looksLikeClarifyingQuestion(reply);
+            const completionClaimedWithoutAction = likelyCanvasAction && looksLikeCanvasCompletionClaim(reply);
             // 部分中转渠道会接受 tools 参数却静默丢弃 tool_calls。首次没有任何动作时切到
             // 已在系统提示词中约定的严格 JSON 协议，避免把本应执行的画布请求误报为不支持。
             if (turnRequestedNativeTools && !turn.usedJsonFallback && !parsedJson.parsed && !jsonFallbackRetried && !hasExecutedActions && likelyCanvasAction && !isClarifyingReply) {
@@ -208,8 +209,10 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
                 input.onEvent?.({ status: "thinking", label: "正在切换兼容 JSON 模式" });
                 continue;
             }
-            if (!parsedJson.parsed && !hasExecutedActions && likelyCanvasAction && !isClarifyingReply) {
-                const unsupported = "当前文本模型没有返回可执行的画布工具指令。可以继续讨论文本内容，但无法可靠地自动创建节点或执行生成；请在创作 Agent 顶部切换支持 Tool Calling 或稳定 JSON 输出的文本模型。";
+            if (!hasExecutedActions && likelyCanvasAction && !isClarifyingReply && (!parsedJson.parsed || completionClaimedWithoutAction)) {
+                const unsupported = completionClaimedWithoutAction
+                    ? "当前文本模型声称已完成画布操作，但没有返回可执行的画布工具指令；尚未创建或修改任何节点。请在创作 Agent 顶部切换支持 Tool Calling 或稳定 JSON 输出的文本模型后重试。"
+                    : "当前文本模型没有返回可执行的画布工具指令。可以继续讨论文本内容，但无法可靠地自动创建节点或执行生成；请在创作 Agent 顶部切换支持 Tool Calling 或稳定 JSON 输出的文本模型。";
                 protocolMessages = trimProtocolMessages([...protocolMessages, { role: "assistant" as const, content: unsupported }]);
                 return { reply: unsupported, state, protocolMessages: persistCanvasAgentProtocolMessages(protocolMessages) };
             }
@@ -358,6 +361,14 @@ function looksLikeClarifyingQuestion(text: string) {
     const withoutNegatedRequirements = text.replace(/(?:无需|不用|不必|不需要)(?:再)?(?:补充|提供|确认|选择|说明|指定|输入)/g, "").replace(/(?:并不|没有|不)(?:再)?缺少/g, "");
     return /[?？]|请(?:告诉|选择|确认|提供|补充|说明|指定|输入)|(?:还|仍)?缺少|(?:需要|需)(?:补充|提供|确认|选择)|无法(?:确定|判断|继续)|不(?:明确|清楚)|(?:补充|提供|确认).{0,16}(?:后|再)|需要.{0,12}(?:吗|呢)|希望.{0,12}(?:吗|呢)/.test(
         withoutNegatedRequirements,
+    );
+}
+
+function looksLikeCanvasCompletionClaim(text: string) {
+    const normalized = text.replace(/\s+/g, "");
+    if (/(?:如果|若|假如).{0,8}(?:改好|完成|生成|创建)/.test(normalized) || /(?:尚未|未|没有|并未|不能|无法).{0,8}(?:生成|创建|修改|更新|替换|完成|改好)/.test(normalized)) return false;
+    return /(?:已(?:经)?|成功|改好|做好|完成|处理好|生成好|创建好|更新好|替换好).{0,16}(?:生成|创建|修改|更新|替换|完成|处理|图片|图像|节点|文案|内容|了|✅)|(?:图片|图像|节点|文案|内容).{0,12}(?:已(?:经)?|成功|完成|做好|改好|更新好|替换好|生成好|创建好)/.test(
+        normalized,
     );
 }
 

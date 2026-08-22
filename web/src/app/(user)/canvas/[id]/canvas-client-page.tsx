@@ -483,6 +483,7 @@ function InfiniteCanvasPage() {
     const connectionsRef = useRef(connections);
     const selectedNodeIdsRef = useRef(selectedNodeIds);
     const viewportRef = useRef(viewport);
+    const focusNodeRef = useRef<((nodeId: string) => void) | null>(null);
     const connectingParamsRef = useRef(connectingParams);
     const connectionTargetNodeIdRef = useRef(connectionTargetNodeId);
     const selectionBoxRef = useRef(selectionBox);
@@ -3702,8 +3703,9 @@ function InfiniteCanvasPage() {
                     commitConnections([...connectionsRef.current, ...createdConnections]);
                     selectOnly(node.id);
                     await handleGenerateNode(node.id, mode, prompt, signal);
-                    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-                    const generatedNode = getNode(node.id) || node;
+                    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+                    const generatedNode = getNode(node.id);
+                    if (!generatedNode) return { ok: false, code: "generation_result_missing", message: "生成结束后找不到结果节点", nodeId: node.id, connectionIds: createdConnections.map((connection) => connection.id) };
                     const createdNodeIds = [node.id, ...connectionsRef.current.filter((connection) => connection.fromNodeId === node.id).map((connection) => connection.toNodeId)].filter(
                         (nodeId, index, values) => values.indexOf(nodeId) === index && Boolean(getNode(nodeId)),
                     );
@@ -3712,6 +3714,9 @@ function InfiniteCanvasPage() {
                         return { ok: false, code: "generation_canceled", message: "生成已停止，未完成的节点已恢复为空闲状态", nodeId: node.id, createdNodeIds, connectionIds: createdConnections.map((connection) => connection.id), ...task };
                     if (generatedNode.metadata?.status === NODE_STATUS_ERROR)
                         return { ok: false, code: "generation_failed", message: generatedNode.metadata.errorDetails || "生成失败", nodeId: node.id, createdNodeIds, connectionIds: createdConnections.map((connection) => connection.id), ...task };
+                    if (mode === "image" && !generatedNode.metadata?.content)
+                        return { ok: false, code: "image_result_missing", message: "图片任务没有产生可用图片节点", nodeId: node.id, createdNodeIds, connectionIds: createdConnections.map((connection) => connection.id), ...task };
+                    if (mode === "image") requestAnimationFrame(() => focusNodeRef.current?.(node.id));
                     return { ok: true, nodeId: node.id, createdNodeIds, connectionIds: createdConnections.map((connection) => connection.id), ...task };
                 }
                 return { ok: false, code: "unsupported_tool", message: "未实现工具 " + action.name };
@@ -4298,6 +4303,7 @@ function InfiniteCanvasPage() {
         },
         [size.height, size.width, toggleBatchExpanded],
     );
+    focusNodeRef.current = focusNode;
 
     useEffect(
         () => () => {

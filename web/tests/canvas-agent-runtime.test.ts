@@ -432,6 +432,23 @@ test("合法 JSON 空动作会保留前置条件回复而不是误报不兼容",
     assert.equal(result.reply, reply);
 });
 
+test("修改图片请求不接受空动作的完成声明", async () => {
+    let executions = 0;
+    const { requestBodies, result } = await runScriptedAgent({
+        userText: "把内容改成上线文档站",
+        responses: [{ content: "好的，已经改好了。" }, { content: JSON.stringify({ actions: [], reply: "改好了，图片已经生成。" }) }],
+        executeAction: async () => {
+            executions += 1;
+            return { ok: true };
+        },
+    });
+
+    assert.equal(userLikelyRequestedCanvasAction("把内容改成上线文档站"), true);
+    assert.equal(requestBodies.length, 2);
+    assert.equal(executions, 0);
+    assert.match(result.reply, /没有返回可执行的画布工具指令/);
+});
+
 test("兼容 JSON 仍无动作时只重试一次并返回明确错误", async () => {
     let executions = 0;
     const { requestBodies, result } = await runScriptedAgent({

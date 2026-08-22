@@ -448,7 +448,7 @@ function isCanvasAgentMediaActionName(name: CanvasAgentActionName) {
 }
 
 export function userLikelyRequestedCanvasAction(text: string) {
-    return /(?:创建|新增|插入|修改|更新|删除|连接|连线|分组|整理|生成|生图|视频|音频|配音|旁白|执行|拆成|拆分|放到画布|放到|放进|放入|放在|移到|移入|置入|合成|融合|叠加|拼接|替换|开始做)/i.test(text);
+    return /(?:创建|新增|插入|修改|更新|删除|连接|连线|分组|整理|生成|生图|视频|音频|配音|旁白|执行|拆成|拆分|改成|改为|换成|换为|调整|重做|出图|做一张|画一张|放到画布|放到|放进|放入|放在|移到|移入|置入|合成|融合|叠加|拼接|替换|开始做)/i.test(text);
 }
 
 function extractJsonObject(content: string) {
