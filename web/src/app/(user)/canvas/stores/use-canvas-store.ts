@@ -6,15 +6,20 @@ import { localForageStorage } from "@/lib/localforage-storage";
 import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { sanitizeCanvasAgentProtocolMessages } from "../agent/canvas-agent-protocol";
 import { createCanvasAgentState } from "../agent/canvas-agent-runtime";
-import type { CanvasAgentConfig, CanvasAgentPhase, CanvasAgentState, CanvasAssistantSession, CanvasConnection, CanvasNodeData, CanvasPendingAgentRequest, ViewportTransform } from "../types";
+import type { CanvasAgentConfig, CanvasAgentPhase, CanvasAgentState, CanvasAssistantSession, CanvasConnection, CanvasNodeData, CanvasPendingAgentRequest, Position, ViewportTransform } from "../types";
 
 export type CanvasSidePanelState = {
     open: boolean;
     width: number;
 };
 
+export type CanvasAgentPanelState = CanvasSidePanelState & {
+    height: number;
+    position?: Position;
+};
+
 export const DEFAULT_CANVAS_SIDE_PANEL: CanvasSidePanelState = { open: true, width: 280 };
-export const DEFAULT_CANVAS_AGENT_PANEL: CanvasSidePanelState = { open: false, width: 390 };
+export const DEFAULT_CANVAS_AGENT_PANEL: CanvasAgentPanelState = { open: false, width: 420, height: 640 };
 
 export type CanvasProject = {
     id: string;
@@ -32,7 +37,7 @@ export type CanvasProject = {
     showImageInfo: boolean;
     viewport: ViewportTransform;
     sidePanel: CanvasSidePanelState;
-    agentPanel: CanvasSidePanelState;
+    agentPanel: CanvasAgentPanelState;
 };
 
 type CanvasStore = {
@@ -184,7 +189,18 @@ function normalizeProject(project: Partial<CanvasProject> & Pick<CanvasProject, 
         showImageInfo: project.showImageInfo === true,
         viewport: project.viewport || initialViewport,
         sidePanel: project.sidePanel || { ...DEFAULT_CANVAS_SIDE_PANEL },
-        agentPanel: project.agentPanel || { ...DEFAULT_CANVAS_AGENT_PANEL },
+        agentPanel: normalizeAgentPanel(project.agentPanel),
+    };
+}
+
+function normalizeAgentPanel(value: Partial<CanvasAgentPanelState> | undefined): CanvasAgentPanelState {
+    const position = value?.position;
+    return {
+        ...DEFAULT_CANVAS_AGENT_PANEL,
+        ...value,
+        width: Number.isFinite(value?.width) ? Math.max(320, Math.min(760, value!.width)) : DEFAULT_CANVAS_AGENT_PANEL.width,
+        height: Number.isFinite(value?.height) ? Math.max(420, Math.min(860, value!.height)) : DEFAULT_CANVAS_AGENT_PANEL.height,
+        ...(position && Number.isFinite(position.x) && Number.isFinite(position.y) ? { position: { x: position.x, y: position.y } } : {}),
     };
 }
 

@@ -164,6 +164,8 @@ export type PendingAgentAsset = {
 export type CanvasPendingAgentRequest = {
     prompt: string;
     assets: PendingAgentAsset[];
+    textModel?: string;
+    textChannelId?: string;
 };
 
 export type CanvasAssistantImage = {

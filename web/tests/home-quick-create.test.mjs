@@ -22,7 +22,7 @@ test("首页展示三联媒体轮播并保留移动端滑动布局", () => {
 
 test("首页快速创作进入画布 Agent，由 Agent 自动选择图片、视频或画布操作", () => {
     assert.match(homeSource, /<CanvasAssistantComposer/);
-    assert.match(homeSource, /createProject\(title,\s*\{[\s\S]*agentConfig,[\s\S]*pendingAgentRequest:\s*\{\s*prompt:\s*text,\s*assets:\s*pendingAssets\s*\}/);
+    assert.match(homeSource, /createProject\(title,[\s\S]*pendingAgentRequest:\s*\{\s*prompt:\s*text,\s*assets:\s*pendingAssets,[\s\S]*textModel,\s*textChannelId/);
     assert.match(homeSource, /router\.push\(`\/canvas\/\$\{projectId\}`\)/);
 
     assert.doesNotMatch(homeSource, /quickMode|QuickCreateMode/);
@@ -32,14 +32,18 @@ test("首页快速创作进入画布 Agent，由 Agent 自动选择图片、视�
     assert.doesNotMatch(homeSource, /将在工作台中继续确认参数|不会直接开始生成/);
 });
 
-test("首页 Agent 输入框同时提供素材、图片参数、视频参数和可见发送箭头", () => {
+test("首页 Agent 输入框同时提供文本模型、素材、图片参数、视频参数和可见发送箭头", () => {
     assert.match(homeSource, /references=\{pendingAssets\.map/);
+    assert.match(homeSource, /textModel=\{textModel\}/);
+    assert.match(homeSource, /textChannelId=\{textChannelId\}/);
+    assert.match(homeSource, /onTextModelChange=\{selectTextModel\}/);
     assert.match(homeSource, /onOpenUpload=\{\(\) => uploadInputRef\.current\?\.click\(\)\}/);
     assert.match(homeSource, /<AssetPickerModal/);
     assert.match(homeSource, /accept="image\/\*,video\/\*,audio\/\*"/);
 
     assert.match(composerSource, /label:\s*"上传文件"/);
     assert.match(composerSource, /label:\s*"我的素材"/);
+    assert.match(composerSource, /ariaLabel="对话文本模型"/);
     assert.match(composerSource, /<ImageSettingsPanel/);
     assert.match(composerSource, /<VideoSettingsPanel/);
     assert.match(composerSource, /<ModelPicker/);
@@ -49,6 +53,11 @@ test("首页 Agent 输入框同时提供素材、图片参数、视频参数和�
     assert.match(composerSource, /<ArrowUp className="size-4"/);
     assert.match(composerSource, /event\.nativeEvent\.isComposing/);
     assert.match(homeSource, /if \(\(!text && !pendingAssets\.length\) \|\| submitting\) return/);
+});
+
+test("首页选择的文本模型会进入新画布 Agent 会话", () => {
+    assert.match(canvasClientSource, /setInitialAgentRequest\(\{[^}]*textModel:\s*request\.textModel,[^}]*textChannelId:\s*request\.textChannelId/);
+    assert.match(assistantPanelSource, /initialRequest\.textModel[\s\S]*updateSession\(targetSessionId/);
 });
 
 test("首页请求由真实画布 Agent 单次消费且不覆盖现有扩展能力", () => {
@@ -72,7 +81,7 @@ test("首页素材会先全部解析为 Agent 附件，并在工具引用时按�
     assert.match(canvasClientSource, /const resolvedAssets = await Promise\.all\(/);
     assert.match(canvasClientSource, /const references = resolvedAssets\.map\(\(\{ asset, payload \}\)/);
     assert.match(canvasClientSource, /const reference = \{ \.\.\.asset\.reference, origin: "attachment" as const \}/);
-    assert.match(canvasClientSource, /setInitialAgentRequest\(\{ prompt: request\.prompt, references \}\)/);
+    assert.match(canvasClientSource, /setInitialAgentRequest\(\{[^}]*prompt:\s*request\.prompt,[^}]*references,[^}]*textModel:\s*request\.textModel/);
     assert.match(canvasClientSource, /<CanvasAssistantPanel\s+key=\{projectId\}/);
     assert.match(canvasClientSource, /materializePendingAgentAssetsOnce\(/);
     assert.match(canvasClientSource, /if \(nodesRef\.current\.some\(\(node\) => node\.id === asset\.nodeId\)\) return/);
@@ -85,7 +94,7 @@ test("首页素材会先全部解析为 Agent 附件，并在工具引用时按�
     assert.match(canvasClientSource, /if \(cancelled \|\| epoch !== projectEpochRef\.current\) return/);
     assert.match(canvasClientSource, /const projectReady = projectLoaded && loadedProjectIdRef\.current === projectId/);
     assert.match(canvasClientSource, /if \(!projectReady \|\| historyPausedRef\.current\) return;[\s\S]*updateProject\(projectId/);
-    assert.match(canvasClientSource, /if \(!isCurrent\(\)\) return;[\s\S]*setInitialAgentRequest\(\{ prompt: request\.prompt, references \}\)/);
+    assert.match(canvasClientSource, /if \(!isCurrent\(\)\) return;[\s\S]*setInitialAgentRequest\(\{[^}]*prompt:\s*request\.prompt,[^}]*references/);
 });
 
 test("创作 Agent 保持单飞重试并让未知视觉模型先尝试接收图片", () => {
