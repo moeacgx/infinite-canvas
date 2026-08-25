@@ -2735,6 +2735,10 @@ function InfiniteCanvasPage() {
         setAgentPanel((current) => ({ ...current, width: bounds.width, height: bounds.height, position: { x: bounds.x, y: bounds.y } }));
     }, []);
 
+    const handleAgentLauncherPositionChange = useCallback((launcherPosition: Position) => {
+        setAgentPanel((current) => ({ ...current, launcherPosition }));
+    }, []);
+
     const startTitleEditing = useCallback(() => {
         setTitleDraft(currentProject?.title || "未命名画布");
         setTitleEditing(true);
@@ -4711,6 +4715,8 @@ function InfiniteCanvasPage() {
                 <CanvasPluginManagerModal open={pluginManagerOpen} onClose={() => setPluginManagerOpen(false)} />
                 {!agentPanel.open ? (
                     <CanvasAssistantLauncher
+                        launcherPosition={agentPanel.launcherPosition}
+                        onLauncherPositionChange={handleAgentLauncherPositionChange}
                         onOpen={() => {
                             setAssistantMounted(true);
                             setAgentPanel((current) => ({ ...current, open: true }));

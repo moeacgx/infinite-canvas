@@ -42,6 +42,14 @@ test("创作 Agent 使用画布浮动窗口而不是占用侧栏", async () => {
     assert.match(panelSource, /clampOnResize/);
     assert.match(storeSource, /height: 640/);
     assert.match(storeSource, /position\?: Position/);
+    assert.match(storeSource, /launcherPosition\?: Position/);
+    assert.match(panelSource, /LAUNCHER_DRAG_THRESHOLD = 6/);
+    assert.match(panelSource, /launcherPosition\?: \{ x: number; y: number \}/);
+    assert.match(panelSource, /onLauncherPositionChange/);
+    assert.match(panelSource, /top: launcherPosition\.y/);
+    assert.match(panelSource, /movedRef\.current/);
+    assert.match(source, /launcherPosition=\{agentPanel\.launcherPosition\}/);
+    assert.match(source, /onLauncherPositionChange=\{handleAgentLauncherPositionChange\}/);
 });
 
 test("画布持久化视频任务并在刷新后恢复查询", () => {

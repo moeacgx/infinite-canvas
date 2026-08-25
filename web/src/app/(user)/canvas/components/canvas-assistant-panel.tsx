@@ -40,6 +40,29 @@ const PANEL_MOTION_SECONDS = 0.25;
 const FLOATING_AGENT_MIN_WIDTH = 320;
 const FLOATING_AGENT_MIN_HEIGHT = 420;
 
+const LAUNCHER_DRAG_THRESHOLD = 6;
+const LAUNCHER_MARGIN = 12;
+
+function launcherSize() {
+    const expanded = typeof window !== "undefined" && window.innerWidth >= 640;
+    return { width: expanded ? 96 : 56, height: 56 };
+}
+
+function clampLauncherPosition(position: { x: number; y: number }) {
+    if (typeof window === "undefined") return position;
+    const { width, height } = launcherSize();
+    return {
+        x: Math.max(LAUNCHER_MARGIN, Math.min(window.innerWidth - width - LAUNCHER_MARGIN, position.x)),
+        y: Math.max(LAUNCHER_MARGIN, Math.min(window.innerHeight - height - LAUNCHER_MARGIN, position.y)),
+    };
+}
+
+function defaultLauncherPosition() {
+    if (typeof window === "undefined") return { x: 1160, y: 372 };
+    const { width, height } = launcherSize();
+    return { x: window.innerWidth - width - LAUNCHER_MARGIN, y: Math.round((window.innerHeight - height) / 2) };
+}
+
 export type CanvasAssistantBounds = { x: number; y: number; width: number; height: number };
 
 function clampFloatingBounds(bounds: CanvasAssistantBounds): CanvasAssistantBounds {
@@ -781,25 +804,106 @@ export function CanvasAssistantPanel({
         </motion.div>
     );
 }
-export function CanvasAssistantLauncher({ onOpen }: { onOpen: () => void }) {
+export function CanvasAssistantLauncher({
+    launcherPosition: storedLauncherPosition,
+    onOpen,
+    onLauncherPositionChange,
+}: {
+    launcherPosition?: { x: number; y: number };
+    onOpen: () => void;
+    onLauncherPositionChange: (position: { x: number; y: number }) => void;
+}) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
+    const [launcherPosition, setLauncherPosition] = useState(() => clampLauncherPosition(storedLauncherPosition || defaultLauncherPosition()));
+    const launcherPositionRef = useRef(launcherPosition);
+    const dragCleanupRef = useRef<(() => void) | null>(null);
+    const movedRef = useRef(false);
+    const openedFromPointerRef = useRef(false);
+
+    const setPosition = (next: { x: number; y: number }) => {
+        const clamped = clampLauncherPosition(next);
+        launcherPositionRef.current = clamped;
+        setLauncherPosition(clamped);
+    };
+
+    useEffect(() => {
+        setPosition(storedLauncherPosition || defaultLauncherPosition());
+    }, [storedLauncherPosition?.x, storedLauncherPosition?.y]);
+
+    useEffect(() => {
+        const clampOnResize = () => {
+            const next = clampLauncherPosition(launcherPositionRef.current);
+            launcherPositionRef.current = next;
+            setLauncherPosition(next);
+            onLauncherPositionChange(next);
+        };
+        window.addEventListener("resize", clampOnResize);
+        return () => window.removeEventListener("resize", clampOnResize);
+    }, [onLauncherPositionChange]);
+
+    useEffect(() => () => dragCleanupRef.current?.(), []);
+
+    const beginDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+        if (event.pointerType === "mouse" && event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        dragCleanupRef.current?.();
+        const startX = event.clientX;
+        const startY = event.clientY;
+        const startPosition = launcherPositionRef.current;
+        movedRef.current = false;
+        const move = (moveEvent: PointerEvent) => {
+            const deltaX = moveEvent.clientX - startX;
+            const deltaY = moveEvent.clientY - startY;
+            if (!movedRef.current && Math.hypot(deltaX, deltaY) < LAUNCHER_DRAG_THRESHOLD) return;
+            movedRef.current = true;
+            setPosition({ x: startPosition.x + deltaX, y: startPosition.y + deltaY });
+        };
+        const stop = () => {
+            document.removeEventListener("pointermove", move);
+            document.removeEventListener("pointerup", stop);
+            document.body.style.userSelect = "";
+            document.body.style.cursor = "";
+            dragCleanupRef.current = null;
+            if (movedRef.current) {
+                onLauncherPositionChange(launcherPositionRef.current);
+                return;
+            }
+            openedFromPointerRef.current = true;
+            onOpen();
+        };
+        dragCleanupRef.current = stop;
+        document.body.style.userSelect = "none";
+        document.body.style.cursor = "grabbing";
+        document.addEventListener("pointermove", move);
+        document.addEventListener("pointerup", stop);
+    };
+
     return (
         <motion.button
             type="button"
             data-canvas-agent-launcher
-            className="fixed bottom-20 right-4 z-[130] inline-flex items-center gap-2 rounded-full border px-2.5 py-2 shadow-[0_16px_42px_rgba(28,25,23,.22)] backdrop-blur-xl transition sm:bottom-6 sm:right-6"
-            style={{ background: theme.toolbar.panel, borderColor: theme.node.stroke, color: theme.node.text }}
-            whileHover={{ y: -2, scale: 1.02 }}
+            className="fixed z-[130] inline-flex h-14 w-14 touch-none select-none items-center justify-center gap-2 rounded-full border px-2.5 shadow-[0_16px_42px_rgba(28,25,23,.22)] backdrop-blur-xl transition sm:w-24 sm:cursor-grab sm:justify-start sm:active:cursor-grabbing"
+            style={{ left: launcherPosition.x, top: launcherPosition.y, background: theme.toolbar.panel, borderColor: theme.node.stroke, color: theme.node.text }}
+            whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
-            onPointerDown={(event) => event.stopPropagation()}
+            onPointerDown={beginDrag}
             onClick={(event) => {
                 event.stopPropagation();
+                if (openedFromPointerRef.current) {
+                    openedFromPointerRef.current = false;
+                    return;
+                }
+                if (movedRef.current) {
+                    movedRef.current = false;
+                    return;
+                }
                 onOpen();
             }}
             aria-label="打开创作 Agent"
-            title="打开创作 Agent"
+            title="拖动 Agent，点击打开对话"
         >
-            <span className="relative grid size-9 place-items-center rounded-full" style={{ background: theme.toolbar.activeBg, color: theme.node.activeStroke }}>
+            <span className="relative grid size-9 shrink-0 place-items-center rounded-full" style={{ background: theme.toolbar.activeBg, color: theme.node.activeStroke }}>
                 <Bot className="size-4" />
                 <span className="absolute right-0.5 top-0.5 size-2 rounded-full border" style={{ background: "#10b981", borderColor: theme.toolbar.panel }} />
             </span>
