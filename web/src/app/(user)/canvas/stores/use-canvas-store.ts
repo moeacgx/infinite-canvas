@@ -16,6 +16,7 @@ export type CanvasSidePanelState = {
 export type CanvasAgentPanelState = CanvasSidePanelState & {
     height: number;
     position?: Position;
+    launcherPosition?: Position;
 };
 
 export const DEFAULT_CANVAS_SIDE_PANEL: CanvasSidePanelState = { open: true, width: 280 };
@@ -195,12 +196,14 @@ function normalizeProject(project: Partial<CanvasProject> & Pick<CanvasProject, 
 
 function normalizeAgentPanel(value: Partial<CanvasAgentPanelState> | undefined): CanvasAgentPanelState {
     const position = value?.position;
+    const launcherPosition = value?.launcherPosition;
     return {
         ...DEFAULT_CANVAS_AGENT_PANEL,
         ...value,
         width: Number.isFinite(value?.width) ? Math.max(320, Math.min(760, value!.width)) : DEFAULT_CANVAS_AGENT_PANEL.width,
         height: Number.isFinite(value?.height) ? Math.max(420, Math.min(860, value!.height)) : DEFAULT_CANVAS_AGENT_PANEL.height,
         ...(position && Number.isFinite(position.x) && Number.isFinite(position.y) ? { position: { x: position.x, y: position.y } } : {}),
+        ...(launcherPosition && Number.isFinite(launcherPosition.x) && Number.isFinite(launcherPosition.y) ? { launcherPosition: { x: launcherPosition.x, y: launcherPosition.y } } : {}),
     };
 }
 
