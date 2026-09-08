@@ -15,7 +15,7 @@
   <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.25-00add8?style=flat-square&logo=go&logoColor=white" alt="Go"></a>
 </p>
 
-无限画布是一款面向图片创作的开源工作台。它把画布编排、AI 图片生成、参考图编辑、全站 Agent、提示词库和素材沉淀放在同一个界面里，适合用来探索视觉方案并连续迭代图片结果。
+无限画布是一款面向图片创作的开源工作台。它把画布编排、AI 图片生成、参考图编辑、画布创作 Agent、提示词库和素材沉淀放在同一个界面里，适合用来探索视觉方案并连续迭代图片结果。
 
 > [!CAUTION]
 > 项目目前处于开发阶段，不保证历史数据兼容。各种数据库结构和存储格式都可能直接调整，欢迎关注后续更新，当前更适合个人/本地部署，不建议直接公网多人共用。
@@ -26,8 +26,8 @@
 
 - 无限画布：多画布项目、节点拖拽缩放、连线、小地图、撤销重做、导入导出。
 - AI 创作：支持多个 OpenAI 或 Gemini 本地渠道的文生图、图生图、参考图编辑、文本问答、音频和视频生成；Seedance 2.0 可通过火山方舟 Agent Plan 接入。
-- 渠道兼容：每个本地渠道可选自动、浏览器直连或本机 Agent；自动模式会在模型读取确认直连受阻后，让同源后续请求只经过用户电脑上的 Canvas Agent，兼容常见 CORS 和 OPTIONS 问题且不把用户 API Key 发送到本站服务器。
-- Agent 与插件：提供全站 Agent 侧栏、独立 Canvas Agent、Codex App 插件，以及可扩展的 Canvas 插件 SDK。
+- 渠道兼容：每个本地渠道直接由浏览器请求配置的服务，API Key 只保存在浏览器本地并发送到对应接口；接口需要允许当前站点的 CORS/OPTIONS。
+- 创作 Agent 与插件：提供画布创作 Agent，以及可扩展的 Canvas 插件 SDK。
 - 提示词库：抓取多个 GitHub 开源项目，按案例整理数百个图片提示词。
 
 完整功能说明见 [功能介绍](docs/content/docs/overview/features.mdx)。

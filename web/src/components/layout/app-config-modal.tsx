@@ -25,11 +25,12 @@ import {
     type AiConfig,
     type ApiCallFormat,
     type ChannelMode,
-    type ChannelRequestMode,
     type ImageApiMode,
     type ModelCapability,
     type ModelChannel,
 } from "@/stores/use-config-store";
+
+import type { AdminPublicSettings } from "@/services/api/admin";
 
 type ModelGroup = {
     capability: ModelCapability;
@@ -40,7 +41,7 @@ type ModelGroup = {
 };
 
 type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
-type ModelChannelSettings = NonNullable<ReturnType<typeof useConfigStore.getState>["publicSettings"]>["modelChannel"];
+type ModelChannelSettings = AdminPublicSettings["modelChannel"];
 type WebdavDomainProgress = {
     label: string;
     stage: string;
@@ -59,11 +60,6 @@ const modelGroups: ModelGroup[] = [
 const apiFormatOptions: Array<{ label: string; value: ApiCallFormat }> = [
     { label: "OpenAI", value: "openai" },
     { label: "Gemini", value: "gemini" },
-];
-const requestModeOptions: Array<{ label: string; value: ChannelRequestMode }> = [
-    { label: "自动", value: "auto" },
-    { label: "浏览器直连", value: "direct" },
-    { label: "本机 Agent", value: "agent" },
 ];
 const imageApiModeOptions: Array<{ label: string; value: ImageApiMode }> = [
     { label: "Images API", value: "images" },
@@ -324,8 +320,7 @@ export function AppConfigModal() {
                             <div className="mb-3 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
                                 <CircleAlert className="mt-0.5 size-4 shrink-0" />
                                 <span>
-                                    自动模式先由浏览器直连；拉取模型确认被 CORS/OPTIONS、证书或混合内容拦截后，该接口后续请求会改走你电脑上的 Canvas Agent，避免重复发送生成请求。也可手动选“本机 Agent”。API Key 只在浏览器与本机 Agent
-                                    之间传递，不经过本站服务器；使用前请先在右上角 Agent 面板完成连接，并允许浏览器的本地网络访问权限。
+                                    本地渠道请求由浏览器直接发送。请确认接口地址允许当前站点的 CORS/OPTIONS，并使用 HTTPS 页面访问 HTTPS 接口。API Key 仅保存在浏览器本地并直接发送到你配置的服务。
                                 </span>
                             </div>
                             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -357,9 +352,6 @@ export function AppConfigModal() {
                                             </Form.Item>
                                             <Form.Item label="API Key" className="mb-0">
                                                 <Input.Password value={channel.apiKey} onChange={(event) => updateChannel(channel.id, { apiKey: event.target.value })} />
-                                            </Form.Item>
-                                            <Form.Item label="网络方式" className="mb-0 md:col-span-2">
-                                                <Segmented block value={channel.requestMode || "auto"} options={requestModeOptions} onChange={(value) => updateChannel(channel.id, { requestMode: value as ChannelRequestMode })} />
                                             </Form.Item>
                                             {channel.apiFormat === "openai" ? (
                                                 <>

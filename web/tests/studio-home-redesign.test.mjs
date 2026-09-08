@@ -5,7 +5,6 @@ import test from "node:test";
 const imageSource = readFileSync(new URL("../src/app/(user)/image/page.tsx", import.meta.url), "utf8");
 const videoSource = readFileSync(new URL("../src/app/(user)/video/page.tsx", import.meta.url), "utf8");
 const navigationSource = readFileSync(new URL("../src/constant/navigation-tools.ts", import.meta.url), "utf8");
-const agentSiteToolsSource = readFileSync(new URL("../src/lib/agent/agent-site-tools.ts", import.meta.url), "utf8");
 
 test("生图默认使用侧边布局，视频默认使用底部布局并持久化用户选择", () => {
     assert.match(imageSource, /useState<WorkbenchLayout>\("side"\)/);
@@ -31,9 +30,8 @@ test("生图默认使用侧边布局，视频默认使用底部布局并持久�
 test("独立 AI 对话与 Prompt Skill 入口已移除，画布助手能力不受影响", () => {
     assert.doesNotMatch(navigationSource, /slug:\s*"chat"/);
     assert.doesNotMatch(navigationSource, /AI 对话/);
-    assert.doesNotMatch(agentSiteToolsSource, /\|chat\)/);
     assert.equal(existsSync(new URL("../src/app/(user)/chat/page.tsx", import.meta.url)), false);
     assert.equal(existsSync(new URL("../src/app/(admin)/admin/prompt-skills/page.tsx", import.meta.url)), false);
-    assert.equal(existsSync(new URL("../src/components/agent/agent-panel.tsx", import.meta.url)), true);
+    assert.equal(existsSync(new URL("../src/components/agent/agent-panel.tsx", import.meta.url)), false);
     assert.equal(existsSync(new URL("../src/app/(user)/canvas/components/canvas-assistant-panel.tsx", import.meta.url)), true);
 });

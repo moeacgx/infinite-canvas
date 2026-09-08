@@ -681,7 +681,7 @@ export async function fetchChannelModels(channel: ModelChannel) {
     try {
         if (channel.apiFormat === "gemini") return await fetchGeminiModels(channel);
         const response = await channelAxiosRequest<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(
-            { channelMode: "local", requestMode: channel.requestMode },
+            { channelMode: "local" },
             {
                 method: "GET",
                 url: buildApiUrl(channel.baseUrl, "/models"),

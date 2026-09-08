@@ -1,7 +1,7 @@
 "use client";
 
-import { Bot, Menu } from "lucide-react";
-import { Button, Tooltip } from "antd";
+import { Menu } from "lucide-react";
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -10,14 +10,10 @@ import { AppConfigModal } from "@/components/layout/app-config-modal";
 import { MobileNavDrawer } from "@/components/layout/mobile-nav-drawer";
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { cn } from "@/lib/utils";
-import { useCanvasAgentStore } from "@/stores/use-agent-store";
-import { useState } from "react";
 
 export function AppTopNav() {
     const pathname = usePathname();
     const [mobileNavOpen, setMobileNavOpen] = useState(false);
-    const panelOpen = useCanvasAgentStore((state) => state.panelOpen);
-    const togglePanel = useCanvasAgentStore((state) => state.togglePanel);
     const hideHeader = /^\/canvas\/[^/]+/.test(pathname);
     const slug = pathname.split("/").filter(Boolean)[0];
     const activeToolSlug = navigationTools.some((tool) => tool.slug === slug) ? (slug as NavigationToolSlug) : undefined;
@@ -73,9 +69,6 @@ export function AppTopNav() {
                         </div>
 
                         <div className="my-auto flex h-9 min-w-0 items-center justify-end gap-2 justify-self-end whitespace-nowrap">
-                            <Tooltip title={panelOpen ? "收起本地网络代理" : "打开本地网络代理"}>
-                                <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" icon={<Bot className="size-4" />} onClick={togglePanel} aria-label={panelOpen ? "收起本地网络代理" : "打开本地网络代理"} />
-                            </Tooltip>
                             <UserStatusActions />
                         </div>
                     </div>

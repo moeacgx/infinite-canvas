@@ -9,7 +9,6 @@ import { apiGet } from "@/services/api/request";
 import type { AdminPublicSettings } from "@/services/api/admin";
 
 export type ApiCallFormat = "openai" | "gemini";
-export type ChannelRequestMode = "auto" | "direct" | "agent";
 export type ImageApiMode = "images" | "responses";
 
 export type ModelChannel = {
@@ -18,7 +17,6 @@ export type ModelChannel = {
     baseUrl: string;
     apiKey: string;
     apiFormat: ApiCallFormat;
-    requestMode?: ChannelRequestMode;
     imageApiMode?: ImageApiMode;
     responsesImageModel?: string;
     streamImages?: boolean;
@@ -62,7 +60,6 @@ export type AiConfig = {
     baseUrl: string;
     apiKey: string;
     apiFormat: ApiCallFormat;
-    requestMode?: ChannelRequestMode;
     channels: ModelChannel[];
     newApiGroup: string;
     newApiTextGroup: string;
@@ -180,7 +177,6 @@ export const defaultConfig: AiConfig = {
             baseUrl: OPENAI_BASE_URL,
             apiKey: "",
             apiFormat: "openai",
-            requestMode: "auto",
             models: [],
         },
     ],
@@ -644,7 +640,6 @@ export function createModelChannel(channel?: Partial<ModelChannel>): ModelChanne
         baseUrl: channel?.baseUrl?.trim() || defaultBaseUrlForApiFormat(apiFormat),
         apiKey: channel?.apiKey || "",
         apiFormat,
-        requestMode: normalizeChannelRequestMode(channel?.requestMode),
         imageApiMode: normalizeImageApiMode(channel?.imageApiMode),
         responsesImageModel: normalizeResponsesImageModel(channel?.responsesImageModel, rawModels),
         streamImages: normalizeBoolean(channel?.streamImages, false),
@@ -722,7 +717,6 @@ export function resolveModelRequestConfig(config: AiConfig, value: string): AiCo
         baseUrl: channel.baseUrl,
         apiKey: channel.apiKey,
         apiFormat: channel.apiFormat,
-        requestMode: normalizeChannelRequestMode(channel.requestMode),
     };
 }
 
@@ -761,7 +755,6 @@ export function withLocalChannels(config: AiConfig, inputChannels: ModelChannel[
         baseUrl: channel.baseUrl ?? "",
         apiKey: channel.apiKey ?? "",
         apiFormat: normalizeApiFormat(channel.apiFormat),
-        requestMode: normalizeChannelRequestMode(channel.requestMode),
         imageApiMode: normalizeImageApiMode(channel.imageApiMode),
         responsesImageModel: normalizeResponsesImageModel(channel.responsesImageModel, channel.models),
         streamImages: normalizeBoolean(channel.streamImages, false),
@@ -784,7 +777,6 @@ export function withLocalChannels(config: AiConfig, inputChannels: ModelChannel[
         baseUrl: channels[0]?.baseUrl ?? config.baseUrl,
         apiKey: channels[0]?.apiKey ?? config.apiKey,
         apiFormat: channels[0]?.apiFormat ?? config.apiFormat,
-        requestMode: channels[0]?.requestMode ?? config.requestMode ?? "auto",
         models,
         ...capabilityLists,
         model: nextLocalDefault(config.model, capabilityLists.textModels),
@@ -836,11 +828,6 @@ function normalizeApiFormat(value: unknown): ApiCallFormat {
     return value === "gemini" ? "gemini" : "openai";
 }
 
-function normalizeChannelRequestMode(value: unknown): ChannelRequestMode {
-    // v0.8.1 的 proxy 表示生产后端转发；迁移后统一改为用户本机 Agent。
-    if (value === "proxy") return "agent";
-    return value === "direct" || value === "agent" ? value : "auto";
-}
 
 function normalizeImageApiMode(value: unknown): ImageApiMode {
     return value === "responses" ? "responses" : "images";

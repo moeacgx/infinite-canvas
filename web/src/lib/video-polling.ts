@@ -11,7 +11,7 @@ export function isTransientVideoPollError(error: unknown, signal?: AbortSignal):
         return TRANSIENT_HTTP_STATUSES.has(error.response.status);
     }
     if (!(error instanceof Error)) return false;
-    return /network error|failed to fetch|network request failed|load failed|timed?\s*out|econnreset|econnrefused|socket|无法连接本机 canvas agent/i.test(error.message);
+    return /network error|failed to fetch|network request failed|load failed|timed?\s*out|econnreset|econnrefused|socket/i.test(error.message);
 }
 
 export function reachedVideoPollFailureLimit(consecutiveFailures: number): boolean {

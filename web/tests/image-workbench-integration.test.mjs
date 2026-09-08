@@ -9,7 +9,6 @@ import { buildWorkflowRunConfig, resolveWorkflowRuntime } from "../src/component
 const imagePageSource = readFileSync(new URL("../src/app/(user)/image/page.tsx", import.meta.url), "utf8");
 const workflowSource = readFileSync(new URL("../src/components/workflows/creative-workflow-workspace.tsx", import.meta.url), "utf8");
 const imageSettingsSource = readFileSync(new URL("../src/components/image-settings-panel.tsx", import.meta.url), "utf8");
-const agentSiteToolsSource = readFileSync(new URL("../src/lib/agent/agent-site-tools.ts", import.meta.url), "utf8");
 
 test("生图工作台按编码模型选择正确渠道并隔离 Images 与 Responses 配置", () => {
     const channels = [createModelChannel({ id: "images", models: ["gpt-image-1"], imageApiMode: "images" }), createModelChannel({ id: "responses", models: ["gpt-image-1", "gpt-5.6"], imageApiMode: "responses", responsesImageModel: "gpt-5.6" })];
@@ -130,7 +129,6 @@ test("GPT 企业图片模型和 Banana 图片模型按各自尺寸限制校验",
     assert.match(validateImageConfigParameters({ model: "nano-banana", size: "4097x4096", quality: "high" }), /最长边不能超过 4096px/);
     assert.deepEqual(filterModelsByCapability(["gpt-5", "nano-banana"], "image"), ["nano-banana"]);
     assert.match(imageSettingsSource, /<Switch size="small" checked=\{snapDimensionToStep\} onChange=\{setSnapDimensionToStep\}/);
-    assert.match(agentSiteToolsSource, /supportedImageSizeOptions\(model, config\.quality\)/);
 });
 
 test("生图结果操作栏在窄屏分行并允许操作按钮换行", () => {

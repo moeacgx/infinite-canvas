@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent as ReactChangeEvent, DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from "react";
 import dynamic from "next/dynamic";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { BookOpen, ChevronLeft, ChevronRight, Globe2, Group, Home, ImageIcon, Images, Layers3, List, Menu, Music2, PanelLeftClose, PanelLeftOpen, Plus, Puzzle, Redo2, Settings2, Trash2, Undo2, Upload, Video, X } from "lucide-react";
 import { saveAs } from "file-saver";
 
@@ -20,7 +20,6 @@ import { assertVideoSecondsSupported } from "@/lib/video-model-capabilities";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { useAssetStore } from "@/stores/use-asset-store";
-import { useCanvasAgentStore } from "@/stores/use-agent-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { cropDataUrl, splitDataUrl, upscaleDataUrl } from "../utils/canvas-image-data";
 import { fitNodeSize, nodeSizeFromRatio } from "../utils/canvas-node-size";
@@ -326,7 +325,6 @@ function InfiniteCanvasPage() {
     const { message, modal } = App.useApp();
     const params = useParams<{ id: string }>();
     const router = useRouter();
-    const searchParams = useSearchParams();
     const projectId = params.id;
     const containerRef = useRef<HTMLDivElement>(null);
     const imageInputRef = useRef<HTMLInputElement>(null);
@@ -372,8 +370,6 @@ function InfiniteCanvasPage() {
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
     const cleanupAssetImages = useAssetStore((state) => state.cleanupImages);
-    const openLocalAgent = useCanvasAgentStore((state) => state.openPanel);
-    const setAgentCanvasContext = useCanvasAgentStore((state) => state.setCanvasContext);
     const nodeRegistryVersion = useNodeRegistryVersion((state) => state.version);
     const hydrated = useCanvasStore((state) => state.hydrated);
     const createProject = useCanvasStore((state) => state.createProject);
@@ -433,7 +429,6 @@ function InfiniteCanvasPage() {
     const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
     const [agentPanel, setAgentPanel] = useState(() => ({ ...DEFAULT_CANVAS_AGENT_PANEL }));
     const [assistantMounted, setAssistantMounted] = useState(false);
-    const [agentUndoSnapshot, setAgentUndoSnapshot] = useState<CanvasAgentSnapshot | null>(null);
     const [pluginManagerOpen, setPluginManagerOpen] = useState(false);
     const [titleEditing, setTitleEditing] = useState(false);
     const [titleDraft, setTitleDraft] = useState("");
@@ -648,9 +643,6 @@ function InfiniteCanvasPage() {
         };
     }, [hydrated, openProject, projectId, router]);
 
-    useEffect(() => {
-        if (projectReady && searchParams.has("agentUrl") && searchParams.has("agentToken")) openLocalAgent();
-    }, [openLocalAgent, projectReady, searchParams]);
 
     useEffect(() => {
         if (!projectReady || applyingHistoryRef.current || historyPausedRef.current) return;
@@ -1137,11 +1129,7 @@ function InfiniteCanvasPage() {
         },
         [setConnecting],
     );
-    const agentSnapshot = useMemo<CanvasAgentSnapshot>(
-        () => ({ projectId, title: currentProject?.title || "未命名画布", nodes, connections, selectedNodeIds: Array.from(selectedNodeIds), viewport }),
-        [connections, currentProject?.title, nodes, projectId, selectedNodeIds, viewport],
-    );
-    const applyAgentOps = useCallback(
+    const applyCanvasOps = useCallback(
         (ops?: CanvasAgentOp[]) => {
             const safeOps = Array.isArray(ops) ? ops.filter((op) => op?.type).slice(0, 100) : [];
             const before: CanvasAgentSnapshot = {
@@ -1153,10 +1141,7 @@ function InfiniteCanvasPage() {
                 viewport: viewportRef.current,
             };
             const generationOps = safeOps.filter((op): op is Extract<CanvasAgentOp, { type: "run_generation" }> => op.type === "run_generation" && Boolean(op.nodeId)).slice(0, 4);
-            const applied = applyCanvasAgentOps(
-                before,
-                safeOps.filter((op) => op.type !== "run_generation"),
-            );
+            const applied = applyCanvasAgentOps(before, safeOps.filter((op) => op.type !== "run_generation"));
             const existingIds = new Set(applied.nodes.map((node) => node.id));
             const deletedNodeIds = new Set(before.nodes.filter((node) => !existingIds.has(node.id)).map((node) => node.id));
             const next = {
@@ -1172,7 +1157,6 @@ function InfiniteCanvasPage() {
             connectionsRef.current = next.connections;
             selectedNodeIdsRef.current = new Set(next.selectedNodeIds);
             viewportRef.current = next.viewport;
-            setAgentUndoSnapshot(before);
             setNodes(next.nodes);
             setConnections(next.connections);
             setSelectedNodeIds(new Set(next.selectedNodeIds));
@@ -1181,14 +1165,14 @@ function InfiniteCanvasPage() {
             setContextMenu(null);
             if (deletedNodeIds.size) {
                 clearDeletedNodeUiState(deletedNodeIds);
-                cleanupCanvasFiles({ projectId, nodes: next.nodes, chatSessions, agentUndoSnapshot: before });
+                cleanupCanvasFiles({ projectId, nodes: next.nodes, chatSessions });
             }
             if (generationOps.length) {
                 queueMicrotask(() =>
                     generationOps.forEach((op) => {
                         const target = nodesRef.current.find((node) => node.id === op.nodeId);
                         if (!target || target.type === CanvasNodeType.Group) return;
-                        const prompt = typeof op.prompt === "string" && op.prompt.trim() ? op.prompt.slice(0, 100_000) : (target.metadata?.composerContent ?? target.metadata?.prompt ?? "");
+                        const prompt = typeof op.prompt === "string" && op.prompt.trim() ? op.prompt.slice(0, 100_000) : target.metadata?.composerContent ?? target.metadata?.prompt ?? "";
                         const requestedMode = op.mode;
                         const mode = requestedMode === "text" || requestedMode === "image" || requestedMode === "video" || requestedMode === "audio" ? requestedMode : target.metadata?.generationMode || "image";
                         void generateNodeRef.current?.(op.nodeId, mode, prompt);
@@ -1198,31 +1182,6 @@ function InfiniteCanvasPage() {
             return next;
         },
         [chatSessions, cleanupCanvasFiles, clearDeletedNodeUiState, currentProject?.title, projectId],
-    );
-    const undoAgentOps = useCallback(() => {
-        if (!agentUndoSnapshot) return null;
-        nodesRef.current = agentUndoSnapshot.nodes;
-        connectionsRef.current = agentUndoSnapshot.connections;
-        selectedNodeIdsRef.current = new Set(agentUndoSnapshot.selectedNodeIds);
-        viewportRef.current = agentUndoSnapshot.viewport;
-        setNodes(agentUndoSnapshot.nodes);
-        setConnections(agentUndoSnapshot.connections);
-        setSelectedNodeIds(new Set(agentUndoSnapshot.selectedNodeIds));
-        setSelectedConnectionId(null);
-        setViewport(agentUndoSnapshot.viewport);
-        setContextMenu(null);
-        setAgentUndoSnapshot(null);
-        return agentUndoSnapshot;
-    }, [agentUndoSnapshot]);
-    useEffect(() => {
-        setAgentCanvasContext({ snapshot: agentSnapshot, canUndoOps: Boolean(agentUndoSnapshot), applyOps: applyAgentOps, undoOps: undoAgentOps });
-    }, [agentSnapshot, agentUndoSnapshot, applyAgentOps, setAgentCanvasContext, undoAgentOps]);
-    useEffect(
-        () => () => {
-            const current = useCanvasAgentStore.getState().canvasContext;
-            if (current?.snapshot.projectId === projectId) setAgentCanvasContext(null);
-        },
-        [projectId, setAgentCanvasContext],
     );
 
     // 提供给插件节点的宿主能力(节点无关,方法接收 nodeId)
@@ -1282,12 +1241,12 @@ function InfiniteCanvasPage() {
             },
             updateNode: (nodeId, patch) => setNodes((current) => current.map((node) => (node.id === nodeId ? { ...node, ...patch } : node))),
             updateMetadata: (nodeId, patch) => setNodes((current) => current.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, ...patch } } : node))),
-            applyOps: (ops) => void applyAgentOps(ops),
+            applyOps: (ops) => void applyCanvasOps(ops),
             ai: pluginAi,
             openPanel: (nodeId) => setDialogNodeId(nodeId),
             closePanel: () => setDialogNodeId(null),
         }),
-        [applyAgentOps, pluginAi],
+        [applyCanvasOps, pluginAi],
     );
     const renderPluginPanel = useCallback(
         (panelNode: CanvasNodeData) => {

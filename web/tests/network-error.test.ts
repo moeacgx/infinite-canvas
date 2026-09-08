@@ -3,10 +3,10 @@ import test from "node:test";
 
 import { networkFailureMessage } from "../src/services/api/network-error.ts";
 
-test("网络失败会提示 CORS 和本机 Canvas Agent", () => {
+test("网络失败会提示 CORS 和可操作的直连建议", () => {
     const message = networkFailureMessage({ fallback: "读取模型失败", code: "ERR_NETWORK", requestUrl: "https://api.example.com/v1/models", pageProtocol: "https:" });
     assert.match(message, /CORS\/OPTIONS/);
-    assert.match(message, /本机 Canvas Agent/);
+    assert.match(message, /支持 CORS/);
 });
 
 test("HTTPS 页面直连 HTTP 接口会提示混合内容限制", () => {

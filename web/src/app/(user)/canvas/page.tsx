@@ -38,7 +38,7 @@ function CanvasContent() {
     const setDeleteIds = useCanvasUiStore((state) => state.setDeleteProjectIds);
 
     const enterProject = (id: string) => {
-        router.push(`/canvas/${id}${launchRef.current.agentQuery}`);
+        router.push(`/canvas/${id}`);
     };
     const createAndEnter = () => enterProject(createProject(`无限画布 ${projects.length + 1}`));
     const importCanvas = async (file?: File) => {
@@ -67,11 +67,6 @@ function CanvasContent() {
         }
     };
 
-    useEffect(() => {
-        const next = new URL(window.location.href);
-        ["mode", "agentUrl", "agentToken"].forEach((key) => next.searchParams.delete(key));
-        window.history.replaceState(window.history.state, "", `${next.pathname}${next.search}${next.hash}`);
-    }, []);
 
     useEffect(() => {
         if (!hydrated || handledLaunchRef.current) return;
@@ -124,7 +119,7 @@ function CanvasContent() {
                 ) : projects.length ? (
                     <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
                         {projects.map((project) => (
-                            <CanvasProjectCard key={project.id} project={project} openQuery={launchRef.current.agentQuery} />
+                            <CanvasProjectCard key={project.id} project={project} />
                         ))}
                     </div>
                 ) : (
@@ -144,14 +139,8 @@ function CanvasContent() {
     );
 }
 
-function readCanvasLaunch(searchParams: ReturnType<typeof useSearchParams>) {
-    const mode = (searchParams.get("mode") || "choose").toLowerCase();
-    const agentUrl = searchParams.get("agentUrl") || "";
-    const agentToken = searchParams.get("agentToken") || "";
-    const query = new URLSearchParams();
-    if (agentUrl && agentToken) {
-        query.set("agentUrl", agentUrl);
-        query.set("agentToken", agentToken);
-    }
-    return { mode, agentQuery: query.size ? `?${query.toString()}` : "" };
+type CanvasLaunchSearchParams = { get: (key: string) => string | null };
+
+function readCanvasLaunch(searchParams: CanvasLaunchSearchParams) {
+    return { mode: (searchParams.get("mode") || "choose").toLowerCase() };
 }
