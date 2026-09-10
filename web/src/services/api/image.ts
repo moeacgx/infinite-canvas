@@ -13,6 +13,7 @@ import {
     type ModelChannel,
 } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
+import axios from "axios";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
@@ -213,13 +214,16 @@ async function downloadNewApiImageContent(config: AiConfig, path: string, signal
 }
 
 async function downloadNewApiImageContentByUrl(config: AiConfig, url: string, signal?: AbortSignal) {
-    const response = await channelAxiosRequest<Blob>(config, {
+    const sameOrigin = isSameOrigin(config.baseUrl, url);
+    const request = {
         method: "GET",
         url,
-        ...(isSameOrigin(config.baseUrl, url) ? aiRequestConfig(config, undefined, undefined, "image") : {}),
-        responseType: "blob",
+        ...(sameOrigin ? aiRequestConfig(config, undefined, undefined, "image") : {}),
+        responseType: "blob" as const,
         signal,
-    });
+    };
+    // CDN 预签名地址的 CORS/网络失败不会在重试后变好，不能走 New API 读请求退避。
+    const response = sameOrigin ? await channelAxiosRequest<Blob>(config, request) : await axios.request<Blob>(request);
     await assertDownloadedImageBlob(response.data);
     return setImageBlob(`image:${nanoid()}`, response.data);
 }

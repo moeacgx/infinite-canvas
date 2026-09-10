@@ -7,6 +7,7 @@ import { isRequestCanceled, readApiErrorMessage, readAxiosError } from "@/servic
 import { createVideoGenerationTask } from "@/services/api/video";
 import { imageToDataUrl } from "@/services/image-storage";
 import { defaultConfig } from "@/stores/use-config-store";
+import { useUserStore } from "@/stores/use-user-store";
 
 test("识别 AbortSignal 主动取消", () => {
     const controller = new AbortController();
@@ -25,9 +26,12 @@ test("普通下载错误不会被误判为取消", () => {
 
 test("图片引用读取沿用调用方的取消信号", async (context) => {
     const originalFetch = globalThis.fetch;
+    const originalToken = useUserStore.getState().token;
     context.after(() => {
         globalThis.fetch = originalFetch;
+        useUserStore.setState({ token: originalToken });
     });
+    useUserStore.setState({ token: "canvas-token" });
     const controller = new AbortController();
     let receivedSignal: AbortSignal | null | undefined;
     let markStarted!: () => void;
