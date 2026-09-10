@@ -177,3 +177,42 @@ test("New API 绝对 Canvas 内容地址会带登录态下载", { timeout: 2_000
     assert.equal(downloadedUrls.length, 1);
     assert.match(images[0].dataUrl, /^(blob:|data:)/);
 });
+
+test("New API Firefly 预签名地址跨域下载失败时保留 URL，而不是把已成功任务判失败", { timeout: 2_000 }, async (context) => {
+    const originalAdapter = axios.defaults.adapter;
+    context.after(() => {
+        axios.defaults.adapter = originalAdapter;
+    });
+    const fireflyUrl =
+        "https://pre-signed-firefly-prod.s3-accelerate.amazonaws.com/images/0658db8e-f998-4cee-a739-717743b77164?x-resource-length=2809640&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIARDA3TX66IYNWUJ27%2F20260910%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20260910T144325Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=bf6a0c89af68d2c2f2f6104f715cadfb91b4c1a020478a8cbb80dbab18d6a068";
+
+    axios.defaults.adapter = (async (config) => {
+        const url = String(config.url || "");
+        if (config.method === "post" && url.endsWith("/images/tasks")) {
+            return axiosOk(config, { code: "success", data: { task_id: "task_firefly", status: "IN_PROGRESS", progress: "0%" } });
+        }
+        if (url.endsWith("/images/tasks/task_firefly")) {
+            return axiosOk(config, {
+                code: "success",
+                data: {
+                    task_id: "task_firefly",
+                    status: "SUCCESS",
+                    progress: "100%",
+                    data: { data: [{ url: fireflyUrl, b64_json: "" }] },
+                },
+            });
+        }
+        if (url === fireflyUrl) {
+            const error = new axios.AxiosError("Network Error");
+            error.code = "ERR_NETWORK";
+            error.config = config;
+            throw error;
+        }
+        throw new Error(`未预期的图片请求：${url}`);
+    }) as AxiosAdapter;
+
+    const images = await requestGeneration(newApiConfig(), "Use the Multi-Color Beverage");
+
+    assert.equal(images.length, 1);
+    assert.equal(images[0].dataUrl, fireflyUrl);
+});
