@@ -42,10 +42,15 @@ type ImageApiResponse = {
 };
 type ImageTaskResponse = {
     task_id?: string;
-    status?: "queued" | "processing" | "succeeded" | "failed";
+    id?: string;
+    status?: string;
     progress?: string;
     result?: ImageApiResponse;
+    data?: ImageApiResponse | Record<string, unknown>;
     error?: string | { message?: string };
+    code?: number | string;
+    msg?: string;
+    message?: string;
 };
 type ResponsesApiResponse = {
     output?: Array<Record<string, unknown>>;
@@ -122,10 +127,35 @@ async function resolveImageDataUrl(item: Record<string, unknown>, config?: AiCon
 }
 
 async function resolveImageValue(value: string, config?: AiConfig, signal?: AbortSignal) {
-    if (config && isNewApiConfig(config) && value.startsWith("/canvas/v1/images/tasks/")) return downloadNewApiImageContent(config, value, signal);
+    if (config && isNewApiConfig(config)) {
+        const canvasPath = newApiCanvasTaskContentPath(value);
+        if (canvasPath) return downloadNewApiImageContent(config, canvasPath, signal);
+        const resolvedValue = resolveRelativeImageUrl(config.baseUrl, value);
+        if (/^https?:/i.test(resolvedValue)) {
+            try {
+                return await downloadNewApiImageContentByUrl(config, resolvedValue, signal);
+            } catch (error) {
+                if (isRequestCanceled(error, signal) || isSameOrigin(config.baseUrl, resolvedValue)) throw error;
+                return resolvedValue;
+            }
+        }
+        return resolvedValue;
+    }
     const resolvedValue = config ? resolveRelativeImageUrl(config.baseUrl, value) : value;
     if (config?.channelMode === "local" && /^https?:/i.test(resolvedValue)) return downloadLocalImageContent(config, resolvedValue, signal);
     return resolvedValue;
+}
+
+function newApiCanvasTaskContentPath(value: string) {
+    const trimmed = value.trim();
+    if (trimmed.startsWith("/canvas/v1/images/tasks/")) return trimmed.split("?")[0];
+    try {
+        const pathname = new URL(trimmed).pathname;
+        if (pathname.startsWith("/canvas/v1/images/tasks/")) return pathname;
+    } catch {
+        return "";
+    }
+    return "";
 }
 
 function resolveRelativeImageUrl(baseUrl: string, value: string) {
@@ -179,15 +209,33 @@ async function downloadLocalImageContent(config: AiConfig, url: string, signal?:
 }
 
 async function downloadNewApiImageContent(config: AiConfig, path: string, signal?: AbortSignal) {
+    return downloadNewApiImageContentByUrl(config, newApiCanvasUrl(config.baseUrl, path), signal);
+}
+
+async function downloadNewApiImageContentByUrl(config: AiConfig, url: string, signal?: AbortSignal) {
     const response = await channelAxiosRequest<Blob>(config, {
         method: "GET",
-        url: newApiCanvasUrl(config.baseUrl, path),
-        ...aiRequestConfig(config, undefined, undefined, "image"),
+        url,
+        ...(isSameOrigin(config.baseUrl, url) ? aiRequestConfig(config, undefined, undefined, "image") : {}),
         responseType: "blob",
         signal,
     });
-    const storageKey = `image:${nanoid()}`;
-    return setImageBlob(storageKey, response.data);
+    await assertDownloadedImageBlob(response.data);
+    return setImageBlob(`image:${nanoid()}`, response.data);
+}
+
+function isSameOrigin(baseUrl: string, value: string) {
+    try {
+        return new URL(value).origin === new URL(baseUrl).origin;
+    } catch {
+        return false;
+    }
+}
+
+async function assertDownloadedImageBlob(blob: Blob) {
+    const type = (blob.type || "").toLowerCase();
+    if (!type.includes("json") && !type.includes("text")) return;
+    throw new Error(readApiErrorMessage(await blob.text()) || "接口没有返回图片");
 }
 
 function newApiCanvasUrl(baseUrl: string, path: string) {
@@ -412,20 +460,23 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
 
 async function requestNewApiImageTask(config: AiConfig, payload: Record<string, unknown> | FormData, params?: Record<string, string>, options?: RequestOptions) {
     try {
-        const created = (
-            await channelAxiosRequest<ImageTaskResponse>(config, {
-                method: "POST",
-                url: aiApiUrl(config, "/images/tasks"),
-                data: payload,
-                ...aiRequestConfig(config, payload instanceof FormData ? undefined : "application/json", params, "image"),
-                signal: options?.signal,
-            })
-        ).data;
-        const taskId = created.task_id;
+        const created = unwrapNewApiImageTask(
+            (
+                await channelAxiosRequest<unknown>(config, {
+                    method: "POST",
+                    url: aiApiUrl(config, "/images/tasks"),
+                    data: payload,
+                    ...aiRequestConfig(config, payload instanceof FormData ? undefined : "application/json", params, "image"),
+                    signal: options?.signal,
+                })
+            ).data,
+        );
+        const taskId = created.task_id || created.id;
         if (!taskId) throw new Error("图片任务没有返回任务 ID");
-        const task = await waitForNewApiImageTask(config, taskId, options);
-        if (!task.result) throw new Error("图片任务成功但没有返回结果");
-        const images = await parseImagePayload(task.result, config, options?.signal);
+        const task = isCompletedNewApiImageTaskStatus(created.status) && newApiImageTaskResult(created) ? created : await waitForNewApiImageTask(config, taskId, options);
+        const result = newApiImageTaskResult(task);
+        if (!result) throw new Error("图片任务成功但没有返回结果");
+        const images = await parseImagePayload(result, config, options?.signal);
         refreshRemoteUser(config);
         return images;
     } catch (error) {
@@ -436,13 +487,53 @@ async function requestNewApiImageTask(config: AiConfig, payload: Record<string, 
 
 async function waitForNewApiImageTask(config: AiConfig, taskId: string, options?: RequestOptions) {
     for (let attempt = 0; attempt < NEW_API_IMAGE_TASK_MAX_ATTEMPTS; attempt += 1) {
-        const task = (await channelAxiosRequest<ImageTaskResponse>(config, { method: "GET", url: aiApiUrl(config, `/images/tasks/${encodeURIComponent(taskId)}`), ...aiRequestConfig(config, undefined, undefined, "image"), signal: options?.signal })).data;
-        if (task.status === "succeeded") return task;
-        if (task.status === "failed") throw new Error(readImageTaskError(task.error) || "图片生成失败");
+        const task = unwrapNewApiImageTask(
+            (await channelAxiosRequest<unknown>(config, { method: "GET", url: aiApiUrl(config, `/images/tasks/${encodeURIComponent(taskId)}`), ...aiRequestConfig(config, undefined, undefined, "image"), signal: options?.signal })).data,
+        );
+        if (isCompletedNewApiImageTaskStatus(task.status)) return task;
+        if (isFailedNewApiImageTaskStatus(task.status)) throw new Error(readImageTaskError(task.error) || "图片生成失败");
         if (attempt === NEW_API_IMAGE_TASK_MAX_ATTEMPTS - 1) throw new Error("图片生成超时，请稍后重试");
         await delay(NEW_API_IMAGE_TASK_POLL_INTERVAL_MS, options?.signal);
     }
     throw new Error("图片生成超时，请稍后重试");
+}
+
+function unwrapNewApiImageTask(payload: unknown): ImageTaskResponse {
+    if (!isRecord(payload)) throw new Error("图片任务没有返回结果");
+    if (isFailedNewApiEnvelopeCode(payload.code)) throw new Error(readApiErrorMessage(payload) || "请求失败");
+    const nested = payload.data;
+    if (isRecord(nested) && typeof nested.task_id === "string" && typeof payload.task_id !== "string") return unwrapNewApiImageTask(nested);
+    return payload as ImageTaskResponse;
+}
+
+function isFailedNewApiEnvelopeCode(code: unknown) {
+    if (typeof code === "number") return code !== 0;
+    if (typeof code !== "string" || !code.trim()) return false;
+    const normalized = code.trim().toLowerCase();
+    return normalized !== "success" && normalized !== "ok" && normalized !== "0";
+}
+
+function isCompletedNewApiImageTaskStatus(status?: string) {
+    return ["succeeded", "success", "completed", "complete", "done"].includes((status || "").toLowerCase());
+}
+
+function isFailedNewApiImageTaskStatus(status?: string) {
+    return ["failed", "fail", "failure", "error", "cancelled", "canceled"].includes((status || "").toLowerCase());
+}
+
+function newApiImageTaskResult(task: ImageTaskResponse): ImageApiResponse | null {
+    if (isImageApiResponse(task.result)) return task.result;
+    if (isImageApiResponse(task)) return task;
+    if (isImageApiResponse(task.data)) return task.data;
+    return null;
+}
+
+function isImageApiResponse(value: unknown): value is ImageApiResponse {
+    return isRecord(value) && Array.isArray(value.data);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function readImageTaskError(error: ImageTaskResponse["error"]) {

@@ -193,10 +193,13 @@ test("New API image generation submits async task and polls result", () => {
     assert.match(imageSource, /requestGeneration[\s\S]*isNewApiConfig\(requestConfig\)[\s\S]*requestNewApiImageTask\(requestConfig,\s*payload(?:,|\))/);
     assert.match(imageSource, /waitForNewApiImageTask/);
     assert.match(imageSource, /\/images\/tasks\/\$\{encodeURIComponent\(taskId\)\}/);
-    assert.match(imageSource, /task\.status === "succeeded"/);
-    assert.match(imageSource, /parseImagePayload\(task\.result,\s*config(?:,\s*options\?\.signal)?\)/);
+    assert.match(imageSource, /unwrapNewApiImageTask/);
+    assert.match(imageSource, /isCompletedNewApiImageTaskStatus/);
+    assert.match(imageSource, /newApiImageTaskResult/);
+    assert.match(imageSource, /parseImagePayload\(result,\s*config(?:,\s*options\?\.signal)?\)/);
     assert.match(imageSource, /resolveImageDataUrl\(item,\s*config(?:,\s*signal)?\)/);
     assert.match(imageSource, /downloadNewApiImageContent/);
+    assert.match(imageSource, /downloadNewApiImageContentByUrl/);
     assert.match(imageSource, /newApiCanvasUrl\(config\.baseUrl,\s*path\)/);
     assert.match(imageSource, /responseType:\s*"blob"/);
 });
