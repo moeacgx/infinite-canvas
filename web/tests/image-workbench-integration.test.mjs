@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { createModelChannel, defaultConfig, encodeChannelModel, filterModelsByCapability, resolveCapabilityModel, resolveImageChannelOptions, withLocalChannels } from "../src/stores/use-config-store.ts";
-import { imageQualityOptions, isImageQualitySupported, supportedImageSizeOptions, validateImageConfigParameters } from "../src/lib/image-model-capabilities.ts";
+import { imageQualityOptions, isImageQualitySupported, shouldOmitOpenAIImageQuality, supportedImageSizeOptions, validateImageConfigParameters } from "../src/lib/image-model-capabilities.ts";
 import { buildWorkflowRunConfig, resolveWorkflowRuntime } from "../src/components/workflows/workflow-runtime.ts";
 
 const imagePageSource = readFileSync(new URL("../src/app/(user)/image/page.tsx", import.meta.url), "utf8");
@@ -129,6 +129,15 @@ test("GPT 企业图片模型和 Banana 图片模型按各自尺寸限制校验",
     assert.match(validateImageConfigParameters({ model: "nano-banana", size: "4097x4096", quality: "high" }), /最长边不能超过 4096px/);
     assert.deepEqual(filterModelsByCapability(["gpt-5", "nano-banana"], "image"), ["nano-banana"]);
     assert.match(imageSettingsSource, /<Switch size="small" checked=\{snapDimensionToStep\} onChange=\{setSnapDimensionToStep\}/);
+});
+
+test("Gemini 和 Banana 生图走 OpenAI Images 时省略 quality", () => {
+    assert.equal(shouldOmitOpenAIImageQuality("gemini-3-pro-image-preview"), true);
+    assert.equal(shouldOmitOpenAIImageQuality("gemini-2.5-flash-image"), true);
+    assert.equal(shouldOmitOpenAIImageQuality("nano-banana"), true);
+    assert.equal(shouldOmitOpenAIImageQuality("channel::gemini-3.1-flash-image-preview"), true);
+    assert.equal(shouldOmitOpenAIImageQuality("gpt-image-2.5-flare"), false);
+    assert.equal(shouldOmitOpenAIImageQuality("gpt-image-1"), false);
 });
 
 test("生图结果操作栏在窄屏分行并允许操作按钮换行", () => {

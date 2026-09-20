@@ -25,7 +25,7 @@ import { channelAxiosRequest, channelFetch } from "@/services/api/channel-reques
 import { isEventStreamResponse, parseImagesApiStream, parseResponsesApiStream, parseResponsesImageData } from "@/services/api/image-stream";
 import { normalizePluginImages, resolveModelPluginResultUrl, runModelPlugin, sanitizeModelPluginText } from "@/services/api/model-plugin";
 import { networkFailureMessage } from "@/services/api/network-error";
-import { normalizeImageBackground, normalizeImageQuality, resolveImageModelRequestSize, validateImageModelParameters, type ImageQualityValue } from "@/lib/image-model-capabilities";
+import { normalizeImageBackground, normalizeImageQuality, resolveImageModelRequestSize, shouldOmitOpenAIImageQuality, validateImageModelParameters, type ImageQualityValue } from "@/lib/image-model-capabilities";
 
 export type ChatCompletionMessage = {
     role: "system" | "user" | "assistant";
@@ -114,7 +114,7 @@ function resolveImageRequestParameters(config: AiConfig, model: string) {
     const background = normalizeImageBackground(config.background);
     const error = validateImageModelParameters(model, { size: requestSize || "auto", quality: (quality || "auto") as ImageQualityValue, background });
     if (error) throw new Error(error);
-    return { quality, requestSize, background };
+    return { quality, requestSize, background, outboundQuality: shouldOmitOpenAIImageQuality(model) ? undefined : quality };
 }
 
 async function resolveImageDataUrl(item: Record<string, unknown>, config?: AiConfig, signal?: AbortSignal) {
@@ -422,12 +422,12 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
             throw new Error(readAxiosError(error, "请求失败"));
         }
     }
-    const { quality, requestSize, background } = resolveImageRequestParameters(config, requestConfig.model);
+    const { requestSize, background, outboundQuality } = resolveImageRequestParameters(config, requestConfig.model);
     const payload = {
         model: requestConfig.model,
         prompt: withSystemPrompt(requestConfig, prompt),
         n,
-        ...(quality ? { quality } : {}),
+        ...(outboundQuality ? { quality: outboundQuality } : {}),
         ...(requestSize ? { size: requestSize } : {}),
         ...(background ? { background } : {}),
         response_format: channelOptions.responseFormatB64Json ? "b64_json" : "url",
@@ -438,7 +438,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
     }
     try {
         if (channelOptions.apiMode === "responses") {
-            const images = await requestResponsesImages(requestConfig, prompt, [], n, quality, requestSize, background, channelOptions, options?.signal);
+            const images = await requestResponsesImages(requestConfig, prompt, [], n, outboundQuality, requestSize, background, channelOptions, options?.signal);
             refreshRemoteUser(requestConfig);
             return images;
         }
@@ -600,11 +600,11 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
             throw new Error(readAxiosError(error, "请求失败"));
         }
     }
-    const { quality, requestSize, background } = resolveImageRequestParameters(config, requestConfig.model);
+    const { requestSize, background, outboundQuality } = resolveImageRequestParameters(config, requestConfig.model);
     if (channelOptions.apiMode === "responses") {
         if (mask) throw new Error("Responses API 暂不支持蒙版编辑，请切换到 Images API");
         try {
-            return await requestResponsesImages(requestConfig, requestPrompt, references, n, quality, requestSize, background, channelOptions, options?.signal);
+            return await requestResponsesImages(requestConfig, requestPrompt, references, n, outboundQuality, requestSize, background, channelOptions, options?.signal);
         } catch (error) {
             throw new Error(readAxiosError(error, "请求失败"));
         }
@@ -619,8 +619,8 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
         formData.set("stream", "true");
         formData.set("partial_images", String(channelOptions.partialImages));
     }
-    if (quality) {
-        formData.set("quality", quality);
+    if (outboundQuality) {
+        formData.set("quality", outboundQuality);
     }
     if (requestSize) {
         formData.set("size", requestSize);

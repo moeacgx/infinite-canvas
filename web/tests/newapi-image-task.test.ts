@@ -97,6 +97,13 @@ function axiosOk(config: AxiosRequestConfig, data: unknown) {
     return { data, status: 200, statusText: "OK", headers: {}, config };
 }
 
+function postedJson(config: AxiosRequestConfig) {
+    const data = config.data;
+    if (typeof data === "string") return JSON.parse(data) as Record<string, unknown>;
+    if (data && typeof data === "object" && !(data instanceof FormData)) return data as Record<string, unknown>;
+    return {};
+}
+
 test("New API 信封 + SUCCESS 任务会解析出图片，而不是把已成功任务判失败", { timeout: 2_000 }, async (context) => {
     const originalAdapter = axios.defaults.adapter;
     const downloadedUrls: string[] = [];
@@ -215,4 +222,79 @@ test("New API Firefly 预签名地址跨域下载失败时保留 URL，而不是
 
     assert.equal(images.length, 1);
     assert.equal(images[0].dataUrl, fireflyUrl);
+});
+
+test("New API Gemini 生图不发送 quality，只通过 size 表达分辨率", { timeout: 2_000 }, async (context) => {
+    const originalAdapter = axios.defaults.adapter;
+    context.after(() => {
+        axios.defaults.adapter = originalAdapter;
+    });
+    let posted: Record<string, unknown> | undefined;
+
+    axios.defaults.adapter = (async (config) => {
+        const url = String(config.url || "");
+        if (config.method === "post" && url.endsWith("/images/tasks")) {
+            posted = postedJson(config);
+            return axiosOk(config, {
+                code: "success",
+                data: {
+                    task_id: "task_gemini",
+                    status: "SUCCESS",
+                    progress: "100%",
+                    data: { data: [{ b64_json: "AAAA", url: "" }] },
+                },
+            });
+        }
+        throw new Error(`未预期的图片请求：${url}`);
+    }) as AxiosAdapter;
+
+    const images = await requestGeneration(
+        {
+            ...newApiConfig(),
+            model: "gemini-3-pro-image-preview",
+            imageModel: "gemini-3-pro-image-preview",
+            models: ["gemini-3-pro-image-preview"],
+            imageModels: ["gemini-3-pro-image-preview"],
+            quality: "high",
+            size: "1:1",
+        },
+        "a red apple",
+    );
+
+    assert.equal(images.length, 1);
+    assert.ok(posted);
+    assert.equal("quality" in posted, false);
+    assert.equal(posted.quality, undefined);
+    assert.equal(posted.model, "gemini-3-pro-image-preview");
+    assert.equal(posted.size, "2880x2880");
+});
+
+test("New API GPT 生图在选择质量档位时仍发送 quality", { timeout: 2_000 }, async (context) => {
+    const originalAdapter = axios.defaults.adapter;
+    context.after(() => {
+        axios.defaults.adapter = originalAdapter;
+    });
+    let posted: Record<string, unknown> | undefined;
+
+    axios.defaults.adapter = (async (config) => {
+        const url = String(config.url || "");
+        if (config.method === "post" && url.endsWith("/images/tasks")) {
+            posted = postedJson(config);
+            return axiosOk(config, {
+                code: "success",
+                data: {
+                    task_id: "task_gpt",
+                    status: "SUCCESS",
+                    progress: "100%",
+                    data: { data: [{ b64_json: "AAAA", url: "" }] },
+                },
+            });
+        }
+        throw new Error(`未预期的图片请求：${url}`);
+    }) as AxiosAdapter;
+
+    await requestGeneration({ ...newApiConfig(), quality: "high", size: "1:1" }, "a red apple");
+
+    assert.ok(posted);
+    assert.equal(posted.quality, "high");
 });
