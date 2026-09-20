@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.11.15 - 2026-09-20
+
++ [修复] Gemini / Banana 生图走 New API 时不再发送 OpenAI `quality` 档位，改为只通过 `size` 表达分辨率，避免网关 400。
+
 ## v0.11.14 - 2026-09-11
 
 + [修复] GPT / Firefly 生图在 New API 任务已 SUCCESS 后，不再因为跨域预签名地址和 `/api/proxy-image` 401 被画布判失败；节点改为直接显示可访问的远程图片。
