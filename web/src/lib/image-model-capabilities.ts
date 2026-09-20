@@ -191,6 +191,11 @@ export function isImageQualitySupported(model: string, quality: string) {
     return capability.qualities.includes((normalizeImageQuality(quality) || "auto") as ImageQualityValue);
 }
 
+export function shouldOmitOpenAIImageQuality(model: string) {
+    const name = normalizeImageModelName(model);
+    return name.includes("banana") || name.includes("gemini");
+}
+
 export function imageSizeLabel(size: string) {
     return imageSizeOptions.find((item) => item.value === size)?.label || size;
 }
