@@ -34,6 +34,9 @@ func SaveSettings(settings model.Settings) (model.Settings, error) {
 		return model.Settings{}, err
 	}
 	settings = normalizeSettings(settings)
+	if err := validateNavigationItems(settings.Public.UI.NavigationItems); err != nil {
+		return model.Settings{}, err
+	}
 	keepPrivateAPIKeys(&settings, normalizeSettings(saved))
 	keepPrivateAuthSecrets(&settings, normalizeSettings(saved))
 	result, err := repository.SaveSettings(settings, now())
@@ -115,6 +118,7 @@ func normalizePublicSettingWithChannels(setting model.PublicSetting, channels []
 		enabled := false
 		setting.UI.ShowCreditBalance = &enabled
 	}
+	setting.UI.NavigationItems = normalizeNavigationItems(setting.UI.NavigationItems)
 	enabledModels := enabledChannelModels(channels)
 	if len(enabledModels) > 0 {
 		setting.ModelChannel.AvailableModels = enabledModels

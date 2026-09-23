@@ -22,3 +22,10 @@ description: 业务接口统一响应结构与前端处理约定
 前端请求逻辑以 `code` 判断业务是否成功。普通业务失败仍返回 HTTP 200；未登录返回 HTTP 401，已登录但权限不足返回 HTTP 403。前端需同时处理 HTTP 状态码和响应体中的 `code`。
 
 接口连接失败、服务不可达、返回体不是约定 JSON 时，前端按网络或接口异常处理。
+
+## 顶栏菜单设置
+
+- `GET /api/settings` 的 `data.ui.navigationItems` 提供公开的顶栏菜单配置。
+- 管理员通过现有 `GET /api/admin/settings` 读取、`POST /api/admin/settings` 保存完整设置，菜单位于 `public.ui.navigationItems`。
+- 重复或空 ID、空名称、超限菜单和非法链接保存失败，返回非零 `code` 与中文 `msg`，不会写入配置。
+- 未配置使用默认菜单，显式空数组保留为空；字段说明见[系统配置数据结构](/docs/backend/system-settings)。

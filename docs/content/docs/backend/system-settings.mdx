@@ -76,6 +76,33 @@ description: settings 表中 public 和 private 配置结构说明
 | `allowRegister` | boolean | 是否允许用户注册，默认允许；关闭后注册入口隐藏，注册接口拒绝新用户创建 |
 | `linuxDo.enabled` | boolean | 是否开启 Linux.do 登录 |
 
+## 顶栏菜单配置（待测试）
+
+后台「系统设置 → 公开配置 → 顶栏菜单」可添加站内或外部链接，调整名称、顺序、显示状态及是否在新标签打开；点击「保存设置」后持久化。桌面顶栏和移动端导航使用同一配置，画布内部操作菜单不受影响。
+
+菜单保存在 `public.value.ui.navigationItems`，沿用现有 `settings` 表，无需新增数据表。默认提供六个现有入口；字段缺失或为 `null` 时使用默认菜单，显式 `[]` 表示清空菜单。
+
+```json
+{
+  "ui": {
+    "showLoginEntry": false,
+    "showCreditBalance": false,
+    "navigationItems": [
+      { "id": "canvas", "label": "我的画布", "href": "/canvas", "enabled": true, "newTab": false },
+      { "id": "docs", "label": "使用文档", "href": "https://example.com/docs", "enabled": true, "newTab": true }
+    ]
+  }
+}
+```
+
+- `id`：非空唯一标识，最长 80 个字符；后台添加时自动生成。
+- `label`：菜单名称，去除两端空白后为 1–40 个字符。
+- `href`：单斜线开头的站内路径，或完整的 HTTP(S) 链接，最长 2048 字节；拒绝空白、控制字符、反斜杠、协议相对地址与带用户名密码的地址。
+- `enabled`：是否显示；隐藏入口不限制对应页面访问。
+- `newTab`：是否在新标签打开；新标签链接使用 `noopener noreferrer`。
+- 数组顺序即显示顺序，最多 20 项；可视化编辑与 JSON 编辑共用此配置。
+- 保存成功后当前页面会同步公开配置；其他已打开页面刷新后获取新菜单。
+
 ## private.value
 
 ```json

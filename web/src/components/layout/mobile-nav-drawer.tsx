@@ -2,27 +2,33 @@
 
 import { Drawer } from "antd";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 
-import { navigationTools, type NavigationToolSlug } from "@/constant/navigation-tools";
+import { useNavigationItems } from "@/hooks/use-navigation-items";
+import { isNavigationItemActive } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
 
 type MobileNavDrawerProps = {
     open: boolean;
-    activeToolSlug?: NavigationToolSlug;
     onClose: () => void;
 };
 
-export function MobileNavDrawer({ open, activeToolSlug, onClose }: MobileNavDrawerProps) {
+export function MobileNavDrawer({ open, onClose }: MobileNavDrawerProps) {
+    const navigationItems = useNavigationItems();
+    const pathname = usePathname();
     return (
         <Drawer title="导航" placement="left" size={280} open={open} onClose={onClose} className="md:hidden">
             <div className="space-y-1">
-                {navigationTools.map((tool) => {
+                {navigationItems.map((tool) => {
                     const Icon = tool.icon;
-                    const active = tool.slug === activeToolSlug;
+                    const active = isNavigationItemActive(tool.href, pathname);
                     return (
                         <Link
-                            key={tool.slug}
-                            href={`/${tool.slug}`}
+                            key={tool.id}
+                            href={tool.href}
+                            target={tool.newTab ? "_blank" : undefined}
+                            rel={tool.newTab ? "noopener noreferrer" : undefined}
+                            aria-current={active ? "page" : undefined}
                             onClick={onClose}
                             className={cn(
                                 "flex items-center gap-3 rounded-lg px-3 py-3 text-base transition",

@@ -60,8 +60,18 @@ type PublicLinuxDoAuthSetting struct {
 
 // PublicUISetting 控制前台可见入口和额度展示。
 type PublicUISetting struct {
-	ShowLoginEntry    *bool `json:"showLoginEntry"`
-	ShowCreditBalance *bool `json:"showCreditBalance"`
+	ShowLoginEntry    *bool            `json:"showLoginEntry"`
+	ShowCreditBalance *bool            `json:"showCreditBalance"`
+	NavigationItems   []NavigationItem `json:"navigationItems"`
+}
+
+// NavigationItem 前台顶部菜单项。
+type NavigationItem struct {
+	ID      string `json:"id"`
+	Label   string `json:"label"`
+	Href    string `json:"href"`
+	Enabled bool   `json:"enabled"`
+	NewTab  bool   `json:"newTab"`
 }
 
 // PrivateSetting 私有配置。
