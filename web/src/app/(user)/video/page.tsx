@@ -47,7 +47,6 @@ import { deleteStoredImages, resolveImageUrl, uploadImage } from "@/services/ima
 import { deleteVideoGenerationLogs, fetchVideoGenerationLogs, saveVideoGenerationLogs } from "@/services/api/generation-logs";
 import { createVideoGenerationTask as createBaseVideoGenerationTask, pollVideoGenerationTask as pollBaseVideoGenerationTask, storeGeneratedVideo, type VideoGenerationTask } from "@/services/api/video";
 import { useAssetStore } from "@/stores/use-asset-store";
-import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
 import { decodeChannelModel, modelOptionName, normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig, type VideoElementItem, type VideoElementReference } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
@@ -314,13 +313,9 @@ export default function VideoPage() {
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
-    const agentCommand = useWorkbenchAgentStore((state) => state.videoCommand);
-    const consumeAgentCommand = useWorkbenchAgentStore((state) => state.consumeVideo);
-    const generateRef = useRef<() => Promise<void>>(async () => undefined);
     const token = useUserStore((state) => state.token);
     const isUserReady = useUserStore((state) => state.isReady);
     const [prompt, setPrompt] = useState("");
-    const [pendingAgentRun, setPendingAgentRun] = useState<{ id: string; prompt?: string } | null>(null);
     const [negativePrompt, setNegativePrompt] = useState("");
     const [references, setReferences] = useState<ReferenceImage[]>([]);
     const [firstFrame, setFirstFrame] = useState<ReferenceImage | null>(null);
@@ -385,19 +380,6 @@ export default function VideoPage() {
         return () => window.clearInterval(timer);
     }, [pendingCount, pendingLogCount]);
 
-    useEffect(() => {
-        if (!agentCommand) return;
-        if (typeof agentCommand.prompt === "string") setPrompt(agentCommand.prompt);
-        if (agentCommand.run) setPendingAgentRun({ id: agentCommand.id, prompt: agentCommand.prompt });
-        consumeAgentCommand(agentCommand.id);
-    }, [agentCommand, consumeAgentCommand]);
-
-    useEffect(() => {
-        if (!pendingAgentRun) return;
-        if (typeof pendingAgentRun.prompt === "string" && prompt !== pendingAgentRun.prompt) return;
-        setPendingAgentRun(null);
-        void generateRef.current();
-    }, [pendingAgentRun, prompt]);
 
     useEffect(() => {
         if (!pendingLogCount) return;
@@ -785,7 +767,6 @@ export default function VideoPage() {
         await submitGenerationSnapshot(snapshot);
     };
 
-    generateRef.current = generate;
 
     const buildRequestSnapshot = ({
         promptText = prompt,

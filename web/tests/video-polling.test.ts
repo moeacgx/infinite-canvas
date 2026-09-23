@@ -16,7 +16,7 @@ test("视频轮询将网络错误和瞬时 HTTP 状态视为可恢复", () => {
     assert.equal(isTransientVideoPollError(statusError(503)), true);
     assert.equal(isTransientVideoPollError(statusError(504)), true);
     assert.equal(isTransientVideoPollError(statusError(429)), true);
-    assert.equal(isTransientVideoPollError(new Error("无法连接本机 Canvas Agent：Network Error")), true);
+    assert.equal(isTransientVideoPollError(new Error("socket closed: Network Error")), true);
 });
 
 test("鉴权、参数错误和主动取消不会被轮询容错吞掉", () => {

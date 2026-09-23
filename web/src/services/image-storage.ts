@@ -75,8 +75,11 @@ export function getProxyUrl(url: string): string {
 }
 
 export async function downloadRemoteImage(url: string, signal?: AbortSignal) {
+    signal?.throwIfAborted();
+    const proxied = getProxyUrl(url);
     const token = useUserStore.getState().token;
-    const response = await fetch(getProxyUrl(url), {
+    if (proxied !== url && !token) throw new Error("未登录");
+    const response = await fetch(proxied, {
         signal,
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     });
@@ -95,7 +98,19 @@ export async function downloadRemoteImage(url: string, signal?: AbortSignal) {
 }
 
 export async function uploadImage(input: string | Blob, options: UploadImageOptions = {}): Promise<UploadedImage> {
+    if (typeof input === "string" && /^https?:\/\//i.test(input)) {
+        try {
+            return await persistImageBlob(await downloadRemoteImage(input), options);
+        } catch (error) {
+            if (isAbortError(error)) throw error;
+            return persistRemoteImageUrl(input);
+        }
+    }
     const blob = typeof input === "string" ? await downloadRemoteImage(input) : input;
+    return persistImageBlob(blob, options);
+}
+
+async function persistImageBlob(blob: Blob, options: UploadImageOptions = {}): Promise<UploadedImage> {
     if (!options.localOnly) {
         const serverUpload = await maybeUploadImageToServer(blob);
         if (serverUpload) return serverUpload;
@@ -106,6 +121,15 @@ export async function uploadImage(input: string | Blob, options: UploadImageOpti
     objectUrls.set(storageKey, urlObj);
     const meta = await readImageMeta(urlObj);
     return { url: urlObj, storageKey, width: meta.width, height: meta.height, bytes: blob.size, mimeType: blob.type || meta.mimeType };
+}
+
+async function persistRemoteImageUrl(url: string): Promise<UploadedImage> {
+    const meta = await readImageMeta(url);
+    return { url, storageKey: "", width: meta.width, height: meta.height, bytes: 0, mimeType: meta.mimeType || "image/png" };
+}
+
+function isAbortError(error: unknown) {
+    return (error instanceof DOMException && error.name === "AbortError") || (error instanceof Error && error.name === "AbortError");
 }
 
 export async function uploadRemoteImageToServer(url: string, filename: string): Promise<UploadedImage> {

@@ -155,11 +155,11 @@ test("删除不存在的节点不会误删异常批次或清空选择", () => {
     assert.deepEqual(result.selectedNodeIds, ["selected"]);
 });
 
-test("创意 Agent 与旧 Agent 共用页面删除入口并清理全部节点浮层", () => {
+test("创作 Agent 与页面删除入口共用清理逻辑并清理全部节点浮层", () => {
     assert.match(canvasClientSource, /const deletedNodeIds = deleteNodes\(new Set\(\[nodeId\]\)\)/);
     assert.match(canvasClientSource, /const deletion = deleteCanvasNodesFromState\(\{ nodes: nodesRef\.current, connections: connectionsRef\.current \}, ids\)/);
 
-    const uiCleanupBlock = canvasClientSource.match(/const clearDeletedNodeUiState = useCallback\([\s\S]*?\n\s*const agentSnapshot/)?.[0] || "";
+    const uiCleanupBlock = canvasClientSource.match(/const clearDeletedNodeUiState = useCallback\([\s\S]*?\n\s*const applyCanvasOps/)?.[0] || "";
     for (const setter of [
         "setHoveredNodeId",
         "setToolbarNodeId",

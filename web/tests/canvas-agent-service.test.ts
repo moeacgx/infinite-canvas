@@ -103,7 +103,6 @@ test("画布 Agent 的 Gemini 请求只注入一次系统提示词", async (cont
         baseUrl: "https://gemini.example.com",
         apiKey: "gemini-key",
         apiFormat: "gemini",
-        requestMode: "direct",
         models: ["gemini-3-pro"],
     });
     const selectedModel = encodeChannelModel("gemini", "gemini-3-pro");
@@ -156,7 +155,6 @@ test("画布 Agent 保留并在下一轮 Gemini 工具调用中回传 thoughtSig
         baseUrl: "https://gemini.example.com",
         apiKey: "gemini-key",
         apiFormat: "gemini",
-        requestMode: "direct",
         models: ["gemini-3-pro"],
     });
     const selectedModel = encodeChannelModel("gemini-signature", "gemini-3-pro");
@@ -297,7 +295,6 @@ test("画布 Agent 降级 JSON 模式时把工具历史转换为普通文本", a
             id: "json-fallback",
             baseUrl: `http://127.0.0.1:${address.port}`,
             apiKey: "fallback-key",
-            requestMode: "direct",
             models: ["fallback-model"],
         });
         const selectedModel = encodeChannelModel("json-fallback", "fallback-model");

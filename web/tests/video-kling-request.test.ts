@@ -28,7 +28,6 @@ function channel(id: string, name: string, model: string): ModelChannel {
         baseUrl: `https://${id}.example/v1`,
         apiKey: "test-key",
         apiFormat: "openai",
-        requestMode: "direct",
         models: [model],
     };
 }

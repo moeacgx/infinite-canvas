@@ -45,7 +45,6 @@ import { formatBytes, formatDuration, getDataUrlByteSize, readImageMeta } from "
 import { ImageRequestError, batchCanvasImageTaskStatus, createCanvasImageTask, deleteCanvasImageTask, listCanvasImageTasks, requestEdit, requestGeneration, type CanvasImageTask } from "@/services/api/image";
 import { deleteStoredImages, imageToDataUrl, resolveImageUrl, uploadImage, uploadRemoteImageToServer } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
-import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
 import type { ReferenceImage } from "@/types/image";
 import { imageQualityOptions, imageSizeOptions, imageSizeUnsupportedReason, isImageQualitySupported, validateImageConfigParameters } from "@/lib/image-model-capabilities";
 
@@ -138,8 +137,6 @@ export default function ImagePage() {
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
-    const agentCommand = useWorkbenchAgentStore((state) => state.imageCommand);
-    const consumeAgentCommand = useWorkbenchAgentStore((state) => state.consumeImage);
     const [prompt, setPrompt] = useState("");
     const [references, setReferences] = useState<ReferenceImage[]>([]);
     const [uploadingCount, setUploadingCount] = useState(0);
@@ -161,9 +158,7 @@ export default function ImagePage() {
     const [workflowButtonReady, setWorkflowButtonReady] = useState(false);
     const workflowButtonRef = useRef<HTMLButtonElement>(null);
     const workflowButtonDragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number; moved: boolean } | null>(null);
-    const generateRef = useRef<() => Promise<void>>(async () => undefined);
     const generationControllersRef = useRef(new Set<AbortController>());
-    const [pendingAgentRun, setPendingAgentRun] = useState<{ id: string; prompt?: string } | null>(null);
     const saveLogChainRef = useRef<Promise<void>>(Promise.resolve());
     const pollingLogIdsRef = useRef(new Set<string>());
     const deletedLogIdsRef = useRef(new Set<string>());
@@ -243,19 +238,6 @@ export default function ImagePage() {
         logsRef.current = logs;
     }, [logs]);
 
-    useEffect(() => {
-        if (!agentCommand) return;
-        if (typeof agentCommand.prompt === "string") setPrompt(agentCommand.prompt);
-        if (agentCommand.run) setPendingAgentRun({ id: agentCommand.id, prompt: agentCommand.prompt });
-        consumeAgentCommand(agentCommand.id);
-    }, [agentCommand, consumeAgentCommand]);
-
-    useEffect(() => {
-        if (!pendingAgentRun) return;
-        if (typeof pendingAgentRun.prompt === "string" && prompt !== pendingAgentRun.prompt) return;
-        setPendingAgentRun(null);
-        void generateRef.current();
-    }, [pendingAgentRun, prompt]);
 
     useEffect(
         () => () => {
@@ -441,7 +423,6 @@ export default function ImagePage() {
         await submitGenerationBatch(snapshot);
     };
 
-    generateRef.current = generate;
 
     const stopGeneration = () => {
         if (!generationControllersRef.current.size) return;

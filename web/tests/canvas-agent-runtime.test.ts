@@ -185,7 +185,6 @@ async function runScriptedAgent(input: { userText: string; responses: ScriptedMo
             id: "canvas-agent-runtime",
             baseUrl: `http://127.0.0.1:${address.port}`,
             apiKey: "runtime-test-key",
-            requestMode: "direct",
             models: ["runtime-text-model"],
         });
         const selectedModel = encodeChannelModel(channel.id, "runtime-text-model");

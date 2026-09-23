@@ -69,8 +69,8 @@ test("首页请求由真实画布 Agent 单次消费且不覆盖现有扩展能�
     assert.match(canvasClientSource, /onExecuteAction=\{executeCanvasAgentAction\}/);
     assert.match(canvasClientSource, /initialRequest=\{initialAgentRequest\}/);
 
-    assert.match(canvasClientSource, /useCanvasAgentStore/);
-    assert.match(canvasClientSource, /applyCanvasAgentOps/);
+    assert.doesNotMatch(canvasClientSource, /useCanvasAgentStore|setAgentCanvasContext/);
+    assert.match(canvasClientSource, /applyCanvasOps/);
     assert.match(canvasClientSource, /<CanvasPluginManagerModal/);
 });
 

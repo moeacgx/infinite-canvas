@@ -64,16 +64,3 @@ test("持久化脚本受模型数与单项长度限制", () => {
     const bounded = createModelChannel({ id: "entry-limit", models: Object.keys(entries), modelScripts: entries });
     assert.equal(Object.keys(bounded.modelScripts || {}).length, 256);
 });
-
-test("每个本地渠道独立保存网络方式并传给实际请求", () => {
-    const direct = createModelChannel({ id: "direct", requestMode: "direct", models: ["m1"] });
-    const agent = createModelChannel({ id: "agent", requestMode: "agent", models: ["m2"] });
-    const config = withLocalChannels({ ...defaultConfig, channelMode: "local" }, [direct, agent]);
-    assert.equal(resolveModelRequestConfig(config, encodeChannelModel("direct", "m1")).requestMode, "direct");
-    assert.equal(resolveModelRequestConfig(config, encodeChannelModel("agent", "m2")).requestMode, "agent");
-});
-
-test("旧版后端兼容配置迁移为本机 Agent", () => {
-    const migrated = createModelChannel({ id: "legacy", requestMode: "proxy" as never, models: ["m"] });
-    assert.equal(migrated.requestMode, "agent");
-});
