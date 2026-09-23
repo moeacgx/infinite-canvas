@@ -1,5 +1,6 @@
 import { apiDelete, apiGet, apiPost, compactApiParams } from "@/services/api/request";
 import type { Prompt, PromptListResponse } from "@/services/api/prompts";
+import type { NavigationItem } from "@/lib/navigation";
 
 export type AdminPromptCategory = {
     category: string;
@@ -206,6 +207,7 @@ export type AdminPublicSettings = {
     ui: {
         showLoginEntry: boolean;
         showCreditBalance: boolean;
+        navigationItems?: NavigationItem[] | null;
     };
 };
 

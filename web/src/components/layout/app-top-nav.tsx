@@ -5,7 +5,8 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { navigationTools, type NavigationToolSlug } from "@/constant/navigation-tools";
+import { useNavigationItems } from "@/hooks/use-navigation-items";
+import { isNavigationItemActive } from "@/lib/navigation";
 import { AppConfigModal } from "@/components/layout/app-config-modal";
 import { MobileNavDrawer } from "@/components/layout/mobile-nav-drawer";
 import { UserStatusActions } from "@/components/layout/user-status-actions";
@@ -15,8 +16,7 @@ export function AppTopNav() {
     const pathname = usePathname();
     const [mobileNavOpen, setMobileNavOpen] = useState(false);
     const hideHeader = /^\/canvas\/[^/]+/.test(pathname);
-    const slug = pathname.split("/").filter(Boolean)[0];
-    const activeToolSlug = navigationTools.some((tool) => tool.slug === slug) ? (slug as NavigationToolSlug) : undefined;
+    const navigationItems = useNavigationItems();
 
     return (
         <>
@@ -46,13 +46,16 @@ export function AppTopNav() {
                             </button>
 
                             <nav className="hide-scrollbar ml-8 hidden h-16 min-w-0 items-center gap-7 overflow-x-auto md:flex">
-                                {navigationTools.map((tool) => {
+                                {navigationItems.map((tool) => {
                                     const Icon = tool.icon;
-                                    const active = tool.slug === activeToolSlug;
+                                    const active = isNavigationItemActive(tool.href, pathname);
                                     return (
                                         <Link
-                                            key={tool.slug}
-                                            href={`/${tool.slug}`}
+                                            key={tool.id}
+                                            href={tool.href}
+                                            target={tool.newTab ? "_blank" : undefined}
+                                            rel={tool.newTab ? "noopener noreferrer" : undefined}
+                                            aria-current={active ? "page" : undefined}
                                             className={cn(
                                                 "relative flex h-16 shrink-0 items-center gap-2 text-sm leading-6 transition after:absolute after:inset-x-0 after:bottom-0 after:h-px",
                                                 active
@@ -75,7 +78,7 @@ export function AppTopNav() {
                 </header>
             ) : null}
 
-            <MobileNavDrawer open={mobileNavOpen} activeToolSlug={activeToolSlug} onClose={() => setMobileNavOpen(false)} />
+            <MobileNavDrawer open={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
             <AppConfigModal />
         </>
     );

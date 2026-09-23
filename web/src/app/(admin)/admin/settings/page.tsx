@@ -9,6 +9,9 @@ import { EditorView } from "@uiw/react-codemirror";
 
 import { fetchAdminSettings, fetchChannelModels, saveAdminSettings, testChannelModel, type AdminModelChannel, type AdminModelCost, type AdminPublicModelChannelSettings, type AdminSettings } from "@/services/api/admin";
 import { useUserStore } from "@/stores/use-user-store";
+import { defaultNavigationItems, parseNavigationItems } from "@/lib/navigation";
+import { NavigationSettings } from "./components/navigation-settings";
+import { useConfigStore } from "@/stores/use-config-store";
 
 const CodeMirror = dynamic(() => import("@uiw/react-codemirror"), { ssr: false });
 const jsonEditorTheme = EditorView.theme({
@@ -40,7 +43,7 @@ const emptySettings: AdminSettings = {
             allowRemoteChannel: true,
         },
         auth: { allowRegister: true, linuxDo: { enabled: false } },
-        ui: { showLoginEntry: false, showCreditBalance: false },
+        ui: { showLoginEntry: false, showCreditBalance: false, navigationItems: defaultNavigationItems },
     },
     private: { channels: [], promptSync: { enabled: true, cron: "*/5 * * * *" }, auth: { linuxDo: { clientId: "", clientSecret: "" } } },
 };
@@ -129,6 +132,7 @@ export default function AdminSettingsPage() {
         try {
             const saved = normalizeSettings(await saveAdminSettings(token, values));
             const merged = mergeChannelApiKeys(values.private.channels, saved);
+            useConfigStore.setState({ publicSettings: saved.public });
             form.setFieldsValue(merged);
             setChannels(merged.private.channels);
             setModelCosts(merged.public.modelChannel.modelCosts);
@@ -156,7 +160,7 @@ export default function AdminSettingsPage() {
         }
         const parsed = parseTabJson(tab, jsonText[tab]);
         if (!parsed) {
-            message.error("JSON 格式不正确");
+            message.error("JSON 格式或配置字段类型不正确，请检查菜单数组及各字段类型");
             return;
         }
         form.setFieldsValue({ [tab]: parsed } as Partial<AdminSettings>);
@@ -169,7 +173,7 @@ export default function AdminSettingsPage() {
     const formatJson = (tab: SettingsTabKey) => {
         const parsed = parseTabJson(tab, jsonText[tab]);
         if (!parsed) {
-            message.error("JSON 格式不正确");
+            message.error("JSON 格式或配置字段类型不正确，请检查菜单数组及各字段类型");
             return;
         }
         if (tab === "public") setModelCosts((parsed as AdminSettings["public"]).modelChannel.modelCosts);
@@ -475,6 +479,11 @@ export default function AdminSettingsPage() {
                                     <Col xs={24} md={8}>
                                         <Form.Item name={["public", "ui", "showCreditBalance"]} label="显示算力点余额" extra="关闭后隐藏前台余额、发送按钮和画布生成按钮中的算力点额度" valuePropName="checked">
                                             <Switch />
+                                        </Form.Item>
+                                    </Col>
+                                    <Col span={24}>
+                                        <Form.Item name={["public", "ui", "navigationItems"]} label="顶栏菜单">
+                                            <NavigationSettings />
                                         </Form.Item>
                                     </Col>
                                     <Col span={24}>
@@ -872,6 +881,7 @@ function normalizePublicSetting(setting: Partial<AdminSettings["public"]> = {}):
         ui: {
             showLoginEntry: setting.ui?.showLoginEntry === true,
             showCreditBalance: setting.ui?.showCreditBalance === true,
+            navigationItems: parseNavigationItems(setting.ui?.navigationItems),
         },
     };
 }
@@ -976,7 +986,7 @@ async function collectSettings(form: any, editorMode: Record<SettingsTabKey, Edi
     if (editorMode.public === "json") {
         const publicSetting = parseTabJson("public", jsonText.public);
         if (!publicSetting) {
-            message.error("公开配置 JSON 格式不正确");
+            message.error("公开配置 JSON 格式或字段类型不正确，请检查菜单数组及各字段类型");
             return null;
         }
         values.public = publicSetting;
