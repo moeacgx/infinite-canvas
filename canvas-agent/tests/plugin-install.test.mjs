@@ -56,11 +56,17 @@ test("真实 Codex 安装独立插件，干净缓存自动安装依赖并完成 
         }
         await originalClose();
     })();
-    transport.stderr.resume();
+    let installLog = "";
+    transport.stderr.on("data", (chunk) => { installLog = (installLog + chunk).slice(-6000); });
     const onAbort = () => { void transport.close(); };
     context.signal.addEventListener("abort", onAbort, { once: true });
     context.after(() => context.signal.removeEventListener("abort", onAbort));
-    await client.connect(transport, { timeout: 40000 });
+    try {
+        await client.connect(transport, { timeout: 40000 });
+    } catch (error) {
+        error.message += "\n插件安装日志：\n" + installLog;
+        throw error;
+    }
     assert.equal(client.getServerVersion().version, installed.version);
     assert.deepEqual((await client.listTools()).tools, []);
     assert.equal(existsSync(join(root, "node_modules/.canvas-agent-ready")), true);
