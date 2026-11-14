@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { ArrowUp, Bot, FileText, FolderOpen, ImageIcon, Menu, Music2, Square, Upload, Video, X } from "lucide-react";
 import { Button, Dropdown, Segmented } from "antd";
@@ -24,6 +24,7 @@ export type CanvasAssistantComposerProps = {
     agentConfig: CanvasAgentConfig;
     onAgentConfigChange: (patch: Partial<CanvasAgentConfig>) => void;
     onTextModelChange?: (model: string, channelId: string | undefined) => void;
+    modelControls?: ReactNode;
     onPromptChange: (prompt: string) => void;
     onSubmit: () => void | Promise<void>;
     onStop?: () => void;
@@ -43,6 +44,7 @@ export function CanvasAssistantComposer({
     agentConfig,
     onAgentConfigChange,
     onTextModelChange,
+    modelControls,
     onPromptChange,
     onSubmit,
     onStop,
@@ -168,6 +170,7 @@ export function CanvasAssistantComposer({
                         >
                             <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8 !shrink-0" style={{ color: theme.node.text }} icon={<Menu className="size-4" />} aria-label="添加素材" />
                         </Dropdown>
+                        {modelControls}
                         {onTextModelChange ? (
                             <ModelPicker
                                 config={effectiveConfig}

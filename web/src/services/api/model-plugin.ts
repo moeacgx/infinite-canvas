@@ -364,7 +364,7 @@ for (const dataUrl of images) {
   if (match) parts.push({ inline_data: { mime_type: match[1], data: match[2] } });
 }
 const data = await request({ method: "POST", url: apiUrl(\`/v1beta/models/\${model}:generateContent\`), headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey }, data: { contents: [{ role: "user", parts }], generationConfig: { responseModalities: ["IMAGE"] } } });
-return (data.candidates || []).flatMap((item) => item.content?.parts || []).map((part) => part.inlineData || part.inline_data).filter(Boolean).map((image) => \`data:\${image.mimeType || image.mime_type || "image/png"};base64,\${image.data}\`);` },
+return (data.candidates || []).flatMap((item) => item.content?.parts || []).filter((part) => part.thought !== true).map((part) => part.inlineData || part.inline_data).filter(Boolean).map((image) => \`data:\${image.mimeType || image.mime_type || "image/png"};base64,\${image.data}\`);` },
     ],
     video: [
         { label: "OpenAI 规范", script: `const headers = { "Content-Type": "application/json", Authorization: \`Bearer \${apiKey}\` };

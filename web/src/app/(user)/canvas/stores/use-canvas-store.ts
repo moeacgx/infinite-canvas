@@ -210,6 +210,9 @@ function normalizeAgentPanel(value: Partial<CanvasAgentPanelState> | undefined):
 export function normalizeCanvasSessions(sessions: CanvasAssistantSession[], preserveProtocolMessages = true) {
     return sessions.map((session) => ({
         ...session,
+        // 复制项目时不能恢复原画布的 Codex 线程。
+        codexThreadId: preserveProtocolMessages ? session.codexThreadId : undefined,
+        codexServiceId: preserveProtocolMessages ? session.codexServiceId : undefined,
         draftAssets: normalizeDraftAssets(session.draftAssets),
         messages: (session.messages || []).map((message) =>
             message.role === "assistant" && (message.status === "thinking" || message.status === "running")

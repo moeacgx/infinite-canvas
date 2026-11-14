@@ -261,7 +261,8 @@ test("模型用户内容为有效图片引用生成 image_url 并忽略无效媒
 });
 
 test("创作 Agent 素材入口只更新草稿附件而不复用页面立即插入节点回调", () => {
-    const panelSource = readFileSync(new URL("../src/app/(user)/canvas/components/canvas-assistant-panel.tsx", import.meta.url), "utf8");
+    // Windows 检出可能使用 CRLF；只统一换行，不改变被验证的代码内容。
+    const panelSource = readFileSync(new URL("../src/app/(user)/canvas/components/canvas-assistant-panel.tsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
     const pickerSource = readFileSync(new URL("../src/app/(user)/canvas/components/asset-picker-modal.tsx", import.meta.url), "utf8");
     const pageSource = readFileSync(new URL("../src/app/(user)/canvas/[id]/canvas-client-page.tsx", import.meta.url), "utf8");
     const propsSource = panelSource.slice(panelSource.indexOf("type CanvasAssistantPanelProps"), panelSource.indexOf("type PendingDeleteConfirmation"));
@@ -296,6 +297,16 @@ test("创作 Agent 素材入口只更新草稿附件而不复用页面立即插�
     const pickerUploadRelease = pickerSource.indexOf("onUploadBusyChange?.(-1)");
     assert.ok(pickerUploadStart >= 0 && pickerUploadStart < pickerUploadCall);
     assert.ok(pickerUploadCall < pickerUploadRelease);
-    const actionSource = panelSource.slice(panelSource.indexOf("executeAction: async (action)"), panelSource.indexOf("signal: controller.signal", panelSource.indexOf("executeAction: async (action)")));
-    assert.ok(actionSource.indexOf("const confirmed") < actionSource.indexOf("await onMaterializeReferences"));
+    const actionStart = panelSource.search(/executeAction:\s*async\s*\(action, signal = controller\.signal\)\s*=>\s*\{/);
+    const actionEnd = panelSource.indexOf("signal: controller.signal", actionStart);
+    assert.ok(actionStart >= 0 && actionEnd > actionStart, "必须找到完整的工具执行回调");
+    const actionSource = panelSource.slice(actionStart, actionEnd);
+    const confirmationStart = actionSource.indexOf("const confirmed");
+    const cancellationStart = actionSource.indexOf("if (!confirmed) return");
+    const materializationStart = actionSource.indexOf("await onMaterializeReferences");
+    assert.ok(confirmationStart >= 0 && cancellationStart > confirmationStart, "删除未获确认时必须提前返回");
+    assert.ok(materializationStart > cancellationStart, "附件物化必须发生在删除确认和取消判断之后");
+    assert.match(actionSource, /signal\.addEventListener\("abort", cancel, \{ once: true \}\)/);
+    assert.match(actionSource, /signal\.removeEventListener\("abort", cancel\);\s*signal\.throwIfAborted\(\)/);
+    assert.match(actionSource, /await onMaterializeReferences\([^\n]+, signal\);\s*signal\.throwIfAborted\(\);\s*return onExecuteAction\(action, messageReferenceNodeIds, signal\)/);
 });

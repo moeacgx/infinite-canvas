@@ -1,8 +1,8 @@
 "use client";
 
-import { type CSSProperties, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { Bot, History, Minus, Plus, RotateCcw, Sparkles, Trash2, Video, X } from "lucide-react";
-import { App, Button, Modal, Tooltip } from "antd";
+import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { ArrowLeftRight, Bot, Cpu, Gauge, History, Minus, PlugZap, Plus, RotateCcw, Sparkles, Trash2, Video, X } from "lucide-react";
+import { App, AutoComplete, Button, Dropdown, Modal, Tooltip } from "antd";
 import { motion } from "motion/react";
 import { nanoid } from "nanoid";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -16,7 +16,8 @@ import { deleteStoredImages, imageToDataUrl, uploadImage } from "@/services/imag
 import { useAssetStore } from "@/stores/use-asset-store";
 import { decodeChannelModel, resolveCapabilityModel, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
-import { createCanvasAgentState, runCanvasAgent } from "../agent/canvas-agent-runtime";
+import { createCanvasAgentState, runCanvasAgent, type RunCanvasAgentInput } from "../agent/canvas-agent-runtime";
+import { useCodexAgent } from "../agent/use-codex-agent";
 import { canvasAgentActionAttachmentIds, canvasAgentActionNeedsAttachmentMaterialization, canvasAgentSessionAssets, createPendingAgentAsset, mergeCanvasAssistantReferences } from "../agent/canvas-agent-attachments";
 import type { CanvasAgentContext } from "../agent/canvas-agent-context";
 import type { CanvasAgentAction, CanvasAgentToolResult } from "../agent/canvas-agent-tools";
@@ -35,6 +36,7 @@ import {
 import { isCanvasImageNodeType } from "../utils/canvas-node-type";
 import { AssetPickerModal } from "./asset-picker-modal";
 import { AssistantReferenceChip, CanvasAssistantComposer } from "./canvas-assistant-composer";
+import { CanvasCodexConnectView } from "./canvas-codex-connect-view";
 const PANEL_MOTION_SECONDS = 0.25;
 
 const FLOATING_AGENT_MIN_WIDTH = 320;
@@ -90,6 +92,8 @@ function initialFloatingBounds(width: number, height: number, position?: { x: nu
 type FloatingInteraction = { kind: "drag" | "resize"; startX: number; startY: number; startBounds: CanvasAssistantBounds };
 
 type CanvasAssistantPanelProps = {
+    canvasId: string;
+    onOpen: () => void;
     nodes: CanvasNodeData[];
     selectedNodeIds: Set<string>;
     sessions: CanvasAssistantSession[];
@@ -118,6 +122,8 @@ type PendingDeleteConfirmation = {
 };
 
 export function CanvasAssistantPanel({
+    canvasId,
+    onOpen,
     nodes,
     selectedNodeIds,
     sessions,
@@ -153,7 +159,11 @@ export function CanvasAssistantPanel({
     const attachmentCleanupTimerRef = useRef<number | null>(null);
     const attachmentCleanupRequestedRef = useRef(false);
     const mountedRef = useRef(true);
-    const [view, setView] = useState<"chat" | "history">("chat");
+    const [view, setView] = useState<"chat" | "history" | "connect">("chat");
+    const mode = agentConfig.mode || "api";
+    const lastSessionIds = useRef<Partial<Record<"api" | "codex", string>>>({});
+    const drafts = useRef<Partial<Record<"api" | "codex", { prompt: string; removedReferenceIds: Set<string> }>>>({});
+    const [codexConfirmations, setCodexConfirmations] = useState<Array<{ id: string; title: string; content: ReactNode; actions: Array<{ label: string; danger?: boolean; onClick: () => void }> }>>([]);
     const [prompt, setPrompt] = useState("");
     const [isRunning, setIsRunning] = useState(false);
     const [checkedChatIds, setCheckedChatIds] = useState<string[]>([]);
@@ -168,9 +178,10 @@ export function CanvasAssistantPanel({
     const boundsRef = useRef(bounds);
     const interactionCleanupRef = useRef<(() => void) | null>(null);
     const uploadInputRef = useRef<HTMLInputElement>(null);
-    const [initialSession] = useState(createSession);
-    const safeSessions = sessions.length ? sessions : [initialSession];
-    const resolvedActiveSessionId = activeSessionId && safeSessions.some((session) => session.id === activeSessionId) ? activeSessionId : safeSessions[0]?.id || null;
+    const [initialSessions] = useState(() => ({ api: createSession(), codex: createSession("", "", "codex") }));
+    const safeSessions = sessions.some((session) => (session.provider || "api") === mode) ? sessions : [...sessions, initialSessions[mode]];
+    const visibleSessions = safeSessions.filter((session) => (session.provider || "api") === mode);
+    const resolvedActiveSessionId = activeSessionId && visibleSessions.some((session) => session.id === activeSessionId) ? activeSessionId : visibleSessions[0]?.id || null;
     const sessionsRef = useRef<CanvasAssistantSession[]>(safeSessions);
     const activeSessionIdRef = useRef<string | null>(resolvedActiveSessionId);
 
@@ -199,8 +210,8 @@ export function CanvasAssistantPanel({
         };
     }, []);
 
-    const activeSession = safeSessions.find((session) => session.id === resolvedActiveSessionId) || safeSessions[0] || null;
-    const historySessions = safeSessions.filter((session) => session.messages.length > 0);
+    const activeSession = visibleSessions.find((session) => session.id === resolvedActiveSessionId) || visibleSessions[0] || null;
+    const historySessions = visibleSessions.filter((session) => session.messages.length > 0);
     const messages = activeSession?.messages || [];
     const activeTextModel = resolveCapabilityModel(effectiveConfig, "text", activeSession?.textModel || effectiveConfig.textModel || effectiveConfig.model);
     const activeTextChannelId = activeSession?.textChannelId || decodeChannelModel(activeTextModel)?.channelId || effectiveConfig.textChannelId;
@@ -234,8 +245,12 @@ export function CanvasAssistantPanel({
     }, [resolvedActiveSessionId, selectedNodeKey]);
 
     const commitSessions = (nextSessions: CanvasAssistantSession[], nextActiveSessionId = activeSessionIdRef.current) => {
+        // 切换画布后的旧请求只能结束，不能回写新画布的会话。
+        if (!mountedRef.current) return;
         sessionsRef.current = nextSessions;
         activeSessionIdRef.current = nextActiveSessionId;
+        const selected = nextSessions.find((session) => session.id === nextActiveSessionId);
+        if (selected) lastSessionIds.current[selected.provider || "api"] = selected.id;
         onSessionsChange(nextSessions, nextActiveSessionId);
     };
 
@@ -353,43 +368,119 @@ export function CanvasAssistantPanel({
         }));
     };
 
+    const confirmCodex = (title: string, content: ReactNode, signal: AbortSignal, okText = "允许一次", cancelText = "拒绝", danger = false) => new Promise<boolean>((resolve) => {
+        if (signal.aborted) { resolve(false); return; }
+        let settled = false;
+        const finish = (allowed: boolean) => {
+            if (settled) return;
+            settled = true;
+            signal.removeEventListener("abort", cancel);
+            setCodexConfirmations((current) => current.filter((item) => item !== confirmation));
+            resolve(allowed);
+        };
+        const cancel = () => finish(false);
+        const confirmation = { id: nanoid(), title, content, actions: [{ label: cancelText, onClick: cancel }, { label: okText, danger, onClick: () => finish(true) }] };
+        onOpen();
+        setCodexConfirmations((current) => [...current, confirmation]);
+        signal.addEventListener("abort", cancel, { once: true });
+    });
+    const switchMode = (next: "api" | "codex" = mode === "api" ? "codex" : "api") => {
+        if (runningRef.current || next === mode) return;
+        if (activeSessionIdRef.current) lastSessionIds.current[mode] = activeSessionIdRef.current;
+        drafts.current[mode] = { prompt, removedReferenceIds };
+        const nextSessions = sessionsRef.current.filter((session) => (session.provider || "api") === next);
+        const selected = nextSessions.find((session) => session.id === lastSessionIds.current[next]) || nextSessions[0] || initialSessions[next];
+        commitSessions(nextSessions.length ? sessionsRef.current : [...sessionsRef.current, selected], selected.id);
+        onAgentConfigChange({ mode: next });
+        setView("chat");
+        setPrompt(drafts.current[next]?.prompt || "");
+        setRemovedReferenceIds(drafts.current[next]?.removedReferenceIds || new Set());
+        setCheckedChatIds([]);
+        setDeleteChatIds([]);
+    };
+    const codex = useCodexAgent({
+        canvasId,
+        onBootstrap: () => { onOpen(); switchMode("codex"); setView("chat"); },
+        executeTool: async (action, signal) => {
+            signal.throwIfAborted();
+            if (action.name === "arrange_nodes" && !(await confirmCodex("允许 Codex 整理画布？", <pre className="whitespace-pre-wrap break-words text-xs">{JSON.stringify(action.arguments, null, 2)}</pre>, signal))) return { ok: false, code: "action_not_requested", message: "未允许整理画布" };
+            if (action.name === "delete_node") {
+                const node = getCurrentNode(String(action.arguments.nodeId || ""));
+                if (!(await confirmCodex(`删除「${node?.title || "未命名节点"}」？`, "相关连线和任务记录将按现有逻辑清理", signal, "确认删除", "取消", true))) return { ok: false, code: "delete_cancelled", message: "用户取消删除，原节点已保留" };
+            }
+            signal.throwIfAborted();
+            return onExecuteAction(action, [], signal);
+        },
+        onApproval: async ({ method, params }, signal) => {
+            if (method === "mcpServer/elicitation/request") {
+                toast.info("Codex 工具请求了额外信息，本次请求已取消");
+                return { action: "decline", content: null };
+            }
+            const questions = method === "item/tool/requestUserInput"
+                ? params.questions as Array<{ id: string; question: string; options?: Array<{ label: string; description?: string }> }> : null;
+            const answers: Record<string, { answers: string[] }> = {};
+            const accepted = await confirmCodex(
+                questions ? "Codex 需要补充信息" : "Codex 请求授权",
+                questions ? <div className="space-y-3">{questions.map((question) => <div key={question.id}>
+                    <div className="mb-1 text-sm">{question.question}</div>
+                    <AutoComplete className="w-full" aria-label={question.question} options={question.options?.map((option) => ({ value: option.label, label: option.description ? `${option.label}：${option.description}` : option.label }))} onChange={(value) => { answers[question.id] = { answers: [value] }; }} />
+                </div>)}</div> : <pre className="whitespace-pre-wrap break-words text-xs">{JSON.stringify(params, null, 2)}</pre>,
+                signal, questions ? "提交" : "允许一次", questions ? "取消" : "拒绝",
+            );
+            return questions ? { answers: accepted ? answers : {} } : method === "item/permissions/requestApproval"
+                ? { permissions: accepted ? params.permissions || {} : {}, scope: "turn" }
+                : { decision: accepted ? "accept" : "decline" };
+        },
+    });
+    const codexModel = codex.models.find((item) => item.model === agentConfig.codexModel) || codex.models.find((item) => item.isDefault) || codex.models[0];
+    const effortLabels: Record<string, string> = { none: "不推理", minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "极高", max: "最大", ultra: "超高" };
+    const codexEffort = codexModel?.supportedReasoningEfforts.some((item) => item.reasoningEffort === agentConfig.codexEffort) ? agentConfig.codexEffort : codexModel?.defaultReasoningEffort;
+    const showCodexConnection = mode === "codex" && (view === "connect" || (view === "chat" && codex.status !== "ready"));
+    const codexControls = mode === "codex" ? <>
+        <Dropdown trigger={["click"]} disabled={isRunning || !codex.models.length} menu={{ selectable: true, selectedKeys: codexModel ? [codexModel.model] : [], items: codex.models.map((item) => ({ key: item.model, label: item.displayName })), onClick: ({ key }) => onAgentConfigChange({ codexModel: key, codexEffort: undefined }) }}>
+            <Button type="text" size="small" style={{ color: theme.node.text }} icon={<Cpu className="size-4" />} aria-label="选择 Codex 模型"><span className="max-w-24 truncate">{codexModel?.displayName || "选择模型"}</span></Button>
+        </Dropdown>
+        <Dropdown trigger={["click"]} disabled={isRunning || !codexModel?.supportedReasoningEfforts.length} menu={{ selectable: true, selectedKeys: codexEffort ? [codexEffort] : [], items: codexModel?.supportedReasoningEfforts.map((item) => ({ key: item.reasoningEffort, label: effortLabels[item.reasoningEffort] || item.reasoningEffort })), onClick: ({ key }) => onAgentConfigChange({ codexEffort: key }) }}>
+            <Button type="text" size="small" style={{ color: theme.node.text }} icon={<Gauge className="size-4" />} aria-label="选择 Codex 推理强度" title={effortLabels[codexEffort || ""] || codexEffort} />
+        </Dropdown>
+    </> : undefined;
+
     const startChatSession = () => {
         if (activeSession && activeSession.messages.length === 0) {
             commitSessions(sessionsRef.current, activeSession.id);
             return;
         }
-        const session = createSession();
+        const session = createSession("", "", mode);
         commitSessions([session, ...sessionsRef.current], session.id);
     };
 
-    const removeSessions = (ids: string[]) => {
-        const next = safeSessions.filter((session) => !ids.includes(session.id));
-        if (!next.length) {
-            const session = createSession();
-            commitSessions([session], session.id);
-        } else {
-            const currentActiveSessionId = activeSessionIdRef.current;
-            commitSessions(next, currentActiveSessionId && ids.includes(currentActiveSessionId) ? next[0].id : currentActiveSessionId);
-        }
+    const removeSessions = async (ids: string[]) => {
+        const removing = sessionsRef.current.filter((session) => (session.provider || "api") === mode && ids.includes(session.id));
+        const next = sessionsRef.current.filter((session) => !removing.some((item) => item.id === session.id));
+        let selected = next.find((session) => session.id === activeSessionIdRef.current) || next.find((session) => (session.provider || "api") === mode);
+        if (!selected) { selected = createSession("", "", mode); next.unshift(selected); }
+        commitSessions(next, selected.id);
         scheduleAttachmentCleanup();
         setCheckedChatIds((previous) => previous.filter((id) => !ids.includes(id)));
-    };
-
-    const clearSessions = () => {
-        const session = createSession();
-        commitSessions([session], session.id);
-        setCheckedChatIds([]);
-        scheduleAttachmentCleanup();
+        // 本地历史立即删除，远端归档仅作尽力同步，失败不能阻断本地操作。
+        const archived = await Promise.all(removing.filter((session) => session.codexThreadId).map((session) => codex.archive(session.codexThreadId!, session.codexServiceId)));
+        if (!mountedRef.current) return;
+        const failed = archived.find((result) => result.status === "failed");
+        if (failed) toast.warning(`本地对话已删除，部分 Codex 远端历史未归档：${failed.message}`);
+        else if (archived.some((result) => result.status === "skipped")) toast.info("本地对话已删除；服务未连接或已更换，Codex 远端历史未归档");
     };
 
     const sendMessage = async (text: string, savedReferences?: CanvasAssistantReference[], baseProtocolMessages?: CanvasAgentProtocolMessage[], onAccepted?: () => void) => {
         if (runningRef.current) return;
+        const targetSession = sessionsRef.current.find((item) => item.id === (activeSessionIdRef.current || resolvedActiveSessionId)) || activeSession;
+        const provider = targetSession?.provider || "api";
+        if (provider === "codex" && codex.status !== "ready") { setView("connect"); toast.info("请先连接本地 Codex 服务"); return; }
         const references = savedReferences || composerReferences;
         if (!text.trim() && !references.length) return;
         runningRef.current = true;
-        const session = sessionsRef.current.find((item) => item.id === (activeSessionIdRef.current || resolvedActiveSessionId)) || activeSession || createSession();
+        const session = targetSession || createSession("", "", mode);
         if (!activeSession) {
-            commitSessions([session], session.id);
+            commitSessions([session, ...sessionsRef.current], session.id);
         }
 
         const sessionSnapshot = sessionsRef.current.find((item) => item.id === session.id) || session;
@@ -415,7 +506,7 @@ export function CanvasAssistantPanel({
             textChannelId,
             activeChannelId: textChannelId || effectiveConfig.activeChannelId,
         };
-        if (!isAiConfigReady(requestConfig, requestConfig.model)) {
+        if (provider === "api" && !isAiConfigReady(requestConfig, requestConfig.model)) {
             openConfigDialog(true);
             updateMessage(session.id, assistantId, {
                 text: "创作 Agent 文本模型尚未配置完成。请从上方选择文本模型，或先在全局配置中完成模型和渠道配置后再继续。",
@@ -440,28 +531,35 @@ export function CanvasAssistantPanel({
                     }
                 }),
             );
-            const result = await runCanvasAgent({
+            const input: Omit<RunCanvasAgentInput, "executeAction"> & { executeAction: (action: CanvasAgentAction, signal?: AbortSignal) => Promise<CanvasAgentToolResult> } = {
                 config: requestConfig,
                 initialState: session.agentState,
                 protocolMessages: baseProtocolMessages || session.protocolMessages,
                 userText: text,
                 references: modelReferences,
                 getContext: getAgentContext,
-                executeAction: async (action) => {
+                executeAction: async (action, signal = controller.signal) => {
+                    signal.throwIfAborted();
                     if (action.name === "delete_node") {
                         const nodeId = typeof action.arguments.nodeId === "string" ? action.arguments.nodeId : "";
                         const node = getCurrentNode(nodeId) || nodes.find((item) => item.id === nodeId);
                         const attachment = attachmentAssets.get(nodeId);
-                        const confirmed = await new Promise<boolean>((resolve) => {
+                        const cancel = () => settleDeleteConfirmation(false);
+                        const confirmed = provider === "codex" ? await confirmCodex(`删除「${node?.title || attachment?.reference.title || "未命名节点"}」？`, "相关连线和任务记录将按现有逻辑清理", signal, "确认删除", "取消", true) : await new Promise<boolean>((resolve) => {
+                            pendingDeleteRef.current?.resolve(false);
                             const pending = { title: node?.title || attachment?.reference.title || "未命名节点", resolve };
                             pendingDeleteRef.current = pending;
                             setPendingDelete(pending);
+                            signal.addEventListener("abort", cancel, { once: true });
                         });
+                        signal.removeEventListener("abort", cancel);
+                        signal.throwIfAborted();
                         if (!confirmed) return { ok: false, code: "delete_cancelled", message: "用户取消删除，原节点已保留" };
                     }
                     const attachmentIds = canvasAgentActionNeedsAttachmentMaterialization(action) ? canvasAgentActionAttachmentIds(action, knownAttachmentAssets) : [];
-                    if (attachmentIds.length) await onMaterializeReferences(attachmentIds.map((id) => attachmentAssets.get(id)!).filter(Boolean), controller.signal);
-                    return onExecuteAction(action, messageReferenceNodeIds, controller.signal);
+                    if (attachmentIds.length) await onMaterializeReferences(attachmentIds.map((id) => attachmentAssets.get(id)!).filter(Boolean), signal);
+                    signal.throwIfAborted();
+                    return onExecuteAction(action, messageReferenceNodeIds, signal);
                 },
                 signal: controller.signal,
                 onEvent: (event) => updateMessage(session.id, assistantId, { status: event.status, activity: event.label }),
@@ -472,7 +570,13 @@ export function CanvasAssistantPanel({
                         protocolMessages: checkpoint.protocolMessages,
                         updatedAt: new Date().toISOString(),
                     })),
-            });
+            };
+            const result = provider === "codex" ? await codex.run({
+                ...input, threadId: session.codexThreadId, serviceId: session.codexServiceId,
+                model: codexModel?.model, effort: codexEffort,
+                onThread: (codexThreadId, codexServiceId) => updateSession(session.id, (current) => ({ ...current, codexThreadId, codexServiceId })),
+                onText: (text) => updateMessage(session.id, assistantId, { text, status: "running", activity: "Codex 正在回复" }),
+            }) : await runCanvasAgent(input);
             updateSession(session.id, (current) => ({
                 ...current,
                 agentState: result.state,
@@ -482,8 +586,9 @@ export function CanvasAssistantPanel({
             }));
         } catch (error) {
             const stopped = error instanceof Error && error.name === "AbortError";
+            const partial = provider === "codex" ? sessionsRef.current.find((item) => item.id === session.id)?.messages.find((item) => item.id === assistantId)?.text : "";
             updateMessage(session.id, assistantId, {
-                text: stopped ? "已停止继续执行。已经生成完成的节点会保留，未完成的请求已停止。" : error instanceof Error ? error.message : "Agent 执行失败",
+                text: [partial, stopped ? "已停止继续执行。已经生成完成的节点会保留，未完成的请求已停止。" : error instanceof Error ? error.message : "Agent 执行失败"].filter(Boolean).join("\n\n"),
                 status: stopped ? "waiting" : "error",
                 activity: undefined,
             });
@@ -499,6 +604,7 @@ export function CanvasAssistantPanel({
     useEffect(() => {
         if (!initialRequest || consumedInitialRequestRef.current === initialRequest || (!initialRequest.prompt.trim() && !initialRequest.references.length)) return;
         if (runningRef.current) return;
+        if (mode !== "api") { switchMode("api"); return; }
         const targetSessionId = activeSessionIdRef.current || sessionsRef.current[0]?.id;
         if (targetSessionId && initialRequest.textModel) {
             updateSession(targetSessionId, (current) => ({
@@ -512,7 +618,7 @@ export function CanvasAssistantPanel({
             consumedInitialRequestRef.current = initialRequest;
             onInitialRequestConsumed?.();
         });
-    }, [initialRequest, onInitialRequestConsumed]);
+    }, [initialRequest, onInitialRequestConsumed, mode]);
 
     const submit = async () => {
         const text = prompt.trim();
@@ -607,9 +713,12 @@ export function CanvasAssistantPanel({
                 >
                     <div className="flex min-w-0 items-center gap-1.5 text-sm font-medium">
                         <Bot className="size-4 shrink-0" />
-                        <span className="shrink-0">{view === "history" ? "历史记录" : "创作 Agent"}</span>
+                        <button type="button" className="flex min-w-0 items-center gap-1.5 whitespace-nowrap" disabled={isRunning} onClick={() => switchMode()} aria-label={mode === "api" ? "切换到 Codex" : "切换到创作 Agent"}>
+                            {mode === "codex" ? "Codex" : "创作 Agent"}<ArrowLeftRight className="size-3.5 opacity-50" />
+                        </button>
                     </div>
                     <div className="flex items-center gap-1">
+                        {mode === "codex" ? <Tooltip title="Codex 连接设置"><Button type="text" shape="circle" size="small" style={iconButtonStyle} icon={<PlugZap className="size-4" />} disabled={isRunning} onClick={() => setView(view === "connect" ? "chat" : "connect")} aria-label="Codex 连接设置" /></Tooltip> : null}
                         {view === "history" ? (
                             <>
                                 <Tooltip title="删除选中">
@@ -673,7 +782,7 @@ export function CanvasAssistantPanel({
                 </div>
 
                 <div ref={messageListRef} className="thin-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
-                    {view === "history" ? (
+                    {showCodexConnection ? <CanvasCodexConnectView agent={codex} onChat={() => setView("chat")} /> : view === "history" ? (
                         <AssistantHistory
                             sessions={historySessions}
                             activeSession={activeSession}
@@ -699,7 +808,14 @@ export function CanvasAssistantPanel({
                     )}
                 </div>
 
-                {view === "chat" ? (
+                {codexConfirmations.length ? <div className="thin-scrollbar max-h-[45%] shrink-0 overflow-y-auto px-2 pb-2">
+                    {codexConfirmations.map((confirmation) => <div key={confirmation.id} className="mb-2 rounded-xl border p-3" style={{ background: theme.node.fill, borderColor: theme.node.stroke }}>
+                        <div className="mb-2 text-sm font-medium">{confirmation.title}</div>
+                        <div className="max-h-48 overflow-auto">{confirmation.content}</div>
+                        <div className="mt-3 flex justify-end gap-2">{confirmation.actions.map((action, index) => <Button key={action.label} size="small" type={index ? "primary" : "default"} danger={action.danger} onClick={action.onClick}>{action.label}</Button>)}</div>
+                    </div>)}
+                </div> : null}
+                {view === "chat" && !showCodexConnection ? (
                     <>
                         {pendingDelete ? (
                             <div className="mx-2 mb-2 overflow-hidden rounded-xl border" style={{ background: theme.node.fill, borderColor: theme.node.stroke }}>
@@ -720,7 +836,8 @@ export function CanvasAssistantPanel({
                         <CanvasAssistantComposer
                             textModel={activeTextModel}
                             textChannelId={activeTextChannelId}
-                            onTextModelChange={selectTextModel}
+                            onTextModelChange={mode === "api" ? selectTextModel : undefined}
+                            modelControls={codexControls}
                             prompt={prompt}
                             isRunning={isRunning}
                             submitDisabled={uploadingAssetCount > 0}
@@ -761,7 +878,7 @@ export function CanvasAssistantPanel({
                                 type="primary"
                                 disabled={isRunning}
                                 onClick={() => {
-                                    deleteChatIds.length === historySessions.length ? clearSessions() : removeSessions(deleteChatIds);
+                                    void removeSessions(deleteChatIds);
                                     setDeleteChatIds([]);
                                 }}
                             >
@@ -1098,10 +1215,11 @@ function findProtocolTurnStart(messages: CanvasAgentProtocolMessage[], userText:
     return messages.length;
 }
 
-function createSession(textModel = "", textChannelId = ""): CanvasAssistantSession {
+function createSession(textModel = "", textChannelId = "", provider: "api" | "codex" = "api"): CanvasAssistantSession {
     const now = new Date().toISOString();
     return {
         id: nanoid(),
+        provider,
         title: "新对话",
         messages: [],
         ...(textModel ? { textModel } : {}),

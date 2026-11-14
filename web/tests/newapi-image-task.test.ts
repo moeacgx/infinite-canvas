@@ -74,7 +74,7 @@ if (typeof URL.createObjectURL !== "function") {
     URL.revokeObjectURL = () => undefined;
 }
 
-const { requestGeneration } = await import("../src/services/api/image.ts");
+const { requestGeneration, requestEdit } = await import("../src/services/api/image.ts");
 
 const pngBlob = new Blob([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], { type: "image/png" });
 
@@ -103,6 +103,78 @@ function postedJson(config: AxiosRequestConfig) {
     if (data && typeof data === "object" && !(data instanceof FormData)) return data as Record<string, unknown>;
     return {};
 }
+
+for (const quality of ["auto", "high"]) {
+    test(`New API Gemini 双图编辑保留图片文件、登录态和分组（${quality}）`, { timeout: 2_000 }, async (context) => {
+        const originalAdapter = axios.defaults.adapter;
+        context.after(() => { axios.defaults.adapter = originalAdapter; });
+        let edits = 0;
+        axios.defaults.adapter = (async (config) => {
+            assert.equal(config.method, "post");
+            assert.equal(config.url, "https://newapi.example/canvas/v1/images/tasks");
+            assert.deepEqual(config.params, { action: "edits", group: "image-group" });
+            assert.equal(config.withCredentials, true);
+            assert.equal(config.headers?.Authorization, undefined);
+            const form = config.data as FormData;
+            assert.ok(form instanceof FormData);
+            assert.equal(form.get("model"), "gemini-3-pro-image-preview");
+            assert.equal(form.has("quality"), false);
+            assert.equal(form.get("size"), quality === "auto" ? null : "2880x2880");
+            assert.equal(form.get("n"), "1");
+            assert.equal(form.get("response_format"), "b64_json");
+            assert.equal(form.get("output_format"), "png");
+            const files = form.getAll("image") as File[];
+            assert.equal(files.length, 2);
+            assert.deepEqual(await Promise.all(files.map(async (file) => [file.name, file.type, await file.text()])), [
+                ["monkey.png", "image/png", "MONKEY"], ["rabbit.jpg", "image/jpeg", "RABBIT"],
+            ]);
+            edits += 1;
+            return axiosOk(config, { task_id: "gemini-edit", status: "succeeded", result: { data: [{ b64_json: "AAAA" }] } });
+        }) as AxiosAdapter;
+        const images = await requestEdit({
+            ...newApiConfig(),
+            baseUrl: "https://newapi.example/canvas/v1",
+            newApiImageGroup: "image-group",
+            model: "gemini-3-pro-image-preview",
+            imageModel: "gemini-3-pro-image-preview",
+            models: ["gemini-3-pro-image-preview"],
+            imageModels: ["gemini-3-pro-image-preview"],
+            quality,
+            size: quality === "auto" ? "auto" : "1:1",
+        }, "把猴子跟兔子放在一起合照", [
+            { id: "monkey", name: "monkey.png", type: "image/png", dataUrl: "data:image/png;base64,TU9OS0VZ" },
+            { id: "rabbit", name: "rabbit.jpg", type: "image/jpeg", dataUrl: "data:image/jpeg;base64,UkFCQklU" },
+        ]);
+        assert.equal(edits, 1);
+        assert.equal(images.length, 1);
+    });
+}
+
+test("New API Gemini 编辑任务失败保留服务端错误且不重复创建任务", { timeout: 2_000 }, async (context) => {
+    const originalAdapter = axios.defaults.adapter;
+    context.after(() => { axios.defaults.adapter = originalAdapter; });
+    const message = "image generation service is temporarily unavailable / 图片生成服务暂时不可用";
+    let edits = 0;
+    axios.defaults.adapter = (async (config) => {
+        if (config.method === "post") {
+            edits += 1;
+            return axiosOk(config, { task_id: "failed-gemini-edit", status: "queued" });
+        }
+        assert.ok(String(config.url).endsWith("/images/tasks/failed-gemini-edit"));
+        return axiosOk(config, { task_id: "failed-gemini-edit", status: "failed", error: { message } });
+    }) as AxiosAdapter;
+    await assert.rejects(requestEdit({
+        ...newApiConfig(),
+        model: "gemini-3-pro-image-preview",
+        imageModel: "gemini-3-pro-image-preview",
+        models: ["gemini-3-pro-image-preview"],
+        imageModels: ["gemini-3-pro-image-preview"],
+    }, "合照", [
+        { id: "monkey", name: "monkey.png", type: "image/png", dataUrl: "data:image/png;base64,TU9OS0VZ" },
+        { id: "rabbit", name: "rabbit.jpg", type: "image/jpeg", dataUrl: "data:image/jpeg;base64,UkFCQklU" },
+    ]), { message });
+    assert.equal(edits, 1);
+});
 
 test("New API 信封 + SUCCESS 任务会解析出图片，而不是把已成功任务判失败", { timeout: 2_000 }, async (context) => {
     const originalAdapter = axios.defaults.adapter;

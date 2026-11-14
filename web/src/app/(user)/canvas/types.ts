@@ -185,6 +185,9 @@ export type CanvasAgentPhase = "intake" | "concept" | "script" | "breakdown" | "
 export const DEFAULT_CANVAS_AGENT_VIDEO_SIZE = "1280x720";
 
 export type CanvasAgentConfig = {
+    mode?: "api" | "codex";
+    codexModel?: string;
+    codexEffort?: string;
     imageQuality: string;
     imageSize: string;
     imageCount: string;
@@ -234,6 +237,9 @@ export type CanvasAssistantMessage = {
 
 export type CanvasAssistantSession = {
     id: string;
+    provider?: "api" | "codex";
+    codexThreadId?: string;
+    codexServiceId?: string;
     title: string;
     messages: CanvasAssistantMessage[];
     textModel?: string;

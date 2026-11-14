@@ -440,6 +440,9 @@ function InfiniteCanvasPage() {
 
     const resolvedAgentConfig = useMemo<CanvasAgentConfig>(
         () => ({
+            mode: agentConfig?.mode || "api",
+            codexModel: agentConfig?.codexModel,
+            codexEffort: agentConfig?.codexEffort,
             imageQuality: agentConfig?.imageQuality || effectiveConfig.quality,
             imageSize: agentConfig?.imageSize || effectiveConfig.size,
             imageCount: agentConfig?.imageCount || effectiveConfig.canvasImageCount || effectiveConfig.count,
@@ -643,6 +646,18 @@ function InfiniteCanvasPage() {
         };
     }, [hydrated, openProject, projectId, router]);
 
+    useEffect(() => {
+        if (!projectReady) return;
+        const bootstrap = () => {
+            const params = new URLSearchParams(window.location.hash.slice(1));
+            if (!params.has("agentUrl") && !params.has("agentToken")) return;
+            setAssistantMounted(true);
+            setAgentPanel((current) => ({ ...current, open: true }));
+        };
+        bootstrap();
+        window.addEventListener("hashchange", bootstrap);
+        return () => window.removeEventListener("hashchange", bootstrap);
+    }, [projectId, projectReady]);
 
     useEffect(() => {
         if (!projectReady || applyingHistoryRef.current || historyPausedRef.current) return;
@@ -4686,6 +4701,8 @@ function InfiniteCanvasPage() {
             {assistantMounted ? (
                 <CanvasAssistantPanel
                     key={projectId}
+                    canvasId={projectId}
+                    onOpen={() => setAgentPanel((current) => ({ ...current, open: true }))}
                     nodes={nodes}
                     selectedNodeIds={selectedNodeIds}
                     sessions={chatSessions}

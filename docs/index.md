@@ -20,6 +20,7 @@
 - [系统配置数据结构](/docs/backend/system-settings)
 - [后端数据库说明](/docs/backend/backend-database)
 - [画布数据结构](/docs/backend/canvas-data-structure)
+- [上游对比与选择性同步](./upstream-sync.md)
 
 ## 商务合作
 

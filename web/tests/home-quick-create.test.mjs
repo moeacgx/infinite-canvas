@@ -116,7 +116,14 @@ test("创作 Agent 保持单飞重试并让未知视觉模型先尝试接收图�
 });
 
 test("停止创作 Agent 会把取消信号传给当前媒体生成", () => {
-    assert.match(assistantPanelSource, /onExecuteAction\(action, messageReferenceNodeIds, controller\.signal\)/);
+    const codexAgentSource = readFileSync(new URL("../src/app/(user)/canvas/agent/use-codex-agent.ts", import.meta.url), "utf8");
+    // 普通 Agent 默认使用本轮信号，Codex 可传入同时响应工具超时和停止的组合信号。
+    assert.match(assistantPanelSource, /executeAction:\s*async\s*\(action, signal = controller\.signal\)\s*=>\s*\{\s*signal\.throwIfAborted\(\)/);
+    assert.match(assistantPanelSource, /signal\.throwIfAborted\(\);\s*return onExecuteAction\(action, messageReferenceNodeIds, signal\)/);
+    assert.match(codexAgentSource, /const signal = AbortSignal\.any\(\[link\.signal, controller\.signal, .*pending\.controller\.signal/);
+    assert.match(codexAgentSource, /executeActions\([^\n]*\(action\) => pending\.input\.executeAction\(action, signal\), signal,/);
+    assert.match(codexAgentSource, /input\.signal\?\.addEventListener\("abort", abort, \{ once: true \}\)/);
+    assert.match(codexAgentSource, /pending\.controller\.abort\(\)/);
     assert.match(assistantPanelSource, /imageToDataUrl\(reference, controller\.signal\)/);
     assert.match(canvasClientSource, /handleGenerateNode\(node\.id, mode, prompt, signal\)/);
     assert.match(canvasClientSource, /hydrateNodeGenerationContext\([\s\S]*runController\.signal/);

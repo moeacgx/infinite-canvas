@@ -277,7 +277,7 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
     return { reply, state, protocolMessages: persistCanvasAgentProtocolMessages(protocolMessages) };
 }
 
-async function executeActions(
+export async function executeActions(
     actions: CanvasAgentAction[],
     initialState: CanvasAgentState,
     budget: CanvasAgentExecutionBudget,
