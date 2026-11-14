@@ -5,7 +5,7 @@ description: 打开、连接或操作 Infinite Canvas 画布；未连接时启�
 
 # 打开、连接和操作画布
 
-本分支优先运行插件内的 Agent 源码，画布操作使用本插件 MCP 提供的现有工具。服务工作目录隔离与停止修复尚未发布到上游 npm 包；不要用上游 `@latest` 启动命令替代本分支服务。已运行服务的 `config/open/mcp` 客户端命令仍可使用上游 npm 包。
+本插件由 `moeacgx/infinite-canvas` 独立分发。服务、MCP 与连接命令全部使用插件随附的 `bootstrap.mjs`，首次启动自动安装锁定依赖。不要下载或运行其他仓库的 Canvas Agent 包。
 
 - 已连接且目标画布已确认时，直接操作，跳过下方连接流程；首次连接、目标改变或连接失效时再确认目标。
 - 直接调用当前对话提供的画布 MCP 工具，不编写临时脚本另建 MCP 客户端。工具缺失时定位插件加载状态和启动错误，不以脚本调用成功代替插件工具加载成功。
@@ -14,17 +14,17 @@ description: 打开、连接或操作 Infinite Canvas 画布；未连接时启�
 
 ## 建立连接
 
-从本 SKILL.md 所在目录向上两级确定插件根目录（其中必须有 `package.json` 和 `index.mjs`），运行 `npm --prefix <插件根目录> install` 安装本地依赖。已存在依赖时直接运行入口。缺少 Node.js 22+、npm/npx、插件源码或下载失败时说明实际错误并停止，不猜测开发机路径。
+从本 SKILL.md 所在目录向上两级确定插件根目录（其中必须有 `package.json`、`package-lock.json` 和 `bootstrap.mjs`）。下文所有命令中的 `<插件根目录>` 都替换为该真实绝对路径，不需要用户另行克隆源码或安装依赖。缺少 Node.js 22+、npm、插件源码或下载失败时说明实际错误并停止，不猜测开发机路径。
 
 Windows 启动权限：执行第 3 步后台服务或第 5 步浏览器打开命令时，使用用户的正常桌面账户，连接配置也应属于同一桌面用户。现有权限不足时，先通过执行工具实际发起桌面执行权限申请；工具支持 `sandbox_permissions` 时设置为 `require_escalated` 并填写 `justification`，获批后自动继续，覆盖当前命令的已有授权直接复用，不额外聊天确认。仅申请配置目录写入权限不能替代桌面执行权限，不在沙箱账户中强行启动。
 
 会话禁止申请权限、用户拒绝或自动审批拒绝时，停止对应启动，明确说明被拒绝的操作和原因；不修改权限策略、不换工具绕过拒绝，也不默认转成让用户在 PowerShell 手动执行。用户主动选择手动方式时再提供命令。
 
 1. 优先使用用户已经给出的画布 URL 和已观察到的原画布标签，不重复索取地址。实际画布路由是 `/canvas/[id]`。不同浏览器或配置文件可能没有同一份本地项目；连接已有画布时保留原浏览器环境，不先在内置浏览器打开裸链接。只有用户要求新建时，才在目标站点 `/canvas` 列表通过现有“新建”操作进入画布，不能拼造画布 ID。无法确定站点时再询问实际地址。
-2. 执行 `npx -y @tigerowo/canvas-agent@latest config` 读取 `{url, token, origins}`，并请求其 `GET /config` 判断服务是否已启动。config 不改本机连接配置。HTTP `/config` 只提供 `{url, hasToken}`，不包含 Token；首次尚无本机配置时进入启动步骤。
-3. 服务未运行时，用当前环境提供的后台终端运行 `node <插件根目录>/index.mjs`，保持进程存活，包含空格的路径须正确引用。Windows 使用 `Start-Process` 时必须带 `-WindowStyle Hidden`。不要安装或发布额外全局包。启动失败或端口属于其他服务时读取错误并停止，不反复启动或结束未知进程。已有服务正常时不要重复启动。
-4. 读取启动输出的 `Local URL`、`Connect token`，或再次执行 `npx -y @tigerowo/canvas-agent@latest config`。Token 保存在当前用户的 `~/.infinite-canvas/codex-agent.json`，无需用户创建 `.env`、生成 Token 或录入网站来源。不要在回复、文档或额外日志中复制 Token 或包含它的完整连接链接。
-5. 原画布标签可控时，用标准 `URL` 和 `URLSearchParams` 保留原链接及其他 fragment 参数，设置 `agentUrl`、`agentToken`，在该标签打开连接链接。原浏览器不可控时，执行 `npx -y @tigerowo/canvas-agent@latest open "<原画布URL>" <浏览器> [浏览器参数...]`，入口会自动带入凭据并打开浏览器，无需读取或输出完整连接链接。浏览器取 `chrome`、`edge`、`firefox`、`brave`；只有已确认原画布使用系统默认浏览器时才用 `default`。使用已确认的原配置文件参数；无法确定原浏览器或配置时只询问缺失的信息，不猜测、不切换内置浏览器。Token 仅写入 fragment，不放普通 query。
+2. 执行 `node "<插件根目录>/bootstrap.mjs" config` 读取 `{url, token, origins}`，并请求其 `GET /config` 判断服务是否已启动。HTTP `/config` 不包含 Token，其 `distribution` 必须为 `moeacgx/infinite-canvas`，`version` 必须与插件 `package.json` 一致；其他来源或旧版本不能复用，应提示停止已确认的旧服务后重新连接，不擅自终止未知进程。首次尚无本机配置时进入启动步骤。
+3. 服务未运行时，用当前环境提供的后台终端运行 `node "<插件根目录>/bootstrap.mjs"`，保持进程存活。Windows 使用 `Start-Process` 时必须带 `-WindowStyle Hidden`，并正确引用含空格的脚本路径。首次自动安装依赖，等待服务就绪；启动失败或端口属于其他服务时读取错误并停止，不反复启动或结束未知进程。已有同版本本仓库服务正常时不要重复启动。
+4. 读取启动输出的 `Local URL`、`Connect token`，或再次执行 `node "<插件根目录>/bootstrap.mjs" config`。Token 保存在当前用户独立的 `~/.infinite-canvas-moe/codex-agent.json`，无需用户创建 `.env`、生成 Token 或录入网站来源。不要在回复、文档或额外日志中复制 Token 或包含它的完整连接链接。
+5. 原画布标签可控时，用标准 `URL` 和 `URLSearchParams` 保留原链接及其他 fragment 参数，设置 `agentUrl`、`agentToken`，在该标签打开连接链接。原浏览器不可控时，执行 `node "<插件根目录>/bootstrap.mjs" open "<原画布URL>" <浏览器> [浏览器参数...]`，入口会自动带入凭据并打开浏览器，无需读取或输出完整连接链接。浏览器取 `chrome`、`edge`、`firefox`、`brave`；只有已确认原画布使用系统默认浏览器时才用 `default`。使用已确认的原配置文件参数；无法确定原浏览器或配置时只询问缺失的信息，不猜测、不切换内置浏览器。Token 仅写入 fragment，不放普通 query。
 6. 打开命令成功不代表已连接。等待画布 MCP 工具可用，再调用 `get_canvas_summary` 确认目标，成功后继续用户任务；无需能控制系统浏览器标签。网页的本地网络权限提示由用户允许。失败时定位服务、网页连接或原浏览器配置的问题，不转成手填 Token 教程，不用其他画布替代目标。多个画布连接时明确当前目标，不能随意选一个执行。
 
-浏览器连接需要与 Agent 在同一台电脑，npm 包下载后仍在本机运行。Codex 未登录时执行 `npx -y @openai/codex@0.159.2 login`，让用户完成登录；不要读取或复制账号凭证。只执行用户请求所需的启动、连接和画布操作。
+浏览器连接需要与 Agent 在同一台电脑，依赖下载后仍在本机运行。Codex 未登录时执行 `node "<插件根目录>/node_modules/@openai/codex/bin/codex.js" login`，让用户完成登录；不要读取或复制账号凭证。只执行用户请求所需的启动、连接和画布操作。

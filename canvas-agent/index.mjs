@@ -11,7 +11,7 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprot
 import { CodexClient } from "./codex.mjs";
 
 const entry = fileURLToPath(import.meta.url);
-const configPath = resolve(homedir(), ".infinite-canvas", "codex-agent.json");
+const configPath = resolve(homedir(), ".infinite-canvas-moe", "codex-agent.json");
 const readConfig = () => existsSync(configPath) ? JSON.parse(readFileSync(configPath, "utf8")) : null;
 const savedConfig = readConfig();
 const serviceId = savedConfig?.serviceId || randomUUID();
@@ -23,7 +23,8 @@ const port = Number(process.env.CANVAS_AGENT_PORT || savedConfig?.port || 3210);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("本地服务端口无效");
 const endpoint = "http://127.0.0.1:" + port;
 // 将模型可写目录与下一次启动时执行的 Agent / MCP 程序隔离。
-const workspace = resolve(homedir(), ".infinite-canvas", "workspace");
+const workspace = resolve(homedir(), ".infinite-canvas-moe", "workspace");
+const identity = { distribution: "moeacgx/infinite-canvas", version: JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version };
 const origins = new Set(process.env.CANVAS_AGENT_ORIGINS?.split(",").map((value) => value.trim()).filter(Boolean) || savedConfig?.origins || []);
 const sessions = new Map();
 const methods = new Set(["model/list", "thread/start", "thread/resume", "thread/archive", "turn/start", "turn/interrupt", "bridge/stop"]);
@@ -164,7 +165,7 @@ async function startMcp() {
         if (!response.ok) throw new Error(value.error || "画布连接失败");
         return value;
     }
-    const server = new Server({ name: "infinite-canvas", version: "0.1.0" }, { capabilities: { tools: { listChanged: true } } });
+    const server = new Server({ name: "infinite-canvas", version: identity.version }, { capabilities: { tools: { listChanged: true } } });
     const toolsPath = "/tools?clientId=" + encodeURIComponent(clientId);
     server.setRequestHandler(ListToolsRequestSchema, async () => {
         try {
@@ -210,7 +211,7 @@ function startHttp() {
             res.setHeader("Access-Control-Allow-Private-Network", "true");
         }
         if (req.method === "OPTIONS") return res.sendStatus(204);
-        if (req.method === "GET" && req.path === "/config") return res.json({ url: endpoint, hasToken: Boolean(token) });
+        if (req.method === "GET" && req.path === "/config") return res.json({ url: endpoint, hasToken: Boolean(token), ...identity });
         const credential = req.path === "/events" ? req.query.token : req.headers["x-canvas-agent-token"];
         if (credential !== token) return res.status(401).json({ error: "Token 不正确" });
         if (origin && !origins.has(origin)) {

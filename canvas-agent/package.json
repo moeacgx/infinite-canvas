@@ -1,21 +1,18 @@
 {
-    "name": "@tigerowo/canvas-agent",
-    "version": "0.1.3",
+    "name": "@moeacgx/canvas-agent",
+    "version": "0.11.18",
+    "private": true,
     "type": "module",
     "bin": {
-        "canvas-agent": "index.mjs"
-    },
-    "files": ["index.mjs", "codex.mjs"],
-    "publishConfig": {
-        "access": "public"
+        "canvas-agent": "bootstrap.mjs"
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/tigerowo/infinite-canvas.git",
+        "url": "git+https://github.com/moeacgx/infinite-canvas.git",
         "directory": "canvas-agent"
     },
     "scripts": {
-        "start": "node index.mjs",
+        "start": "node bootstrap.mjs",
         "codex": "codex"
     },
     "engines": {

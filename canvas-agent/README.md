@@ -1,59 +1,68 @@
 # Canvas Agent
 
-网页对话通过本地服务运行 Codex，插件通过同一个 MCP 操作画布。工具定义、节点操作和生成流程继续使用网页现有实现。
+由 `moeacgx/infinite-canvas` 独立分发的 Codex 插件和本地 Agent。网页对话与插件 MCP 使用本仓库同一套服务，画布工具沿用网页现有实现。
 
-## 启动
+## 安装插件
 
-安装 Node.js 22+ 后，在本仓库根目录执行，启动包含本分支修复的服务：
-
-```sh
-npm --prefix canvas-agent install
-npm --prefix canvas-agent start
-```
-
-首次启动自动生成 Token，保存在当前用户的 `~/.infinite-canvas/codex-agent.json`；下次启动复用。终端显示 `Local URL` 和 `Connect token`，默认地址为 `http://127.0.0.1:3210`。网页与服务在同一台电脑运行，无需手工创建 `.env`；正确 Token 连接后自动记录网站来源。
-
-上游 `npx -y @tigerowo/canvas-agent@latest` 也兼容网页协议，但本次核对的发布版本为 `0.1.3`，尚不包含本分支的工作目录隔离和停止修复。当前优先使用上面的源码启动方式。`npx ... config/open/mcp` 仅作为已启动服务的客户端，仍可使用。
-
-Codex 尚未登录时执行 `npx -y @openai/codex@0.159.2 login` 并完成登录，已有登录态会直接复用。
-
-## 插件自动连接
-
-在 Codex 所在电脑执行：
+本机需要 Node.js 22+（含 npm）和支持插件的 Codex。在 Codex 所在电脑执行：
 
 ```sh
-codex plugin marketplace add https://github.com/tigerowo/infinite-canvas.git
-codex plugin add canvas-agent@infinite-canvas
+codex plugin marketplace add https://github.com/moeacgx/infinite-canvas.git
+codex plugin add canvas-agent@infinite-canvas-moe
 ```
 
-必须先启动并保持本仓库服务运行，再安装插件并新建 Codex 对话，说“帮我打开并连接到 Infinite Canvas，使用已经运行的本地服务”。插件会复用已运行服务，优先使用当前对话提供的画布地址或原画布标签；无法确定站点时再询问地址。上述命令安装的是上游插件，不会发布本仓库修改。
+新建 Codex 对话，说“帮我打开并连接到 Infinite Canvas”，并沿用当前画布地址。插件首次运行自动安装锁定依赖，由连接 Skill 启动本仓库 Agent 并传入连接信息，无需另外克隆源码、手动安装依赖或手动启动服务。浏览器的本地网络权限提示由用户允许。
 
-服务退出后先重新运行 `npm --prefix canvas-agent start`，不要让上游插件代为启动旧 npm 服务。本仓库内的连接 Skill 已使用修复后的源码入口，但安装上游市场插件不会获取本地尚未发布的修改。
+市场定义 `.agents/plugins/marketplace.json` 指向本仓库 `canvas-agent` 目录。MCP 以插件目录为工作目录执行 `node bootstrap.mjs mcp`，服务和连接命令也使用同一入口。更新通过本仓库插件市场获取，不下载上游 Canvas Agent npm 包；本仓库无需另行发布 npm 包。`@openai/codex` 等第三方依赖由 `package-lock.json` 锁定。
 
-插件市场定义在仓库根目录的 `.agents/plugins/marketplace.json`，指向仓库内的 `canvas-agent` 插件目录。市场名 `infinite-canvas` 仅为安装标识；插件由 GitHub 获取，MCP 和连接 Skill 通过 npx 使用 npm 上的服务，无需进入插件缓存安装依赖。
+## 从旧插件切换
 
-插件连接已运行的本仓库服务、自动带入连接信息，并通过 MCP 确认目标画布。已有画布优先复用原浏览器标签；标签不可控时使用 `npx -y @tigerowo/canvas-agent@latest open "<画布URL>" <浏览器> [浏览器参数...]`。浏览器支持 `chrome`、`edge`、`firefox`、`brave` 和 `default`，保持原浏览器及配置；画布地址沿用实际的 `/canvas/[id]` 路由。浏览器的本地网络权限提示由用户允许。
-
-移除插件执行 `codex plugin remove canvas-agent`。
-
-## 直接注册 MCP
-
-与插件安装二选一：
+已安装上游插件时，先执行：
 
 ```sh
-codex mcp add infinite-canvas -- npx -y @tigerowo/canvas-agent@latest mcp
+codex plugin remove canvas-agent@infinite-canvas
 ```
 
-直接注册 MCP 不包含自动打开 Skill，需要先启动服务并连接画布。移除时执行 `codex mcp remove infinite-canvas`。
+若曾手动添加旧 MCP，再执行 `codex mcp remove infinite-canvas`。停止之前运行的旧 Agent，然后安装上方本仓库插件并新建对话。移除插件不会自动停止已启动的后台服务；默认端口被占用时应先确认旧服务来源，不终止未知进程。
+
+本仓库使用独立配置目录 `~/.infinite-canvas-moe/`，不会读取上游连接配置；首次生成新的 Token，重新通过插件打开画布即可自动更新网页连接信息。移除本仓库插件使用 `codex plugin remove canvas-agent@infinite-canvas-moe`。
+
+## 可选：源码启动与直接注册 MCP
+
+已有本仓库源码时，在仓库根目录执行：
+
+```sh
+node canvas-agent/bootstrap.mjs
+```
+
+首次自动安装依赖并生成 Token，保存在当前用户的 `~/.infinite-canvas-moe/codex-agent.json`。终端显示 `Local URL` 和 `Connect token`，默认地址为 `http://127.0.0.1:3210`；连接期间保持服务运行。网页与 Agent 必须在同一台电脑，无需创建 `.env`。
+
+直接注册 MCP 与安装插件二选一（路径替换为本仓库真实绝对路径）：
+
+```sh
+codex mcp add infinite-canvas -- node "<仓库绝对路径>/canvas-agent/bootstrap.mjs" mcp
+```
+
+直接注册 MCP 不包含自动打开 Skill，需要先启动服务并连接画布。移除使用 `codex mcp remove infinite-canvas`。
 
 ## 本机配置与范围
 
-`npx -y @tigerowo/canvas-agent@latest config` 输出 `{url, token, origins}`，首次尚未启动时会提示先启动服务。HTTP `GET /config` 只返回 `{url, hasToken}`；Token 和包含它的连接链接不要分享。
+`node canvas-agent/bootstrap.mjs config` 输出 `{url, token, origins}`；首次尚未启动时提示先启动服务。HTTP `GET /config` 只提供地址、是否设置 Token，以及 `distribution`、`version`，不返回 Token。连接 Skill 核对服务来源与插件版本后才复用服务。
 
-`CANVAS_AGENT_TOKEN`、`CANVAS_AGENT_PORT`、`CANVAS_AGENT_ORIGINS` 可选环境变量覆盖 Token、端口和预置来源；更改后重启服务。通常无需设置。
+`node canvas-agent/bootstrap.mjs open "<原画布URL>" <浏览器> [浏览器参数...]` 自动带入凭据并打开原浏览器。支持 `chrome`、`edge`、`firefox`、`brave`、`default`，必须保持原浏览器与配置文件；画布路由为 `/canvas/[id]`。Token 只写入 URL fragment，不要分享 Token 或完整连接链接。
 
-外部 MCP 默认只操作唯一已连接的画布；多个画布连接时，通过 MCP 环境变量 `CANVAS_AGENT_CLIENT_ID` 明确目标。断开连接会结束对应 Codex 进程，已提交的生成任务仍由现有画布流程处理。
+`CANVAS_AGENT_TOKEN`、`CANVAS_AGENT_PORT`、`CANVAS_AGENT_ORIGINS` 可选覆盖 Token、端口和预置来源；通常无需设置。Codex 未登录时，依赖就绪后执行 `node canvas-agent/node_modules/@openai/codex/bin/codex.js login`；不读取或复制账号凭据。
 
-默认权限为 `workspace-write` 与 `on-request`，工作目录为独立的 `~/.infinite-canvas/workspace`，与 Agent 和 MCP 程序目录隔离。服务不写 Codex 全局配置文件；其他全局 MCP 是否合并到当前会话尚未联调确认。
+外部 MCP 默认操作唯一已连接的画布；多个画布连接时，通过 `CANVAS_AGENT_CLIENT_ID` 明确目标。默认权限为 `workspace-write` 与 `on-request`，模型工作目录为独立的 `~/.infinite-canvas-moe/workspace`，与 Agent 程序隔离。服务不改写 Codex 全局配置。
 
-服务回归测试可在 `canvas-agent` 目录运行 `node --experimental-test-module-mocks --test --test-timeout=60000 tests/bridge.test.mjs`，使用临时配置和模拟 Codex，不读取本机账号或调用付费模型。
+依赖安装有进程锁，MCP 和连接命令同时启动也只安装一次。安装日志写入 stderr，不污染 MCP 协议；下载失败可以重试。若安装进程被强制结束后留下 `.install-lock`，确认没有安装进程运行后移除该锁再重试。
+
+## 回归测试
+
+在 `canvas-agent` 目录运行：
+
+```sh
+node --experimental-test-module-mocks --test --test-timeout=60000 tests/bootstrap.test.mjs tests/bridge.test.mjs tests/plugin-install.test.mjs
+```
+
+服务测试使用模拟 Codex；安装测试使用真实 Codex CLI 与临时配置，验证依赖下载和 MCP 握手，不读取本机账号或调用付费模型。CI 在 Windows 与 Linux 验证安装与服务链路。

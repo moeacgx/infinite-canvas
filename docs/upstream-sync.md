@@ -13,9 +13,9 @@
 
 参考上游 `79b8666`、`6571143` 及最新快照，恢复画布对话中的创作 Agent / Codex 切换，接入本地服务、连接设置、Codex 会话和现有画布工具。保留本仓库浮动窗口、首页快速创作、会话模型选择和创作 Agent 的请求恢复逻辑。
 
-导入 `canvas-agent` 中 Codex 所需的入口、客户端、包描述、MCP 配置、插件描述及连接 Skill；不引入 ComfyUI 原生 Bridge 和构建流程。独立审查后修复了上游的可写工作目录与程序目录重合、同代停止请求不终止进程两项问题。网页推荐在仓库根目录安装并启动本地 `canvas-agent`；上游已发布 `0.1.3` 尚不包含这两项修复。
+导入 `canvas-agent` 中 Codex 所需的入口、客户端、包描述、MCP 配置、插件描述及连接 Skill；不引入 ComfyUI 原生 Bridge 和构建流程。独立审查后修复了上游的可写工作目录与程序目录重合、同代停止请求不终止进程两项问题。插件与 Agent 现由本仓库独立分发，运行插件随附的修复版代码。
 
-插件安装命令仍指向上游市场，必须先启动并保持本分支服务，再让插件复用连接；服务退出后先手动重启本分支服务，不让上游插件启动旧包。MCP 客户端继续兼容上游 npm 包。未发布本分支 npm 包或推送插件市场，不将本地修改描述为已经进入上游 `@latest`。
+插件市场使用 `moeacgx/infinite-canvas`，独立市场名为 `infinite-canvas-moe`。MCP、服务、config 和 open 命令统一执行插件随附的 `bootstrap.mjs`，首次自动安装锁定依赖；不依赖上游 Canvas Agent npm 包。本机配置和模型工作目录位于独立的 `~/.infinite-canvas-moe/`。旧上游插件需移除、旧服务需停止后再安装本仓库插件。
 
 本地 Agent 需要 Node.js 22+，运行在浏览器所在电脑，复用本机 Codex 登录态。网页可通过插件链接自动获取连接信息，或手动填写本地地址和 Connect token。Token 通过 URL fragment 导入后清除，连接配置保存在浏览器；画布业务数据仍使用原有本地存储。详细启动步骤见 [Canvas Agent](../canvas-agent/README.md)。
 

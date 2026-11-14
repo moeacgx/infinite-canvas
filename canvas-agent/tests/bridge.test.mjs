@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
@@ -55,7 +55,8 @@ test("本地服务隔离模型工作目录，并真正停止当前代任务", { 
     const headers = { "content-type": "application/json", "x-canvas-agent-token": token };
     const post = (path, body) => fetch(endpoint + path, { method: "POST", headers, body: JSON.stringify({ clientId: "test", ...body }) });
     const config = await fetch(endpoint + "/config").then((response) => response.json());
-    assert.deepEqual(config, { url: endpoint, hasToken: true });
+    const version = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
+    assert.deepEqual(config, { url: endpoint, hasToken: true, distribution: "moeacgx/infinite-canvas", version });
     assert.equal((await fetch(endpoint + "/tools")).status, 401);
     const events = await fetch(endpoint + "/events?clientId=test&token=" + token, { signal: eventsController.signal });
     assert.equal(events.status, 200);
@@ -89,7 +90,7 @@ test("本地服务隔离模型工作目录，并真正停止当前代任务", { 
     });
     assert.equal((await post("/rpc", { method: "thread/start", generation: 0 })).status, 200);
     const thread = calls.find((call) => call.method === "thread/start");
-    assert.equal(thread.params.cwd, join(temporaryHome, ".infinite-canvas", "workspace"));
+    assert.equal(thread.params.cwd, join(temporaryHome, ".infinite-canvas-moe", "workspace"));
     const programDirectory = dirname(fileURLToPath(new URL("../index.mjs", import.meta.url)));
     assert.notEqual(thread.params.cwd, programDirectory);
     assert.equal(thread.params.config.mcp_servers["infinite-canvas"].args[0], join(programDirectory, "index.mjs"));

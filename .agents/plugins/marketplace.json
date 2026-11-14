@@ -1,7 +1,7 @@
 {
-  "name": "infinite-canvas",
+  "name": "infinite-canvas-moe",
   "interface": {
-    "displayName": "infinite-canvas-plugin"
+    "displayName": "Infinite Canvas · moeacgx"
   },
   "plugins": [
     {

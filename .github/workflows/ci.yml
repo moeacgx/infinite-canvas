@@ -9,6 +9,24 @@ permissions:
   contents: read
 
 jobs:
+  canvas-agent-test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: canvas-agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 安装 Agent 锁定依赖
+        run: npm ci --no-audit --no-fund
+      - name: Agent 启动与服务回归测试
+        run: node --experimental-test-module-mocks --test --test-timeout=60000 tests/bootstrap.test.mjs tests/bridge.test.mjs tests/plugin-install.test.mjs
+
   go-test:
     runs-on: ubuntu-latest
     steps:

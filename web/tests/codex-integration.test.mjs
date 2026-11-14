@@ -29,14 +29,12 @@ test("本地删除先于远端归档，跳过及失败均明确提示", () => {
     assert.match(removal, /status === "skipped"[\s\S]*toast\.info/);
 });
 
-test("连接入口要求先保持仓库服务运行，再提供插件及手动连接", () => {
+test("连接入口使用本仓库独立插件，提供旧插件迁移和可选源码启动", () => {
     const view = read("components/canvas-codex-connect-view.tsx");
-    const startup = view.indexOf("第一步：启动本仓库 Agent（必需）");
-    const connection = view.indexOf("第二步：通过插件或手动连接");
-    assert.ok(startup >= 0 && connection > startup);
-    assert.match(view, /npm --prefix canvas-agent install\\nnpm --prefix canvas-agent start/);
-    assert.match(view, /连接期间保持终端运行/);
-    assert.match(view, /上游插件可能自动启动旧 npm 服务/);
-    assert.match(view, /本仓库服务启动后，可手动填写/);
-    assert.doesNotMatch(view, /按使用场景选择一种连接方式|建议先按方式二/);
+    assert.match(view, /https:\/\/github\.com\/moeacgx\/infinite-canvas\.git/);
+    assert.match(view, /codex plugin add canvas-agent@infinite-canvas-moe/);
+    assert.match(view, /codex plugin remove canvas-agent@infinite-canvas"/);
+    assert.match(view, /node canvas-agent\/bootstrap\.mjs/);
+    assert.match(view, /无需另行克隆源码或手动启动服务/);
+    assert.doesNotMatch(view, /tigerowo|第一步：启动本仓库 Agent（必需）/);
 });

@@ -8,8 +8,8 @@ import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { useCodexAgent } from "../agent/use-codex-agent";
 
-const pluginCommand = "codex plugin marketplace add https://github.com/tigerowo/infinite-canvas.git\ncodex plugin add canvas-agent@infinite-canvas";
-const startCommand = "npm --prefix canvas-agent install\nnpm --prefix canvas-agent start";
+const pluginCommand = "codex plugin marketplace add https://github.com/moeacgx/infinite-canvas.git\ncodex plugin add canvas-agent@infinite-canvas-moe";
+const startCommand = "node canvas-agent/bootstrap.mjs";
 
 export function CanvasCodexConnectView({ agent, onChat }: {
     agent: Pick<ReturnType<typeof useCodexAgent>, "connection" | "status" | "error" | "connect" | "disconnect">;
@@ -33,25 +33,24 @@ export function CanvasCodexConnectView({ agent, onChat }: {
         <div className="space-y-4">
             <div>
                 <h2 className="text-base font-semibold leading-6">连接本地 Agent</h2>
-                <p className="mt-1 text-xs leading-5" style={{ color: theme.node.muted }}>请先启动并保持本仓库服务运行，再通过插件或手动填写连接信息。</p>
+                <p className="mt-1 text-xs leading-5" style={{ color: theme.node.muted }}>使用本仓库独立插件，让 Codex 自动启动 Agent 并连接画布。需要 Node.js 22+ 和 npm。</p>
             </div>
             <div className="space-y-2 px-3 py-2.5">
-                <h3 className="text-sm font-medium">第一步：启动本仓库 Agent（必需）</h3>
-                <p className="text-xs leading-5" style={{ color: theme.node.muted }}>需要 Node.js 22+。在本仓库根目录运行以下命令，安装依赖并启动已修复的服务，连接期间保持终端运行。首次启动会生成并保存 Token。</p>
-                {commandBlock(startCommand)}
-                <p className="text-xs leading-5" style={{ color: theme.node.muted }}>上游 npm 包尚不包含本次修复；如果本地服务未启动，上游插件可能自动启动旧 npm 服务。请确认本仓库服务已成功启动，再进行下一步。</p>
-            </div>
-            <div className="space-y-2 px-3 py-2.5">
-                <h3 className="text-sm font-medium">第二步：通过插件或手动连接</h3>
-                <p className="text-xs leading-5" style={{ color: theme.node.muted }}>使用插件时，安装 Infinite Canvas 插件后让 Codex 连接正在运行的本仓库服务，自动带入连接信息。</p>
+                <h3 className="text-sm font-medium">方式一：安装本仓库 Codex 插件</h3>
+                <p className="text-xs leading-5" style={{ color: theme.node.muted }}>插件、Agent 和后续更新均来自 moeacgx/infinite-canvas。首次自动安装依赖，无需另行克隆源码或手动启动服务。</p>
                 {commandBlock(pluginCommand)}
                 <p className="text-xs leading-5" style={{ color: theme.node.muted }}>安装插件后新建 Codex 对话，说“帮我打开并连接到 Infinite Canvas”。</p>
             </div>
             <div className="space-y-2 rounded-lg border px-3 py-2.5" style={{ borderColor: theme.node.stroke }}>
-                <div className="text-xs font-medium">Codex 插件提醒</div>
-                <p className="text-xs leading-5" style={{ color: theme.node.muted }}>安装插件或手动添加 MCP 后，画布工具才会进入 Codex 上下文。仅启动本地 Agent 不会安装 MCP。</p>
-                {commandBlock("codex plugin remove canvas-agent", "移除插件")}
+                <div className="text-xs font-medium">从上游插件切换</div>
+                <p className="text-xs leading-5" style={{ color: theme.node.muted }}>已安装上游插件时，先移除旧插件；若另行添加过旧 MCP，也需移除。停止之前运行的旧 Agent，再安装上方插件并新建对话。独立插件会生成新的连接信息。</p>
+                {commandBlock("codex plugin remove canvas-agent@infinite-canvas", "移除旧插件")}
                 {commandBlock("codex mcp remove infinite-canvas", "移除 MCP")}
+            </div>
+            <div className="space-y-2 px-3 py-2.5">
+                <h3 className="text-sm font-medium">方式二：从本仓库源码启动</h3>
+                <p className="text-xs leading-5" style={{ color: theme.node.muted }}>已有本仓库源码时，在仓库根目录执行，连接期间保持终端运行。依赖自动安装，首次生成并保存 Token。仅启动服务不会安装 Codex 插件或 MCP。</p>
+                {commandBlock(startCommand)}
             </div>
             <div className="rounded-lg border p-3" style={{ borderColor: theme.node.stroke }}>
                 <div className="flex flex-wrap items-start justify-between gap-3">
