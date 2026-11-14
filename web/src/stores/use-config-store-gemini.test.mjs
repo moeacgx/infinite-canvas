@@ -38,7 +38,7 @@ test("Gemini 调用支持模型列表、SSE、图片与工具调用签名", () =
     assert.match(geminiSource, /"x-goog-api-key"/);
     assert.match(geminiSource, /streamGenerateContent/);
     assert.match(geminiSource, /responseModalities: \["TEXT", "IMAGE"\]/);
-    assert.match(geminiSource, /responseFormat: \{ image \}/);
+    assert.match(geminiSource, /imageConfig: image/);
     assert.match(geminiSource, /thoughtSignature/);
     assert.match(geminiSource, /promptFeedback\?\.blockReason/);
 });
