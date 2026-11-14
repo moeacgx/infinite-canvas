@@ -9,6 +9,7 @@ docs/out
 web/.next
 web/node_modules
 canvas-agent/node_modules
+canvas-agent/.runtime
 web/out
 plugins/canvas/**/node_modules
 plugins/canvas/registry/dist

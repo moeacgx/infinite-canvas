@@ -1,6 +1,6 @@
 {
   "name": "canvas-agent",
-  "version": "0.11.18",
+  "version": "0.11.19",
   "description": "通过本地 Canvas Agent 读取和操作当前画布。",
   "author": {
     "name": "moeacgx"

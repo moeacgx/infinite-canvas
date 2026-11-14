@@ -51,11 +51,11 @@ codex mcp add infinite-canvas -- node "<仓库绝对路径>/canvas-agent/bootstr
 
 `node canvas-agent/bootstrap.mjs open "<原画布URL>" <浏览器> [浏览器参数...]` 自动带入凭据并打开原浏览器。支持 `chrome`、`edge`、`firefox`、`brave`、`default`，必须保持原浏览器与配置文件；画布路由为 `/canvas/[id]`。Token 只写入 URL fragment，不要分享 Token 或完整连接链接。
 
-`CANVAS_AGENT_TOKEN`、`CANVAS_AGENT_PORT`、`CANVAS_AGENT_ORIGINS` 可选覆盖 Token、端口和预置来源；通常无需设置。Codex 未登录时，依赖就绪后执行 `node canvas-agent/node_modules/@openai/codex/bin/codex.js login`；不读取或复制账号凭据。
+`CANVAS_AGENT_TOKEN`、`CANVAS_AGENT_PORT`、`CANVAS_AGENT_ORIGINS` 可选覆盖 Token、端口和预置来源；通常无需设置。Codex 未登录时执行 `node canvas-agent/bootstrap.mjs login`，自动准备依赖并进入官方登录流程；不读取或复制账号凭据。
 
 外部 MCP 默认操作唯一已连接的画布；多个画布连接时，通过 `CANVAS_AGENT_CLIENT_ID` 明确目标。默认权限为 `workspace-write` 与 `on-request`，模型工作目录为独立的 `~/.infinite-canvas-moe/workspace`，与 Agent 程序隔离。服务不改写 Codex 全局配置。
 
-依赖安装有进程锁，MCP 和连接命令同时启动也只安装一次。安装日志写入 stderr，不污染 MCP 协议；下载失败可以重试。若安装进程被强制结束后留下 `.install-lock`，确认没有安装进程运行后移除该锁再重试。
+依赖安装使用系统在进程退出时自动释放的本机互斥锁，MCP 和连接命令同时启动也只安装一次。每次安装写入独立的 `.runtime/install-*` 临时目录，验证成功后才启用完整运行目录；中断后可直接重试，旧版 `.install-lock` 不再参与锁定。尚未退出的旧安装不会覆盖新运行目录。失败或中断的临时目录保留在插件缓存内，随插件移除而清理，不在重试时删除可能仍被安装进程使用的文件。安装日志写入 stderr，不污染 MCP 协议。
 
 ## 回归测试
 

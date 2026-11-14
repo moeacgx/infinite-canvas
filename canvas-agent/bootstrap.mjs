@@ -1,19 +1,40 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 
-const root = dirname(fileURLToPath(import.meta.url));
-const lock = join(root, ".install-lock");
-const marker = join(root, "node_modules", ".canvas-agent-ready");
-const fingerprint = createHash("sha256").update(readFileSync(join(root, "package.json")))
-    .update(readFileSync(join(root, "package-lock.json"))).update(`${process.platform}/${process.arch}/${process.versions.node.split(".")[0]}`).digest("hex");
-const ready = () => {
-    try { return readFileSync(marker, "utf8") === fingerprint; } catch { return false; }
-};
+const root = realpathSync(dirname(fileURLToPath(import.meta.url)));
+const files = ["package.json", "package-lock.json", "index.mjs", "codex.mjs"]
+    .map((file) => [file, readFileSync(join(root, file))]);
+const digest = createHash("sha256").update(`${process.platform}/${process.arch}/${process.versions.node.split(".")[0]}`);
+for (const [file, content] of files) digest.update(file).update(content);
+const runtime = join(root, ".runtime", digest.digest("hex"));
+const lockKey = process.platform === "win32" ? root.toLowerCase() : root;
+const lockHash = createHash("sha256").update(lockKey).digest();
+// Windows 管道和 Linux 抽象套接字均不占 TCP 端口，进程退出即释放名称。
+const lockAddress = process.platform === "win32"
+    ? { path: "\\\\.\\pipe\\canvas-agent-install-" + lockHash.toString("hex") }
+    : process.platform === "linux"
+        ? { path: "\0canvas-agent-install-" + lockHash.toString("hex") }
+        : { host: "127.0.0.1", port: 20000 + lockHash.readUInt32BE(0) % 12000, exclusive: true };
+
+async function acquireLock() {
+    const server = createServer((socket) => socket.destroy());
+    try {
+        await new Promise((resolve, reject) => {
+            server.once("error", reject);
+            server.listen(lockAddress, resolve);
+        });
+        return () => new Promise((resolve) => server.close(resolve));
+    } catch (error) {
+        if (error.code === "EADDRINUSE") return null;
+        throw error;
+    }
+}
 
 function npmCommand() {
     const candidates = [
@@ -36,11 +57,11 @@ function npmCommand() {
         : { command: process.execPath, args: [cli] };
 }
 
-function run(command, args, timeout, message) {
+function run(command, args, timeout, message, cwd, stdio = ["ignore", 2, 2]) {
     return new Promise((resolve, reject) => {
         // 直接传参数数组；所有安装与校验日志写入 stderr，不污染 MCP stdout。
         const child = spawn(command, args, {
-            cwd: root, stdio: ["ignore", 2, 2], windowsHide: true, detached: process.platform !== "win32",
+            cwd, stdio, windowsHide: true, detached: process.platform !== "win32",
         });
         let termination;
         const stop = () => {
@@ -72,7 +93,7 @@ function run(command, args, timeout, message) {
             cleanup();
             await termination;
             if (code === 0 && !termination) resolve();
-            else reject(new Error(`${message}（${signal || code}），请检查 npm 网络后重试`));
+            else reject(new Error(`${message}（${signal || code}），请检查错误信息后重试`));
         });
     });
 }
@@ -80,33 +101,40 @@ function run(command, args, timeout, message) {
 async function install() {
     if (Number(process.versions.node.split(".")[0]) < 22) throw new Error("Canvas Agent 需要 Node.js 22+");
     const deadline = Date.now() + 150000;
-    while (!ready()) {
-        try {
-            writeFileSync(lock, String(process.pid), { flag: "wx" });
-        } catch (error) {
-            if (error.code !== "EEXIST") throw error;
-            if (Date.now() >= deadline) throw new Error("等待插件依赖安装超时。若安装进程已退出，请移除插件目录中的 .install-lock 后重试");
+    while (!existsSync(runtime)) {
+        const release = await acquireLock();
+        if (!release) {
+            if (Date.now() >= deadline) throw new Error("等待插件依赖安装超时，请稍后重试");
             await delay(200);
             continue;
         }
         try {
-            if (ready()) return;
+            if (existsSync(runtime)) return;
+            mkdirSync(dirname(runtime), { recursive: true });
+            const staging = mkdtempSync(join(dirname(runtime), "install-"));
+            // 等锁期间源码可能更新，指纹与发布文件必须来自同一份快照。
+            for (const [file, content] of files) writeFileSync(join(staging, file), content);
             console.error("正在安装本仓库 Canvas Agent 的锁定依赖…");
             const npm = npmCommand();
-            await run(npm.command, [...npm.args, "ci", "--omit=dev", "--no-audit", "--no-fund"], 120000, "插件依赖安装失败");
+            await run(npm.command, [...npm.args, "ci", "--omit=dev", "--no-audit", "--no-fund"], 120000, "插件依赖安装失败", staging);
             // npm 可选依赖下载失败仍可能返回 0，必须确认本平台 Codex 二进制可运行。
-            await run(process.execPath, [join(root, "node_modules/@openai/codex/bin/codex.js"), "--version"], 10000, "Codex 平台程序安装不完整");
-            writeFileSync(marker, fingerprint);
+            await run(process.execPath, [join(staging, "node_modules/@openai/codex/bin/codex.js"), "--version"], 10000, "Codex 平台程序安装不完整", staging);
+            // 仅发布完整目录；中断后仍存活的 npm 只能写入自己的临时目录。
+            renameSync(staging, runtime);
             return;
         } finally {
-            unlinkSync(lock);
+            await release();
         }
     }
 }
 
 try {
     await install();
-    await import(pathToFileURL(join(root, "index.mjs")).href);
+    if (process.argv[2] === "login") {
+        await run(process.execPath, [join(runtime, "node_modules/@openai/codex/bin/codex.js"), "login"], 180000, "Codex 登录失败", runtime, "inherit");
+    } else {
+        await import(pathToFileURL(join(runtime, "index.mjs")).href);
+    }
 } catch (error) {
     console.error(error.message);
     process.exitCode = 1;
